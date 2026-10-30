@@ -1,0 +1,31 @@
+{
+  "default": "claude",
+  "agents": {
+    "claude": {
+      "enabled": true,
+      "about": "Claude Code headless. Runs under the same sandbox, managed policy and ~/.creds deny as interactive Claude Code; no API key.",
+      "argv": [
+        "claude", "-p", "{prompt}",
+        "--output-format", "stream-json", "--verbose",
+        "--append-system-prompt", "{system}",
+        "--permission-mode", "default",
+        "--allowedTools", "{allowed_tools*}"
+      ],
+      "resume_argv": ["--resume", "{session}"],
+      "output": "claude-stream-json",
+      "allowed_tools": [
+        "Read", "Glob", "Grep",
+        "Edit(/{home}/tasks/**)", "Edit(/{home}/general/**)",
+        "Bash(opsquire find *)", "Bash(opsquire ls)", "Bash(opsquire ls *)", "Bash(opsquire show *)", "Bash(opsquire new *)",
+        "Bash(opsquire lint *)", "Bash(opsquire runs)", "Bash(opsquire runs *)", "Bash(opsquire last)", "Bash(opsquire last *)",
+        "Bash(opsquire log *)", "Bash(opsquire locks)", "Bash(opsquire locks *)"
+      ]
+    },
+    "codex": {
+      "enabled": false,
+      "reason": "Codex runs under its own approval rules, which opsquire cannot inspect. Enable only after reviewing that they keep it off production and away from credentials.",
+      "argv": ["codex", "exec", "-s", "workspace-write", "-C", "{home}", "--skip-git-repo-check", "{system}\n\n{prompt}"],
+      "output": "text"
+    }
+  }
+}

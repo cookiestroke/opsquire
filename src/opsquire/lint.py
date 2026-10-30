@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import sysconfig
+from dataclasses import dataclass
+from pathlib import Path
+
+from .model import DATA_DIR, HELPERS_DIR, LINT_FILE, Task, iso, now, read_json, write_json
+
+RUFF_CONFIG = DATA_DIR / "ruff.toml"
+MYPY_CONFIG = DATA_DIR / "mypy.ini"
+
+
+@dataclass
+class LintResult:
+    ok: bool
+    content_hash: str
+    output: str
+
+
+def find_tool(name: str) -> str | None:
+    override = os.environ.get(f"OPSQUIRE_{name.upper()}")
+    if override:
+        return override
+    candidates = [Path(sys.executable).parent / name, Path(sysconfig.get_path("scripts", f"{os.name}_user")) / name]
+    for path in candidates:
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return shutil.which(name)
+
+
+def _run(cmd: list[str], env: dict[str, str] | None = None) -> tuple[bool, str]:
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+    text = (proc.stdout + proc.stderr).strip()
+    return proc.returncode == 0, f"$ {' '.join(cmd)}\n{text}" if text else f"$ {' '.join(cmd)}\nok"
+
+
+def lint_task(task: Task) -> LintResult:
+    content_hash = task.content_hash()
+    if task.errors or task.meta is None:
+        return LintResult(False, content_hash, "meta.json:\n  " + "\n  ".join(task.errors))
+    if task.meta.archived:
+        return LintResult(False, content_hash, "archived: historical record kept byte-for-byte, not linted or runnable")
+    files = task.files()
+    py = [str(p) for p in files if p.suffix == ".py"]
+    sh = [str(p) for p in files if p.suffix == ".sh"]
+    other = [p for p in files if p.suffix not in (".py", ".sh", ".json", ".md", ".txt", ".sql", ".toml")]
+    ok = True
+    parts: list[str] = []
+    if other:
+        ok = False
+        parts.append("unsupported files (no linter): " + ", ".join(str(p) for p in other))
+    if py:
+        ruff, mypy = find_tool("ruff"), find_tool("mypy")
+        if not ruff or not mypy:
+            return LintResult(False, content_hash, "ruff and mypy must be installed (pip install --user ruff mypy)")
+        env = {**os.environ, "MYPYPATH": str(HELPERS_DIR)}
+        by_folder: dict[str, list[str]] = {}
+        for f in py:
+            by_folder.setdefault(str(Path(f).parent), []).append(f)
+        mypy_cmd = [mypy, "--config-file", str(MYPY_CONFIG)]
+        for cmd in (
+            [ruff, "check", "--no-cache", "--config", str(RUFF_CONFIG), *py],
+            *([*mypy_cmd, *files] for files in by_folder.values()),
+        ):
+            passed, out = _run(cmd, env)
+            ok &= passed
+            parts.append(out)
+    if sh:
+        shellcheck = find_tool("shellcheck")
+        if not shellcheck:
+            return LintResult(False, content_hash, "shellcheck must be installed")
+        passed, out = _run([shellcheck, "-x", "-P", str(HELPERS_DIR), *sh])
+        ok &= passed
+        parts.append(out)
+    return LintResult(ok, content_hash, "\n\n".join(parts))
+
+
+def save_lint(task: Task, result: LintResult) -> None:
+    try:
+        write_json(
+            task.folder / LINT_FILE,
+            {"ok": result.ok, "content_hash": result.content_hash, "checked": iso(now()), "output": result.output},
+        )
+    except OSError:
+        pass
+
+
+def cached_lint_ok(task: Task) -> bool | None:
+    path = task.folder / LINT_FILE
+    if not path.is_file():
+        return None
+    try:
+        data = read_json(path)
+    except (OSError, ValueError):
+        return None
+    if data.get("content_hash") != task.content_hash():
+        return None
+    return bool(data.get("ok"))
