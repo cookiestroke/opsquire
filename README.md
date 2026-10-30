@@ -19,6 +19,7 @@ opsquire home ~/ops-home    # where tasks and run records live
 ```
 opsquire ask "<what you want>"     an agent finds or writes the task and prints what to run
 opsquire find <words>              is there already a script for this?
+opsquire run <plan>                several tasks in order, one command (dry first, then --apply)
 opsquire run <task>                dry run (or read-only run)
 opsquire run <task> --apply        the real thing; asks before each change
 opsquire last                      what just happened

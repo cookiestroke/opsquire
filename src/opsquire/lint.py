@@ -8,7 +8,7 @@ import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 
-from .model import DATA_DIR, HELPERS_DIR, LINT_FILE, Task, iso, now, read_json, write_json
+from .model import DATA_DIR, HELPERS_DIR, LINT_FILE, Task, iso, load_task, now, read_json, task_folder, write_json
 
 RUFF_CONFIG = DATA_DIR / "ruff.toml"
 MYPY_CONFIG = DATA_DIR / "mypy.ini"
@@ -42,6 +42,8 @@ def lint_task(task: Task) -> LintResult:
     content_hash = task.content_hash()
     if task.errors or task.meta is None:
         return LintResult(False, content_hash, "meta.json:\n  " + "\n  ".join(task.errors))
+    if task.meta.kind == "plan":
+        return lint_plan(task, content_hash)
     if task.meta.archived:
         return LintResult(False, content_hash, "archived: historical record kept byte-for-byte, not linted or runnable")
     files = task.files()
@@ -77,6 +79,18 @@ def lint_task(task: Task) -> LintResult:
         ok &= passed
         parts.append(out)
     return LintResult(ok, content_hash, "\n\n".join(parts))
+
+
+def lint_plan(plan: Task, content_hash: str) -> LintResult:
+    assert plan.meta
+    steps: list[LintResult] = []
+    report: list[str] = []
+    for step in plan.meta.steps or []:
+        folder = task_folder(step["task"])
+        sub = lint_task(load_task(folder)) if folder else LintResult(False, "", f"{step['task']} not found")
+        steps.append(sub)
+        report.append(f"== step {step['task']}: {'ok' if sub.ok else 'FAILED'}\n{sub.output}")
+    return LintResult(all(s.ok for s in steps), content_hash, "\n\n".join(report))
 
 
 def save_lint(task: Task, result: LintResult) -> None:

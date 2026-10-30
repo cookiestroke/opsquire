@@ -53,7 +53,10 @@ def tty_prompt(question: str) -> str:
 
 
 class Run:
-    def __init__(self, task: Task, meta: Meta, mode: str, args: list[str], break_lock: bool) -> None:
+    def __init__(
+        self, task: Task, meta: Meta, mode: str, args: list[str], break_lock: bool, plan_run: str | None = None
+    ) -> None:
+        self.plan_run = plan_run
         self.task = task
         self.meta = meta
         self.mode = mode
@@ -173,6 +176,7 @@ class Run:
             "files": self.task.file_hashes(),
             "targets": self.targets,
             "lock": self.lock_info,
+            "plan_run": self.plan_run,
             "credentials_used": sorted(self.meta.credentials),
             "redactions": self.redact.count,
             "counts": self.counts,
@@ -276,7 +280,10 @@ class Run:
             return self.blocked("files changed while linting")
 
         holders: list[str] = self.meta.targets if self.meta.lock != "none" else []
-        if self.meta.lock == "none":
+        if self.plan_run:
+            self.lock_info["held_by_plan_run"] = self.plan_run
+            self.event("lock", f"targets locked by plan run {self.plan_run}")
+        elif self.meta.lock == "none":
             self.event("lock", f"no lock: {self.meta.lock_reason}")
         else:
             me = locks.Holder(
@@ -390,8 +397,10 @@ class Run:
 def run_task(task: Task, apply: bool, args: list[str], break_lock: bool) -> int:
     if task.meta is None:
         raise OpsquireError(f"{task.id} has invalid meta.json:\n  " + "\n  ".join(task.errors))
-    if task.kind != "task":
+    if task.kind == "general":
         raise OpsquireError("general scripts are not run directly; create a task that calls it")
+    if task.kind == "plan":
+        raise OpsquireError("plans run through opsquire run, not run_task")
     if task.meta.archived:
         raise OpsquireError(
             f"{task.id} is archived (historical record, not runnable); see archived.note in its meta.json"

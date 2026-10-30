@@ -30,6 +30,7 @@ from .model import (
     write_json,
     write_text,
 )
+from .plan import run_plan
 from .query import all_runs, find_run, find_tasks, list_tasks, runs_for, summarize, wait_for_run
 from .runner import EXIT_CODES, load_run, run_task, tty_prompt
 
@@ -54,7 +55,7 @@ def cmd_new(a: argparse.Namespace) -> int:
     folder = home_dir() / "general" / name if a.general else home_dir() / "tasks" / f"{t:%Y-%m}" / name
     if folder.exists():
         raise OpsquireError(f"{folder} already exists")
-    if a.changes_prod and not a.rollback:
+    if a.changes_prod and not a.rollback and not a.plan:
         raise OpsquireError("--rollback is required with --changes-prod")
     created_parents = [p for p in reversed(folder.parents) if not p.exists()]
     staging = folder.with_name(f".{name}.{os.getpid()}.tmp")
@@ -74,6 +75,9 @@ def cmd_new(a: argparse.Namespace) -> int:
 
 
 def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -> None:
+    if a.plan:
+        build_plan(a, name, t, folder)
+        return
     entry = f"main.{a.lang}"
     shutil.copy(TEMPLATES_DIR / entry, folder / entry)
     meta = Meta(
@@ -97,6 +101,36 @@ def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -
     write_json(folder / "meta.json", meta.to_json())
 
 
+def build_plan(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -> None:
+    if not a.step:
+        raise OpsquireError("a plan needs at least one --step <task-id>, in order")
+    steps = [resolve_task(s) for s in a.step]
+    for step in steps:
+        if step.meta is None or step.kind != "task":
+            raise OpsquireError(f"step {step.id} is not a valid task")
+    metas = [s.meta for s in steps if s.meta]
+    changes = any(m.changes_prod for m in metas)
+    meta = Meta(
+        id=name,
+        kind="plan",
+        created=iso(t),
+        author=a.author or os.environ.get("OPSQUIRE_AUTHOR", "unknown"),
+        purpose=a.purpose,
+        area=a.area,
+        entry="",
+        changes_prod=changes,
+        targets=sorted({t for m in metas for t in m.targets}),
+        lock="exclusive" if changes else "shared",
+        lock_reason="",
+        credentials={},
+        uses=[],
+        rollback=a.rollback or ("each step's own rollback, see steps" if changes else "read-only"),
+        links=a.link or [],
+        steps=[{"task": s.id} for s in steps],
+    )
+    write_json(folder / "meta.json", meta.to_json())
+
+
 def cmd_lint(a: argparse.Namespace) -> int:
     task = resolve_task(a.task)
     result = lint_task(task)
@@ -110,7 +144,12 @@ def cmd_lint(a: argparse.Namespace) -> int:
 
 
 def cmd_run(a: argparse.Namespace) -> int:
-    return run_task(resolve_task(a.task), a.apply, a.script_args, a.break_lock)
+    task = resolve_task(a.task)
+    if task.kind == "plan":
+        if a.script_args:
+            raise OpsquireError("plans take no arguments after --; put them on the steps in meta.json")
+        return run_plan(task, a.apply, a.break_lock)
+    return run_task(task, a.apply, a.script_args, a.break_lock)
 
 
 def cmd_ls(a: argparse.Namespace) -> int:
@@ -221,10 +260,14 @@ def cmd_ask(a: argparse.Namespace) -> int:
     task_id = resolve_task(a.task).id if a.task else None
     if not a.request and not a.resume:
         raise OpsquireError('say what you want, e.g. opsquire ask "restart the bots on host x"')
-    res = ask(" ".join(a.request) or "Continue where we stopped.", a.agent, task_id, a.new, a.resume)
+    res = ask(" ".join(a.request) or "Continue where we stopped.", a.agent, task_id, a.new, a.resume, not a.no_grill)
     if res.interrupted:
         print(f"opsquire: interrupted; continue with: opsquire ask --resume {res.ask_id}", file=sys.stderr)
         return EXIT_CODES["interrupted"]
+    if res.waiting:
+        print(f"opsquire: waiting on: {res.waiting}", file=sys.stderr)
+        print(f'answer with: opsquire ask --resume {res.ask_id} "<your answer>"', file=sys.stderr)
+        return 0
     if res.exit_code and not res.text.strip():
         print(
             f"opsquire: agent failed (exit {res.exit_code}) without an answer; see its messages above", file=sys.stderr
@@ -321,6 +364,8 @@ def parser() -> argparse.ArgumentParser:
     n.add_argument("--purpose", required=True)
     n.add_argument("--lang", choices=["py", "sh"], default="py")
     n.add_argument("--general", action="store_true")
+    n.add_argument("--plan", action="store_true", help="a plan: runs --step tasks in order with one command")
+    n.add_argument("--step", action="append", metavar="TASK", help="plan step, in order (repeat)")
     n.add_argument("--changes-prod", action="store_true")
     n.add_argument("--target", action="append")
     n.add_argument("--lock", choices=["exclusive", "shared", "none"])
@@ -351,7 +396,7 @@ def parser() -> argparse.ArgumentParser:
     ls = sub.add_parser("ls", help="list tasks with derived status")
     ls.add_argument("--area")
     ls.add_argument("--status", choices=["draft", "ready", "done", "superseded", "abandoned", "archived"])
-    ls.add_argument("--kind", choices=["task", "general"])
+    ls.add_argument("--kind", choices=["task", "general", "plan"])
     ls.add_argument("--json", action="store_true")
     ls.set_defaults(fn=cmd_ls)
 
@@ -386,6 +431,7 @@ def parser() -> argparse.ArgumentParser:
     ak.add_argument("--resume", metavar="ASK_ID", help="continue an earlier (e.g. interrupted) ask")
     ak.add_argument("--agent", help="agent from retinue.json (default from retinue.json)")
     ak.add_argument("--new", action="store_true", help="start a fresh conversation even with --task")
+    ak.add_argument("--no-grill", action="store_true", help="no interview: the agent takes defaults and records them")
     ak.set_defaults(fn=cmd_ask)
 
     wt = sub.add_parser("wait", help="wait for the next finished run of a task, then print it (for agents)")

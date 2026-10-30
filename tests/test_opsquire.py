@@ -511,6 +511,158 @@ class OpsTest(unittest.TestCase):
             " ".join(json.loads(self.cli("show", folder.name, "--json").stdout)["meta_errors"]),
         )
 
+    CONFIRM_BODY = (Path(__file__).resolve().parent.parent / "src/opsquire/data/templates/main.py").read_text()
+
+    def make_plan(self, *steps: Path, name: str = "flow", extra: dict[str, Any] | None = None) -> Path:
+        args = [a for s in steps for a in ("--step", s.name)]
+        r = self.cli("new", "web1", name, "--plan", "--purpose", "check, change, verify", *args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        folder = Path(r.stdout.strip())
+        if extra:
+            meta = json.loads((folder / "meta.json").read_text())
+            for i, step_extra in extra.items():
+                meta["steps"][int(i)].update(step_extra)
+            (folder / "meta.json").write_text(json.dumps(meta))
+        return folder
+
+    def plan_rec(self, plan: Path) -> dict[str, Any]:
+        return self.last(plan.name)
+
+    def test_plan_dry_then_apply_runs_steps_in_order_under_one_lock(self) -> None:
+        check = self.new("check", "print('checked')\n")
+        change = self.new("change", self.CONFIRM_BODY, "--changes-prod", "--rollback", "undo")
+        verify = self.new("verify", "print('verified')\n")
+        plan = self.make_plan(check, change, verify, extra={"2": {"verify": True}})
+        r = self.cli("run", plan.name)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rec = self.plan_rec(plan)
+        self.assertEqual((rec["status"], rec["mode"]), ("ok", "dry"))
+        self.assertEqual(
+            [(s["status"], s["mode"]) for s in rec["steps"]], [("ok", "read"), ("ok", "dry"), ("ok", "read")]
+        )
+        self.assertIn("verify step", rec["warnings"][0])
+        step_rec = self.last("change")
+        self.assertEqual((step_rec["plan_run"], step_rec["lock"]["held_by_plan_run"]), (rec["run_id"], rec["run_id"]))
+
+        r = self.cli("run", plan.name, "--apply", answers=[("[y/N]", "y")])
+        self.assertEqual(r.returncode, 0, r.stdout)
+        rec = self.plan_rec(plan)
+        self.assertEqual([s["mode"] for s in rec["steps"]], ["read", "apply", "read"])
+        self.assertEqual(rec["warnings"], [])
+        self.assertEqual(json.loads(self.cli("show", plan.name, "--json").stdout)["status"], "done")
+        self.assertEqual(json.loads(self.cli("ls", "--kind", "plan", "--json").stdout)[0]["id"], plan.name)
+
+    def test_plan_stops_at_failure_and_runs_rollback_only_in_apply(self) -> None:
+        marker = self.tmp / "rolled-back"
+        ok = self.new("prep", "print(1)\n")
+        bad = self.new("bad", "import sys\n\nsys.exit(1)\n", "--changes-prod", "--rollback", "undo")
+        after = self.new("after", "print(1)\n")
+        undo = self.new("undo", f"from pathlib import Path\n\nPath({str(marker)!r}).touch()\n")
+        plan = self.make_plan(ok, bad, after, extra={"1": {"on_failure": undo.name}})
+        self.assertEqual(self.cli("run", plan.name).returncode, 1)
+        self.assertFalse(marker.exists())
+        r = self.cli("run", plan.name, "--apply")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        rec = self.plan_rec(plan)
+        self.assertEqual(rec["status"], "failed")
+        self.assertEqual([s["status"] for s in rec["steps"]], ["ok", "failed", "skipped"])
+        self.assertEqual(rec["steps"][1]["rollback"]["status"], "ok")
+        self.assertTrue(marker.exists())
+        self.assertIn("step 2", rec["last_error"])
+
+    def test_plan_abort_skips_the_rest(self) -> None:
+        change = self.new("change", self.CONFIRM_BODY, "--changes-prod", "--rollback", "undo")
+        verify = self.new("verify", "print(1)\n")
+        plan = self.make_plan(change, verify)
+        r = self.cli("run", plan.name, "--apply", answers=[("[y/N]", "n")])
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertEqual([s["status"] for s in self.plan_rec(plan)["steps"]], ["aborted", "skipped"])
+
+    def test_plan_blocks_before_any_step_on_lock_or_lint(self) -> None:
+        first = self.new("first", "print(1)\n")
+        broken = self.new("broken", "def f(x):\n    return x\n")
+        plan = self.make_plan(first, broken)
+        self.assertEqual(self.cli("run", plan.name).returncode, 2)
+        rec = self.plan_rec(plan)
+        self.assertIn("fails lint", rec["last_error"])
+        self.assertEqual(self.cli("runs", "first", "--json").stdout.strip(), "[]")
+
+        (broken / "main.py").write_text("print(1)\n")
+        self.write_lock("web1", os.getpid())
+        self.assertEqual(self.cli("run", plan.name).returncode, 2)
+        self.assertIn("locked by other", self.plan_rec(plan)["last_error"])
+        self.assertEqual(self.cli("runs", "first", "--json").stdout.strip(), "[]")
+
+    def test_plan_ctrl_c_mid_step_releases_locks(self) -> None:
+        body = "import time\n\nimport opsquire_helpers as sq\n\n\ndef main() -> None:\n"
+        body += "    print('start', flush=True)\n    time.sleep(30)\n\n\nsq.run(main)\n"
+        slow = self.new("slow", body)
+        later = self.new("later", "print(1)\n")
+        plan = self.make_plan(slow, later)
+        p = self.start("run", plan.name)
+        assert p.stdout
+        p.stdout.readline()
+        time.sleep(0.3)
+        os.killpg(p.pid, signal.SIGINT)
+        _, err = p.communicate(timeout=30)
+        self.assertEqual(p.returncode, 130, err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual([s["status"] for s in self.plan_rec(plan)["steps"]], ["interrupted", "skipped"])
+
+    def test_plan_validation(self) -> None:
+        a = self.new("a", "print(1)\n")
+        plan = self.make_plan(a)
+        meta = json.loads((plan / "meta.json").read_text())
+        meta["targets"] = ["elsewhere"]
+        meta["steps"].append({"task": plan.name})
+        (plan / "meta.json").write_text(json.dumps(meta))
+        errors = " ".join(json.loads(self.cli("show", plan.name, "--json").stdout)["meta_errors"])
+        self.assertIn("plans do not nest", errors)
+        self.assertEqual(self.cli("new", "web1", "empty", "--plan", "--purpose", "p").returncode, 2)
+        self.assertIn("no arguments", self.cli("run", plan.name, "--", "x").stderr)
+
+    def grill_env(self, questions: int) -> None:
+        self.agents_file()
+        self.env["FAKE_GRILL"] = str(questions)
+        self.env["FAKE_STATE"] = str(self.tmp / "fake-state.json")
+
+    def test_grill_asks_one_question_at_a_time_and_enter_accepts(self) -> None:
+        self.grill_env(2)
+        r = self.cli("ask", "build", "something", "new", answers=[("[Enter =", ""), ("[Enter =", "my own answer")])
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("RUN: opsquire run 20261030-1749_web1_restart-bots --apply", r.stdout)
+        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
+        self.assertEqual([x["answer"] for x in rec["rounds"]], ["rec 1", "my own answer"])
+        self.assertEqual(rec["status"], "ok")
+        seen = json.loads((self.tmp / "fake-state.json").read_text())
+        self.assertEqual(seen[1:], ["Answer: rec 1", "Answer: my own answer"])
+
+    def test_grill_without_terminal_waits_and_resumes(self) -> None:
+        self.grill_env(1)
+        p = self.start("ask", "build", "it")
+        _, err = p.communicate(timeout=60)
+        self.assertEqual(p.returncode, 0, err)
+        self.assertIn("waiting on: question 1?", err)
+        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
+        self.assertEqual(rec["status"], "waiting")
+        r = self.cli("ask", "--resume", rec["ask_id"], "go", "with", "rec")
+        self.assertIn("RUN:", r.stdout)
+
+    def test_grill_ctrl_c_at_question_keeps_session(self) -> None:
+        self.grill_env(2)
+        r = self.cli("ask", "build", "it", answers=[("[Enter =", "\x03")])
+        self.assertEqual(r.returncode, 130, r.stdout)
+        self.assertNotIn("Traceback", r.stdout)
+        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
+        self.assertEqual((rec["status"], rec["session"]), ("interrupted", "sess-new"))
+
+    def test_no_grill_skips_questions(self) -> None:
+        self.grill_env(3)
+        r = self.cli("ask", "--no-grill", "build", "it")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("RUN:", r.stdout)
+        self.assertIn("Do not ask questions", r.stdout)
+
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")
         self.assertEqual(self.cli("run", "rw").returncode, 0)

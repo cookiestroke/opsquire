@@ -118,6 +118,7 @@ class Meta:
     abandoned_reason: str | None = None
     archived: dict[str, Any] | None = None
     interpreter: str | None = None
+    steps: list[dict[str, Any]] | None = None
 
     def command(self, entry: Path) -> list[str]:
         if self.interpreter and entry.suffix == ".py":
@@ -168,6 +169,7 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
         abandoned_reason=raw.get("abandoned_reason"),
         archived=raw.get("archived"),
         interpreter=raw.get("interpreter"),
+        steps=raw.get("steps"),
     )
     if meta.archived is not None and not (
         isinstance(meta.archived, dict)
@@ -182,9 +184,9 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
             errors.append("interpreter is a path string and only applies to main.py tasks")
         elif not (interp.is_file() and os.access(interp, os.X_OK)):
             errors.append(f"interpreter {meta.interpreter!r} is not an executable file")
-    if meta.kind not in ("task", "general"):
-        errors.append("kind must be task or general")
-    id_re = TASK_ID_RE if meta.kind == "task" else GENERAL_ID_RE
+    if meta.kind not in ("task", "general", "plan"):
+        errors.append("kind must be task, general or plan")
+    id_re = GENERAL_ID_RE if meta.kind == "general" else TASK_ID_RE
     if not id_re.match(meta.id):
         errors.append(f"id {meta.id!r} does not match the {meta.kind} naming convention")
     elif meta.id.split("_")[-2] != meta.area:
@@ -199,11 +201,16 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
         errors.append("purpose is empty")
     if not meta.rollback.strip():
         errors.append('rollback is empty (use "read-only" when nothing changes)')
-    entry = folder / meta.entry
-    if not entry.is_file():
-        errors.append(f"entry {meta.entry!r} not found")
-    elif entry.suffix not in INTERPRETERS:
-        errors.append(f"entry must end in one of {sorted(INTERPRETERS)}")
+    if meta.kind == "plan":
+        errors += validate_plan(meta)
+    else:
+        entry = folder / meta.entry
+        if not entry.is_file():
+            errors.append(f"entry {meta.entry!r} not found")
+        elif entry.suffix not in INTERPRETERS:
+            errors.append(f"entry must end in one of {sorted(INTERPRETERS)}")
+        if meta.steps is not None:
+            errors.append("steps are only allowed on plans")
     if not meta.targets or not all(isinstance(t, str) and re.match(r"^[a-z0-9][a-z0-9_.-]*$", t) for t in meta.targets):
         errors.append("targets must be a non-empty list of lowercase names (hosts, books, systems)")
     if meta.lock not in LOCK_MODES:
@@ -221,6 +228,63 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
     return (meta if not errors else None), errors
 
 
+STEP_KEYS = {"task": str, "args": list, "on_failure": str, "verify": bool}
+
+
+def validate_plan(meta: Meta) -> list[str]:
+    errors: list[str] = []
+    if meta.entry:
+        errors.append('a plan has no entry script; set entry to ""')
+    if meta.credentials or meta.uses or meta.interpreter:
+        errors.append("credentials, uses and interpreter belong on the step tasks, not the plan")
+    if not isinstance(meta.steps, list) or not meta.steps:
+        return errors + ["a plan needs a non-empty steps list"]
+    targets: set[str] = set()
+    changes = False
+    for i, step in enumerate(meta.steps, 1):
+        if not isinstance(step, dict) or not isinstance(step.get("task"), str):
+            errors.append(f"step {i} must be an object with a task id")
+            continue
+        for key, value in step.items():
+            if key not in STEP_KEYS or not isinstance(value, STEP_KEYS[key]):
+                errors.append(f"step {i}: {key!r} is not one of {sorted(STEP_KEYS)} with the right type")
+        for field_name in ("task", "on_failure"):
+            ref = step.get(field_name)
+            if not isinstance(ref, str):
+                continue
+            folder = task_folder(ref)
+            if folder and peek_kind(folder) == "plan":
+                errors.append(f"step {i}: {ref!r} must be a live task, not a plan (plans do not nest)")
+                continue
+            sub = load_task(folder) if folder else None
+            if sub is None or sub.meta is None:
+                errors.append(f"step {i}: {field_name} {ref!r} is not a valid task (use the full task id)")
+            elif sub.meta.kind != "task" or sub.meta.archived or sub.meta.superseded_by or sub.meta.abandoned_reason:
+                errors.append(f"step {i}: {ref!r} must be a live task, not a {sub.meta.kind} or retired task")
+            elif field_name == "task":
+                targets |= set(sub.meta.targets)
+                changes |= sub.meta.changes_prod
+    if not errors:
+        if sorted(meta.targets) != sorted(targets):
+            errors.append(f"plan targets must be the union of its steps' targets: {sorted(targets)}")
+        if meta.changes_prod != changes:
+            errors.append(f"plan changes_prod must be {changes} (true if any step changes prod)")
+    return errors
+
+
+def peek_kind(folder: Path) -> str:
+    try:
+        raw = read_json(folder / "meta.json")
+    except (OSError, ValueError):
+        return ""
+    return str(raw.get("kind", "")) if isinstance(raw, dict) else ""
+
+
+def task_folder(task_id: str) -> Path | None:
+    matches = [p for p in (home_dir() / "tasks").glob(f"*/{task_id}") if p.is_dir()]
+    return matches[0] if len(matches) == 1 else None
+
+
 @dataclass
 class Task:
     folder: Path
@@ -234,12 +298,18 @@ class Task:
 
     @property
     def kind(self) -> str:
-        return "general" if self.folder.parent.name == "general" else "task"
+        if self.folder.parent.name == "general":
+            return "general"
+        return "plan" if self.raw.get("kind") == "plan" else "task"
 
     def files(self) -> list[Path]:
         roots = [self.folder]
         if self.meta:
             roots += [home_dir() / "general" / u for u in self.meta.uses]
+            for step in self.meta.steps or []:
+                folder = task_folder(str(step.get("task")))
+                if folder:
+                    roots.append(folder)
         out: list[Path] = []
         for root in roots:
             for p in sorted(root.rglob("*")):

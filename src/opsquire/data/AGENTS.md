@@ -64,6 +64,22 @@ opsquire locks
 6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the
    operator to paste output.
 
+### Plans: several tasks, one command
+
+When work needs several tasks in order (check, change, verify), create or reuse each task, then a plan:
+`opsquire new <area> <name> --plan --step <task-id> --step <task-id> ...`. The operator runs the plan
+like any task: `opsquire run <plan>` (every step in its dry/read mode), then `opsquire run <plan> --apply`.
+
+- Before step 1, the plan checks every step's lint and credentials and locks the union of all targets
+  (exclusive if any step is), so it fails before doing anything rather than halfway through.
+- Steps run in order; each leaves its own normal run record (`plan_run` links it to the plan's record,
+  which lists the steps). The plan stops at the first step that is not `ok`; the rest are `skipped`.
+- In a step's meta entry: `"args": [...]` passes arguments, `"verify": true` marks a check whose dry-run
+  result is meaningless (it sees the state before the change; the plan record warns), and
+  `"on_failure": "<task-id>"` names a rollback task that runs only in apply mode, only when that step
+  `failed` or was `partial`, with its own confirms. Nothing is rolled back automatically otherwise.
+- Plans do not nest, take no `--` arguments, and their targets and `changes_prod` must match their steps.
+
 ### meta.json
 
 | field | meaning |
@@ -81,6 +97,7 @@ opsquire locks
 | `rollback` | how to undo, or `read-only` |
 | `links` | chat threads, PRs, incident links |
 | `superseded_by`, `abandoned_reason` | set by hand to retire a task |
+| `steps` | plans only: `[{"task": id, "args": [...], "verify": bool, "on_failure": id}]`; a plan has `entry: ""` and no credentials, uses or interpreter |
 | `archived` | `{"note": ..., "history": [{when, by, command, source, outcome}]}` for scripts that ran before opsquire; kept byte-for-byte, never linted or runnable |
 
 ### What a script gets
@@ -127,7 +144,18 @@ processes. The one thing that stays is the record of the interrupted run.
   follow "Writing a task", hand over the command, then `opsquire wait`.
 - **From the operator's terminal**: `opsquire ask "<request>"` starts a headless agent in the home that
   does the same and prints `RUN:` lines (or `NEED:` when blocked). `opsquire ask --task <id> "..."`
-  resumes that task's conversation; `opsquire ask --resume <ask-id>` continues an interrupted ask.
+  resumes that task's conversation; `opsquire ask --resume <ask-id> ["answer"]` continues an interrupted
+  or waiting ask.
+
+### The interview (grill), on by default
+
+When something new must be built (no existing task fits), the agent interviews the operator before
+building: one question per message, about the decision others depend on first, ending with
+`ASK: <question>` and `RECOMMEND: <answer>` lines. `opsquire ask` shows it on the terminal; Enter accepts
+the recommendation. Questions answerable from code, configs or records are researched, not asked. The
+decisions go into the task's `design.md` before any script is written. Reuse needs no interview.
+`--no-grill` makes the agent take safe defaults and record them in `design.md` instead. Without a
+terminal, the ask stops with status `waiting` and prints how to answer with `--resume`.
 
 ### Adding an agent tool (the retinue)
 
