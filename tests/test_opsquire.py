@@ -326,6 +326,9 @@ class OpsTest(unittest.TestCase):
         r = self.cli("ask", "restart", "web1", "bots")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("RUN: opsquire run 20261030-1749_web1_restart-bots --apply", r.stdout)
+        self.assertEqual(r.stdout.count("RUN: opsquire run 20261030-1749_web1_restart-bots --apply"), 1)
+        self.assertIn("follow up: opsquire ask --resume ", r.stderr)
+        self.assertIn("or: opsquire ask --task 20261030-1749_web1_restart-bots", r.stderr)
         self.assertIn("Bash: opsquire find web1 restart", r.stderr)
         self.assertIn(f"Edit(/{self.home}/tasks/**)", r.stdout)
         self.assertIn("author=opsquire-ask/fake", r.stdout)
@@ -433,6 +436,9 @@ class OpsTest(unittest.TestCase):
         self.assertIn(f"--resume {rec['ask_id']}", err)
         del self.env["FAKE_SLEEP"]
         r = self.cli("ask", "--resume", rec["ask_id"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('"--resume", "sess-new"', r.stdout)
+        r = self.cli("ask", "--resume", "sess-new", "more")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('"--resume", "sess-new"', r.stdout)
 

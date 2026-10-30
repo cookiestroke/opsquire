@@ -66,6 +66,7 @@ class AskResult:
     cost_usd: float | None = None
     interrupted: bool = False
     rounds: list[dict[str, Any]] = field(default_factory=list)
+    task_ids: list[str] = field(default_factory=list)
     waiting: str | None = None
 
 
@@ -171,10 +172,12 @@ def session_for_task(task_id: str) -> str | None:
     return None
 
 
-def session_for_ask(ask_id: str) -> tuple[str, str]:
-    matches = [r for r in ask_records() if ask_id in str(r.get("ask_id"))]
+def session_for_ask(query: str) -> tuple[str, str]:
+    records = ask_records()
+    by_session = [r for r in records if r.get("session") == query]
+    matches = by_session[-1:] or [r for r in records if query in str(r.get("ask_id"))]
     if len(matches) != 1:
-        raise OpsquireError(f"{ask_id!r} matches {len(matches)} asks; use the full ask id")
+        raise OpsquireError(f"{query!r} matches {len(matches)} asks; use the ask id or session id it printed")
     rec = matches[0]
     if not rec.get("session"):
         raise OpsquireError(f"ask {rec['ask_id']} has no agent session to resume")
@@ -271,6 +274,7 @@ def ask(
     mentioned = sorted(
         set(re.findall(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b", res.text)) | ({task_id} if task_id else set())
     )
+    res.task_ids = mentioned
     status = (
         "interrupted" if res.interrupted else "waiting" if res.waiting else "ok" if res.exit_code == 0 else "failed"
     )

@@ -274,12 +274,11 @@ def cmd_ask(a: argparse.Namespace) -> int:
         )
         return 1
     print(res.text.strip())
-    if res.actions:
-        print()
-        for kind, text in res.actions:
-            print(f"{kind}: {text}")
     if res.session:
-        print(f'\n(session {res.session}; follow up with: opsquire ask --task <id> "...")', file=sys.stderr)
+        hint = f'\nfollow up: opsquire ask --resume {res.ask_id} "..."'
+        for tid in res.task_ids:
+            hint += f'\n       or: opsquire ask --task {tid} "..."'
+        print(hint, file=sys.stderr)
     return 0 if res.exit_code == 0 else 1
 
 
