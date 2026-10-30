@@ -12,7 +12,21 @@ from typing import IO, Any
 from . import locks
 from .creds import Redactor, Secrets
 from .lint import lint_task
-from .model import SCHEMA, Meta, OpsquireError, Task, compact, iso, load_task, now, runs_dir, task_folder, write_json
+from .model import (
+    SCHEMA,
+    Heartbeat,
+    Meta,
+    OpsquireError,
+    Task,
+    compact,
+    iso,
+    load_task,
+    now,
+    pid_namespace,
+    runs_dir,
+    task_folder,
+    write_json,
+)
 from .runner import EXIT_CODES, Run, style, tty_prompt
 
 STOPPING = {
@@ -97,6 +111,7 @@ class PlanRun:
                 "user": getpass.getuser(),
                 "host": socket.gethostname(),
                 "pid": os.getpid(),
+                "pid_ns": pid_namespace(),
                 "steps": self.steps,
                 "targets": targets,
                 "lock": self.lock_info,
@@ -137,7 +152,8 @@ class PlanRun:
             with (self.dir / "events.jsonl").open("a") as ev, (self.dir / "output.log").open("a") as out:
                 self.events, self.out = ev, out
                 try:
-                    return self._execute()
+                    with Heartbeat(self.dir):
+                        return self._execute()
                 except KeyboardInterrupt:
                     return self.finish("interrupted", "interrupted by the operator between steps")
                 finally:
@@ -184,7 +200,9 @@ class PlanRun:
         self.lock_info["mode"] = mode
         if mode != "none":
             targets = self.meta.targets
-            me = locks.Holder(self.run_id, self.plan.id, os.getpid(), socket.gethostname(), mode, iso(self.started))
+            me = locks.Holder(
+                self.run_id, self.plan.id, os.getpid(), socket.gethostname(), mode, iso(self.started), pid_namespace()
+            )
             try:
                 conflicts, stale, _ = locks.acquire(targets, me, break_lock=False)
             except OSError as e:

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import hashlib
 import json
 import os
 import re
+import socket
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -28,6 +32,63 @@ LINT_FILE = ".lint.json"
 
 class OpsquireError(Exception):
     pass
+
+
+HEARTBEAT_FILE = "heartbeat"
+HEARTBEAT_EVERY = 5.0
+HEARTBEAT_STALE = 30.0
+
+
+class Heartbeat:
+    """Refreshes <run dir>/heartbeat while a run is in progress, so any reader (even in another PID namespace,
+    like an agent sandbox) can tell a live run from a dead one."""
+
+    def __init__(self, run_dir: Path) -> None:
+        self.path = run_dir / HEARTBEAT_FILE
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.beat, daemon=True)
+
+    def beat(self) -> None:
+        while True:
+            with contextlib.suppress(OSError):
+                self.path.write_text(iso(now()) + "\n")
+            if self.stop.wait(HEARTBEAT_EVERY):
+                return
+
+    def __enter__(self) -> Heartbeat:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.stop.set()
+        self.thread.join(timeout=2)
+
+
+def pid_namespace() -> str:
+    try:
+        return os.readlink("/proc/self/ns/pid")
+    except OSError:
+        return ""
+
+
+def run_alive(pid: int, host: str, run_dir: Path, pid_ns: str = "") -> bool:
+    """Same host and PID namespace: ask the kernel (instant, exact). Otherwise (e.g. reading from an agent sandbox):
+    trust the heartbeat; runs from before heartbeats existed fall back to the pid check."""
+    if host != socket.gethostname():
+        return True
+    beat = run_dir / HEARTBEAT_FILE
+    if beat.exists() and pid_ns != pid_namespace():
+        try:
+            return time.time() - beat.stat().st_mtime < HEARTBEAT_STALE
+        except OSError:
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def config_path() -> Path:

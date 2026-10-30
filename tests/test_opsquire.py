@@ -678,6 +678,52 @@ class OpsTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout)
             self.assertLess(r.stdout.index("plan line 299"), r.stdout.index(">>> Go? [y/N]"), name)
 
+    def fake_running(self, pid_ns: str, beat_age: float | None) -> str:
+        self.new("ghost", "print(1)\n")
+        self.assertEqual(self.cli("run", "ghost").returncode, 0)
+        rec = self.last("ghost")
+        run_dir = Path(rec["paths"]["dir"])
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        rec |= {"status": "running", "pid": dead.pid, "pid_ns": pid_ns}
+        (run_dir / "run.json").write_text(json.dumps(rec))
+        beat = run_dir / "heartbeat"
+        if beat_age is None:
+            beat.unlink()
+        else:
+            os.utime(beat, (time.time() - beat_age, time.time() - beat_age))
+        return str(self.last("ghost")["status"])
+
+    def own_ns(self) -> str:
+        return os.readlink("/proc/self/ns/pid")
+
+    def test_liveness_from_another_pid_namespace_uses_the_heartbeat(self) -> None:
+        self.assertEqual(self.fake_running("pid:[1]", 2), "running")
+
+    def test_liveness_stale_heartbeat_means_dead(self) -> None:
+        self.assertEqual(self.fake_running("pid:[1]", 120), "interrupted")
+
+    def test_liveness_same_namespace_trusts_the_kernel(self) -> None:
+        self.assertEqual(self.fake_running(self.own_ns(), 2), "interrupted")
+
+    def test_live_run_beats_and_locks_follow_it(self) -> None:
+        self.new("beating", "import time\n\nimport opsquire_helpers as sq\n\nsq.run(lambda: time.sleep(8))\n")
+        p = self.start("run", "beating")
+        deadline = time.monotonic() + 30
+        beats: list[Path] = []
+        while time.monotonic() < deadline and not beats:
+            beats = list((self.home / "var/runs").rglob("heartbeat"))
+            time.sleep(0.2)
+        self.assertTrue(beats)
+        first = beats[0].stat().st_mtime
+        time.sleep(6)
+        self.assertGreater(beats[0].stat().st_mtime, first)
+        held = json.loads(self.cli("locks", "--json").stdout)
+        self.assertTrue(held["web1"][0]["alive"])
+        self.assertEqual(held["web1"][0]["pid_ns"], self.own_ns())
+        p.communicate(timeout=60)
+        self.assertEqual(p.returncode, 0)
+
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")
         self.assertEqual(self.cli("run", "rw").returncode, 0)

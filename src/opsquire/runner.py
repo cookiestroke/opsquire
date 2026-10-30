@@ -21,6 +21,7 @@ from .lint import lint_task, save_lint
 from .model import (
     HELPERS_DIR,
     SCHEMA,
+    Heartbeat,
     Meta,
     OpsquireError,
     Task,
@@ -28,6 +29,8 @@ from .model import (
     home_dir,
     iso,
     now,
+    pid_namespace,
+    run_alive,
     runs_dir,
     write_json,
 )
@@ -177,6 +180,7 @@ class Run:
             "user": getpass.getuser(),
             "host": socket.gethostname(),
             "pid": os.getpid(),
+            "pid_ns": pid_namespace(),
             "cwd": os.getcwd(),
             "argv": self.args,
             "entry": self.meta.entry,
@@ -235,7 +239,8 @@ class Run:
             with (self.dir / "events.jsonl").open("a") as ev, (self.dir / "output.log").open("a") as out:
                 self.events_f, self.output_f = ev, out
                 try:
-                    return self._execute()
+                    with Heartbeat(self.dir):
+                        return self._execute()
                 except KeyboardInterrupt:
                     return self.stopped_before_script()
                 finally:
@@ -297,7 +302,13 @@ class Run:
             self.event("lock", f"no lock: {self.meta.lock_reason}")
         else:
             me = locks.Holder(
-                self.run_id, self.task.id, os.getpid(), socket.gethostname(), self.meta.lock, iso(self.started)
+                self.run_id,
+                self.task.id,
+                os.getpid(),
+                socket.gethostname(),
+                self.meta.lock,
+                iso(self.started),
+                pid_namespace(),
             )
             try:
                 conflicts, stale, _ = locks.acquire(holders, me, break_lock=False)
@@ -436,12 +447,8 @@ def run_task(task: Task, apply: bool, args: list[str], break_lock: bool) -> int:
 def load_run(path: Path) -> dict[str, Any]:
     with path.open() as f:
         rec: dict[str, Any] = json.load(f)
-    if rec.get("status") == "running" and rec.get("host") == socket.gethostname():
-        try:
-            os.kill(int(rec["pid"]), 0)
-        except ProcessLookupError:
-            rec["status"] = "interrupted"
-            rec["last_error"] = "runner process vanished without finishing (killed or terminal closed)"
-        except PermissionError:
-            pass
+    alive = run_alive(int(rec.get("pid", 0)), str(rec.get("host")), path.parent, str(rec.get("pid_ns", "")))
+    if rec.get("status") == "running" and not alive:
+        rec["status"] = "interrupted"
+        rec["last_error"] = "runner process vanished without finishing (killed or terminal closed)"
     return rec

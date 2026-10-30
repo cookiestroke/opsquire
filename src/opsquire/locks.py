@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import fcntl
-import os
-import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from .model import locks_dir, read_json, write_json
+from .model import locks_dir, read_json, run_alive, runs_dir, write_json
 
 
 @dataclass
@@ -19,17 +17,10 @@ class Holder:
     host: str
     mode: str
     since: str
+    pid_ns: str = ""
 
     def alive(self) -> bool:
-        if self.host != socket.gethostname():
-            return True
-        try:
-            os.kill(self.pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
+        return run_alive(self.pid, self.host, runs_dir() / self.task_id / self.run_id, self.pid_ns)
 
 
 @contextmanager
