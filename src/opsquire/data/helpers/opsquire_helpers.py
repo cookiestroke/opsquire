@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import sys
 from collections.abc import Callable
@@ -45,10 +46,25 @@ def data(msg: str, **values: Any) -> None:
     emit("data", msg, **values)
 
 
+def _wait_for_echo() -> None:
+    """Make sure everything printed so far is on screen before a prompt (the runner echoes stdout via a pipe)."""
+    fd = os.environ.get("OPSQUIRE_SYNC_FD")
+    if not fd:
+        return
+    emit("sync")
+    try:
+        ready, _, _ = select.select([int(fd)], [], [], 10)
+        if ready:
+            os.read(int(fd), 1)
+    except (OSError, ValueError):
+        pass
+
+
 def confirm(question: str) -> None:
+    _wait_for_echo()
     try:
         with open("/dev/tty", "w") as out, open("/dev/tty") as inp:
-            out.write(f">>> {question} [y/N] ")
+            out.write(f"\n>>> {question} [y/N] ")
             out.flush()
             answer = inp.readline().strip().lower()
     except OSError:

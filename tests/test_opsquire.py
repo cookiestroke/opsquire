@@ -669,6 +669,15 @@ class OpsTest(unittest.TestCase):
         self.assertIn("RUN:", r.stdout)
         self.assertIn("Do not ask questions", r.stdout)
 
+    def test_prompt_appears_after_everything_printed_before_it(self) -> None:
+        py = "import opsquire_helpers as sq\n\nfor i in range(300):\n    print(f'plan line {i}')\nsq.confirm('Go?')\n"
+        sh = BASH_HEADER + 'for i in $(seq 0 299); do echo "plan line $i"; done\nsq_confirm "Go?"\n'
+        for name, body, lang in (("order-py", py, "py"), ("order-sh", sh, "sh")):
+            self.new(name, body, "--changes-prod", "--rollback", "x", lang=lang)
+            r = self.cli("run", name, "--apply", answers=[("[y/N]", "y")])
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertLess(r.stdout.index("plan line 299"), r.stdout.index(">>> Go? [y/N]"), name)
+
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")
         self.assertEqual(self.cli("run", "rw").returncode, 0)

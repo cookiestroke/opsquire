@@ -84,6 +84,7 @@ class Run:
         }
         self.record: dict[str, Any] = {}
         self.locked: list[str] = []
+        self.sync_w = -1
 
     def event(self, event: str, msg: str = "", level: str = "info", src: str = "runner", **extra: Any) -> None:
         self.seq += 1
@@ -120,6 +121,9 @@ class Run:
             self.event("warn", f"unparseable @@OPSQUIRE line: {payload[:200]}", level="warn")
             return
         kind = str(data.pop("event", ""))
+        if kind == "sync":
+            self.release_prompt()
+            return
         msg = str(data.pop("msg", ""))
         level = str(data.pop("level", "error" if kind == "error" else "warn" if kind == "warn" else "info"))
         if kind not in SCRIPT_EVENTS:
@@ -149,6 +153,12 @@ class Run:
         self.line(stream, f"{OPSQUIRE_PREFIX}{kind}: {shown}", echo=None)
         sys.stdout.write(f"{style(f'[{kind}]', '1', sys.stdout)} {self.redact(shown)}\n")
         sys.stdout.flush()
+
+    def release_prompt(self) -> None:
+        """The script printed everything before its prompt and that output is now echoed: let it ask."""
+        if self.sync_w >= 0:
+            with contextlib.suppress(OSError):
+                os.write(self.sync_w, b"x")
 
     def write_record(self, status: str, exit_code: int | None) -> None:
         ended = now() if status != "running" else None
@@ -331,7 +341,14 @@ class Run:
             "PYTHONPATH": os.pathsep.join(filter(None, [str(HELPERS_DIR), os.environ.get("PYTHONPATH", "")])),
         }
         self.event("spawn", " ".join(cmd))
-        proc = subprocess.Popen(cmd, cwd=self.task.folder, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        sync_r, self.sync_w = os.pipe()
+        env["OPSQUIRE_SYNC_FD"] = str(sync_r)
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=self.task.folder, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=(sync_r,)
+            )
+        finally:
+            os.close(sync_r)
         lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
 
         def pump(pipe: IO[bytes], name: str) -> None:
@@ -369,6 +386,8 @@ class Run:
         finally:
             for s, h in previous.items():
                 signal.signal(s, h)
+            os.close(self.sync_w)
+            self.sync_w = -1
 
         status = self.classify(code)
         self.finish_targets(status)
