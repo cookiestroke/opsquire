@@ -108,7 +108,9 @@ def home_dir() -> Path:
 
 
 def var_dir() -> Path:
-    return home_dir() / "var"
+    """Run records live in the main home; agents of a parallel ask work in worktrees and get OPSQUIRE_VAR."""
+    env = os.environ.get("OPSQUIRE_VAR")
+    return Path(env) if env else home_dir() / "var"
 
 
 def runs_dir() -> Path:

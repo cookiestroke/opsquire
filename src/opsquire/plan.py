@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import getpass
 import json
 import os
@@ -23,11 +24,51 @@ from .model import (
     load_task,
     now,
     pid_namespace,
+    resolve_task,
     runs_dir,
     task_folder,
     write_json,
 )
 from .runner import EXIT_CODES, Run, style, tty_prompt
+
+
+def plan_meta(
+    name: str,
+    t: dt.datetime,
+    area: str,
+    purpose: str,
+    author: str,
+    steps: list[dict[str, Any]],
+    rollback: str | None = None,
+    links: list[str] | None = None,
+) -> Meta:
+    """Meta for a plan over existing tasks; targets and changes_prod follow from the steps."""
+    metas = []
+    for step in steps:
+        task = resolve_task(str(step["task"]))
+        if task.meta is None or task.kind != "task":
+            raise OpsquireError(f"step {task.id} is not a valid task")
+        metas.append(task.meta)
+    changes = any(m.changes_prod for m in metas)
+    return Meta(
+        id=name,
+        kind="plan",
+        created=iso(t),
+        author=author,
+        purpose=purpose,
+        area=area,
+        entry="",
+        changes_prod=changes,
+        targets=sorted({x for m in metas for x in m.targets}),
+        lock="exclusive" if changes else "shared",
+        lock_reason="",
+        credentials={},
+        uses=[],
+        rollback=rollback or ("each step's own rollback, see steps" if changes else "read-only"),
+        links=links or [],
+        steps=steps,
+    )
+
 
 STOPPING = {
     "failed": "failed",

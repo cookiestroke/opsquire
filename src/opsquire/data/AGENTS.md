@@ -1,7 +1,7 @@
 # Opsquire: contract for agents
 
 Read this before writing or reading anything in the opsquire home (`opsquire home` prints it).
-It applies to every agent (Claude Code, Codex, agents inside Orca or similar tools) and does not
+It applies to every agent (Claude Code, Codex, or any similar tool) and does not
 depend on any agent's memory. Local rules for this home are at the end.
 
 ## Why this exists
@@ -174,22 +174,41 @@ decisions go into the task's `design.md` before any script is written. Reuse nee
 `--no-grill` makes the agent take safe defaults and record them in `design.md` instead. Without a
 terminal, the ask stops with status `waiting` and prints how to answer with `--resume`.
 
-### Agents everywhere: the skill, and Orca
+### Parallel asks: one request, several agents
+
+When a request holds independent pieces (none needs another's result, no two would edit the same general script),
+the first agent answers only `SPLIT: <self-contained request>` lines, one per piece, and builds nothing itself.
+`opsquire ask` then starts one agent per piece, each in its own git worktree of the home (`.worktrees/<ask-id>/<n>`,
+branch `ask/<ask-id>/<n>`), all at once (`--max-agents N` limits it; `--no-split` keeps one agent).
+
+- A piece agent builds only its piece, exactly as above. Its `opsquire` commands see its worktree as the home and
+  the main home's run records (`OPSQUIRE_VAR`).
+- Interview questions from every piece reach the operator one at a time, labelled `[n/total piece]`.
+- A piece that hands over RUN lines is committed and merged into the home. If another piece changed the same files,
+  its agent gets one turn to resolve the conflict markers and lint again; otherwise it is reported as a clash.
+- Every merged piece keeps its own RUN lines, and opsquire also bundles all of them into one plan (a piece's plan
+  contributes its steps), so one command can run everything in order.
+- A piece that ends waiting (a question without a terminal, a NEED, a clash) or is interrupted is parked: its work
+  is committed to its branch and the worktree removed. `opsquire ask --resume <ask-id> ["answer"]` recreates the
+  worktrees and continues only the unfinished pieces.
+- Spend: `--budget` (default 15 USD) covers the whole ask, all agents together. It is a reminder (one notice when
+  passed); `--strict-budget` makes it a hard cap on each agent turn.
+
+### The home is a local git repository
 
 `opsquire integrate` installs the `opsquire` skill into Claude Code's user skills, so agents in any folder or
-worktree (Orca included) load this contract when they need tooling, and registers the home as an Orca workspace.
-`opsquire ask --agent orca "<request>"` runs the ask in Orca in the background: the agent starts in an Orca
-terminal on the home without taking focus, every turn (interview question or final answer) comes back to the
-operator's terminal through a handoff file in `.asks/` (deleted after each read), and the RUN lines land in the ask
-record as usual. The session stays in Orca for viewing; `--resume <ask-id>` continues it. If the agent stops at
-a prompt of its own (a permission question), its screen is shown and the operator's reply is typed into it.
-`--agent orca-visible` instead opens a focused agent in Orca and hands the whole conversation to it.
+worktree load this contract when they need tooling, and makes the home a local-only git repository (it refuses one
+with a remote). Opsquire commits in it by itself: when `opsquire lint` passes (the ready version), before every
+`opsquire run`, at the end of an ask, as a snapshot before a parallel ask, and when a piece merges. Commits follow
+the operator's git config, signing included; a commit that cannot be made (for example in an agent sandbox) is
+skipped with a note and picked up by the next one.
 
 ### Adding an agent tool (the retinue)
 
 Agents are configured in `retinue.json`, not code. An entry has `enabled`, `argv` (placeholders
 `{prompt}`, `{system}`, `{home}`, `{session}`, and `{allowed_tools*}` which expands the
-`allowed_tools` list), optional `resume_argv`, and `output`: `claude-stream-json` (live tool
+`allowed_tools` list), optional `resume_argv`, optional `budget_argv` (placeholder `{budget}`, used by
+`--strict-budget`), and `output`: `claude-stream-json` (live tool
 progress, session id, cost) or `text` (whole stdout is the answer). New output formats are one parser
 function in `opsquire/ask.py`. Only enable an agent whose own sandbox keeps it away from what the
 local rules protect; otherwise set `"enabled": false` with a `reason`.

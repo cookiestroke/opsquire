@@ -27,9 +27,9 @@ opsquire runs --status failed      what went wrong, across everything
 opsquire log <task>                full output of the latest run
 opsquire wait <task>               (for agents) block until your next run of a task finishes
 opsquire locks / unlock <target>
-opsquire integrate                 install the opsquire skill for Claude agents; register the home in Orca
-opsquire ask --agent orca "<...>"  run the ask in Orca in the background; answers come back here
-                                   (--agent orca-visible: open a focused agent in Orca instead)
+opsquire integrate                 install the opsquire skill for Claude agents; make the home a local git repo
+opsquire ask --no-split "<...>"    one agent only (asks split into parallel pieces by default)
+opsquire ask --max-agents 2 ...    at most 2 agents at once; --budget 20 [--strict-budget] for the spend
 ```
 
 Ctrl-C is always safe: the run is recorded as `interrupted`, scratch work is undone, locks are

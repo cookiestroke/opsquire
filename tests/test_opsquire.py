@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pty
+import re
 import select
 import shutil
 import signal
@@ -317,6 +318,7 @@ class OpsTest(unittest.TestCase):
         fake = str(Path(__file__).parent / "fake_agent.py")
         agent = {"enabled": True, "argv": [sys.executable, fake, "{prompt}", "--sys", "{system}", "{allowed_tools*}"]}
         agent |= {"resume_argv": ["--resume", "{session}"], "output": "claude-stream-json"}
+        agent |= {"budget_argv": ["--max-budget-usd", "{budget}"]}
         agent |= {"allowed_tools": ["Edit(/{home}/tasks/**)"]} | override
         cfg = {"default": "fake", "agents": {"fake": agent, "off": {"enabled": False, "reason": "not reviewed"}}}
         path = self.tmp / "retinue.json"
@@ -849,125 +851,153 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(progress.duration(42), "~42 s")
         self.assertEqual(progress.duration(300), "~5 min")
 
-    def fake_orca(self, running: bool, registered: str = "") -> Path:
-        bin_dir = self.tmp / "orca-bin"
-        bin_dir.mkdir(exist_ok=True)
-        cli = bin_dir / "orca-ide"
-        cli.write_text(f'#!/bin/sh\nexec {sys.executable} {ROOT / "tests/fake_orca.py"} "$@"\n')
-        cli.chmod(0o755)
-        log = self.tmp / "orca-calls.jsonl"
-        self.env |= {"PATH": f"{bin_dir}:{self.env['PATH']}", "FAKE_ORCA_LOG": str(log)}
-        self.env |= {"FAKE_ORCA_RUNNING": "1" if running else "0", "FAKE_ORCA_REGISTERED": registered}
-        self.env["CLAUDE_CONFIG_DIR"] = str(self.tmp / "claude")
-        self.env["HOME"] = str(self.tmp / "user")
-        git = bin_dir / "git"
-        git.write_text(f'#!/bin/sh\nexec {sys.executable} {ROOT / "tests/fake_git.py"} "$@"\n')
-        git.chmod(0o755)
-        self.env |= {"FAKE_GIT_REPO": "1", "FAKE_GIT_REMOTES": ""}
+    def git_home(self) -> None:
+        gitconfig = self.tmp / "gitconfig"
+        gitconfig.write_text("[user]\n\tname = Test\n\temail = test@example.com\n")
+        self.env |= {"GIT_CONFIG_GLOBAL": str(gitconfig), "GIT_CONFIG_NOSYSTEM": "1"}
+        self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
+        self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))
+        r = self.cli("integrate")
+        self.assertIn("home repo: initialized a local git repository", r.stdout, r.stderr)
+
+    def git(self, *args: str) -> str:
+        r = subprocess.run(["git", "-C", str(self.home), *args], env=self.env, capture_output=True, text=True)
+        return r.stdout
+
+    def asks(self) -> list[dict[str, Any]]:
+        return [json.loads(p.read_text()) for p in sorted((self.home / "var/asks").glob("*.json"))]
+
+    def split(self, *pieces: str) -> Path:
+        self.git_home()
+        self.agents_file()
+        log = self.tmp / "agent-log.jsonl"
+        self.env |= {"FAKE_SPLIT": json.dumps(list(pieces)), "FAKE_LOG": str(log)}
         return log
 
-    def orca_calls(self, log: Path) -> list[list[str]]:
-        return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
-
-    def test_integrate_installs_the_skill_idempotently(self) -> None:
-        self.fake_orca(running=False)
+    def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
+        self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
+        self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))
+        gitconfig = self.tmp / "gitconfig"
+        gitconfig.write_text("[user]\n\tname = Test\n\temail = test@example.com\n")
+        self.env |= {"GIT_CONFIG_GLOBAL": str(gitconfig), "GIT_CONFIG_NOSYSTEM": "1"}
         skills = [self.tmp / "claude/skills/opsquire/SKILL.md", self.tmp / "user/.claude/skills/opsquire/SKILL.md"]
         r = self.cli("integrate", "--dry-run")
         self.assertEqual(r.stdout.count("claude skill: would be installed"), 2)
-        self.assertFalse(any(s.exists() for s in skills))
+        self.assertIn("home repo: would initialize", r.stdout)
+        self.assertFalse(any(s.exists() for s in skills) or (self.home / ".git").exists())
         r = self.cli("integrate")
         self.assertEqual(r.stdout.count("claude skill: installed"), 2)
-        self.assertIn("orca: not running", r.stdout)
         want = (ROOT / "src/opsquire/data/skills/opsquire/SKILL.md").read_text()
         self.assertTrue(all(s.read_text() == want for s in skills))
-        self.assertEqual(self.cli("integrate").stdout.count("claude skill: unchanged"), 2)
-
-    def test_integrate_registers_the_home_in_orca_once(self) -> None:
-        log = self.fake_orca(running=True)
+        self.assertIn("var/", (self.home / ".gitignore").read_text())
+        self.assertEqual(len(self.git("log", "--oneline").splitlines()), 1)
         r = self.cli("integrate")
-        self.assertIn(f"orca: registered {self.home}", r.stdout)
-        self.assertIn(["repo", "add", "--path", str(self.home), "--json"], self.orca_calls(log))
-        self.fake_orca(running=True, registered=str(self.home))
-        self.assertIn("orca: home already registered", self.cli("integrate").stdout)
+        self.assertEqual(r.stdout.count("claude skill: unchanged"), 2)
+        self.assertIn("home repo: local-only git repository", r.stdout)
+        self.git("remote", "add", "origin", "https://example.com/x.git")
+        self.assertIn("refusing: it has remotes (origin)", self.cli("integrate").stdout)
 
-    def test_integrate_requires_a_local_only_git_home(self) -> None:
-        log = self.fake_orca(running=True)
-        self.env["FAKE_GIT_REPO"] = "0"
-        self.assertIn("is not a git repository yet: run `git init", self.cli("integrate").stdout)
-        self.env |= {"FAKE_GIT_REPO": "1", "FAKE_GIT_REMOTES": "origin"}
-        self.assertIn("refusing: the home repository has remotes (origin)", self.cli("integrate").stdout)
-        self.assertFalse(any(c[:2] == ["repo", "add"] for c in self.orca_calls(log)))
+    def test_lint_pass_commits_the_ready_version(self) -> None:
+        self.git_home()
+        folder = self.new("tidy", "print(1)\n")
+        self.assertEqual(self.cli("lint", "tidy").returncode, 0)
+        self.assertIn(f"ready: {folder.name}", self.git("log", "--format=%s"))
+        self.assertEqual(self.git("status", "--short"), "")
 
-    def test_ask_via_orca_launches_a_visible_agent_on_the_home(self) -> None:
-        log = self.fake_orca(running=True)
-        r = self.cli("ask", "--agent", "orca-visible", "restart", "web1")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Launched a Claude agent in Orca (terminal)", r.stdout)
-        launch = [c for c in self.orca_calls(log) if c[:2] == ["agent", "launch"]][0]
-        self.assertIn(f"path:{self.home}", launch)
-        self.assertIn("--focus", launch)
-        prompt = launch[launch.index("--prompt") + 1]
-        self.assertIn("Request: restart web1", prompt)
-        self.assertIn("AGENTS.md", prompt)
-        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
-        self.assertEqual((rec["agent"], rec["status"]), ("orca-visible", "ok"))
+    def test_parallel_ask_builds_each_piece_in_its_own_worktree_and_bundles_a_plan(self) -> None:
+        log = self.split("alpha task", "beta task")
+        r = self.cli("ask", "build", "alpha", "and", "beta")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("split into 2 pieces", r.stderr)
+        self.assertIn("[1/2 alpha-task] ready", r.stdout)
+        self.assertIn("[2/2 beta-task] ready", r.stdout)
+        runs = re.findall(r"^\s*RUN: opsquire run (\S+)$", r.stdout, re.M)
+        self.assertEqual(len(runs), 3, r.stdout)
+        self.assertIn("RUN: opsquire run " + runs[-1] + " --apply", r.stdout)
+        plan = json.loads(next(self.home.glob(f"tasks/*/{runs[-1]}/meta.json")).read_text())
+        self.assertEqual([s["task"] for s in plan["steps"]], runs[:2])
+        self.assertEqual(json.loads(self.cli("show", runs[-1], "--json").stdout)["status"], "ready")
+        calls = [json.loads(x) for x in log.read_text().splitlines()]
+        cwds = {c["piece"]: c["cwd"] for c in calls if c["piece"]}
+        self.assertEqual(set(cwds), {"alpha task", "beta task"})
+        self.assertTrue(all("/.worktrees/" in c for c in cwds.values()))
+        self.assertFalse((self.home / ".worktrees").exists())
+        self.assertEqual(self.git("branch", "--list", "ask/*"), "")
+        self.assertEqual(self.git("status", "--short"), "")
+        rec = self.asks()[-1]
+        self.assertEqual([p["status"] for p in rec["pieces"]], ["merged", "merged"])
+        self.assertEqual((rec["status"], rec["plan"]), ("ok", runs[-1]))
 
-    def test_ask_via_orca_explains_a_refused_launch(self) -> None:
-        self.fake_orca(running=False)
-        r = self.cli("ask", "--agent", "orca-visible", "hi")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("Orca is not running", r.stdout + r.stderr)
-        self.fake_orca(running=True)
-        self.env["FAKE_ORCA_UNREGISTERED"] = "1"
-        r = self.cli("ask", "--agent", "orca-visible", "hi")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("run `opsquire integrate`", r.stdout + r.stderr)
-
-    def orca_session(self, *turns: str, silent: bool = False) -> Path:
-        log = self.fake_orca(running=True)
-        self.env |= {"FAKE_ORCA_TURNS": json.dumps(list(turns)), "FAKE_ORCA_STATE": str(self.tmp / "orca-state.json")}
-        if silent:
-            self.env["FAKE_ORCA_SILENT"] = "1"
-        return log
-
-    TASK = "20261101-0000_web1_restart-bots"
-    FINAL = f"Done.\nRUN: opsquire run {TASK}\nRUN: opsquire run {TASK} --apply"
-
-    def test_orca_runs_in_the_background_and_relays_the_interview(self) -> None:
-        turns = ("Q1\nASK: which host?\nRECOMMEND: web1", "Q2\nASK: order?\nRECOMMEND: gw first", self.FINAL)
-        log = self.orca_session(*turns)
-        r = self.cli(
-            "ask", "--agent", "orca", "restart", "bots", answers=[("[Enter =", ""), ("[Enter =", "bots first")]
-        )
+    def test_parallel_questions_reach_the_operator_one_at_a_time_with_labels(self) -> None:
+        self.split("alpha question", "beta question")
+        r = self.cli("ask", "two", "things", answers=[("[Enter = tonight]", ""), ("[Enter = tonight]", "tomorrow")])
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("RUN: opsquire run 20261101-0000_web1_restart-bots --apply", r.stdout)
-        calls = self.orca_calls(log)
-        launch = [c for c in calls if c[:2] == ["agent", "launch"]][0]
-        self.assertIn("--surface", launch)
-        self.assertNotIn("--focus", launch)
-        sends = [c[c.index("--text") + 1] for c in calls if c[:2] == ["terminal", "send"]]
-        self.assertEqual(sends, ["Answer: web1", "Answer: bots first"])
-        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
-        self.assertEqual((rec["agent"], rec["status"], rec["session"]), ("orca", "ok", "term-1"))
-        self.assertEqual([x["answer"] for x in rec["rounds"]], ["web1", "bots first"])
-        self.assertEqual(list((self.home / ".asks").glob("*")), [])
+        self.assertRegex(r.stdout, r"\[\d/2 \w+-question\] which window for")
+        pieces = self.asks()[-1]["pieces"]
+        self.assertEqual(sorted(p["rounds"][0]["answer"] for p in pieces), ["tomorrow", "tonight"])
+        self.assertEqual([p["status"] for p in pieces], ["merged", "merged"])
 
-    def test_orca_agent_stuck_at_a_prompt_gets_the_operators_reply(self) -> None:
-        log = self.orca_session(self.FINAL, self.FINAL, silent=True)
-        r = self.cli("ask", "--agent", "orca", "restart", "bots", answers=[("[Enter = keep waiting]", "1")])
-        self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("Do you want to create .asks/x.md?", r.stdout)
-        self.assertIn("RUN: opsquire run", r.stdout)
-        sends = [c[c.index("--text") + 1] for c in self.orca_calls(log) if c[:2] == ["terminal", "send"]]
-        self.assertEqual(sends, ["1"])
+    def test_parallel_merge_clash_is_resolved_by_the_piece_agent(self) -> None:
+        self.split("alpha clash", "beta clash")
+        r = self.cli("ask", "both", "touch", "shared")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        notes = (self.home / "general/web1_shared/notes.txt").read_text()
+        self.assertIn("written by alpha-clash", notes)
+        self.assertIn("written by beta-clash", notes)
+        self.assertNotIn("<<<<<<<", notes)
+        self.assertEqual([p["status"] for p in self.asks()[-1]["pieces"]], ["merged", "merged"])
 
-    def test_orca_background_ask_reports_unregistered_home_cleanly(self) -> None:
-        self.orca_session(self.FINAL)
-        self.env["FAKE_ORCA_UNREGISTERED"] = "1"
-        r = self.cli("ask", "--agent", "orca", "hi")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("run `opsquire integrate`", r.stdout + r.stderr)
-        self.assertEqual(list((self.home / ".asks").glob("*")) if (self.home / ".asks").exists() else [], [])
+    def test_parallel_waiting_piece_is_parked_on_its_branch_and_resumes(self) -> None:
+        self.split("alpha task", "beta need")
+        r = self.cli("ask", "two", "things")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("[2/2 beta-need] waiting: the book name", r.stdout)
+        self.assertIn("continue with: opsquire ask --resume", r.stderr)
+        rec = self.asks()[-1]
+        self.assertEqual(self.git("branch", "--list", "ask/*").split(), [f"ask/{rec['ask_id']}/2"])
+        self.assertFalse((self.home / ".worktrees").exists())
+        r = self.cli("ask", "--resume", rec["ask_id"], "ldn1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("[2/2 beta-need] ready", r.stdout)
+        rec = self.asks()[-1]
+        self.assertEqual([p["status"] for p in rec["pieces"]], ["merged", "merged"])
+        self.assertEqual(rec["pieces"][1]["rounds"][-1]["answer"], "ldn1")
+        self.assertTrue(rec["plan"])
+        self.assertEqual(self.git("branch", "--list", "ask/*"), "")
+
+    def test_parallel_ctrl_c_parks_unfinished_pieces_cleanly(self) -> None:
+        log = self.split("alpha task", "beta slow")
+        self.env["FAKE_SLEEP"] = "60"
+        p = self.start("ask", "two", "things")
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and "beta slow" not in (log.read_text() if log.exists() else ""):
+            time.sleep(0.1)
+        time.sleep(1)
+        os.killpg(p.pid, signal.SIGINT)
+        out, err = p.communicate(timeout=60)
+        self.assertEqual(p.returncode, 130, err)
+        self.assertNotIn("Traceback", out + err)
+        rec = self.asks()[-1]
+        self.assertEqual(rec["status"], "interrupted")
+        self.assertEqual(rec["pieces"][1]["status"], "interrupted")
+        self.assertIn(f"ask/{rec['ask_id']}/2", self.git("branch", "--list", "ask/*"))
+        self.assertFalse((self.home / ".worktrees").exists())
+
+    def test_no_split_and_strict_budget_reach_the_agent(self) -> None:
+        self.split("alpha task", "beta task")
+        r = self.cli("ask", "--no-split", "--strict-budget", "--budget", "3", "one", "thing")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("Parallel work comes first", r.stdout)
+        self.assertIn('"--max-budget-usd", "3.00"', r.stdout)
+        self.assertNotIn("--max-budget-usd", self.cli("ask", "--no-split", "one", "thing").stdout)
+
+    def test_budget_reminder_is_a_notice_by_default(self) -> None:
+        self.split("alpha task", "beta task")
+        self.env["FAKE_COST"] = "10"
+        r = self.cli("ask", "two", "things")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stderr.count("past the $15.00 reminder"), 1)
+        self.assertIn("$20.01 spent", r.stderr)
 
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")

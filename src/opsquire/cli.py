@@ -13,8 +13,9 @@ from types import FrameType
 from typing import Any
 
 from . import locks, runner
-from .ask import ask
+from .ask import DEFAULT_BUDGET_USD, Budget, ask
 from .docs import write_docs
+from .homegit import commit_quietly
 from .integrate import integrate
 from .lint import lint_task, save_lint
 from .model import (
@@ -32,7 +33,7 @@ from .model import (
     write_json,
     write_text,
 )
-from .plan import run_plan
+from .plan import plan_meta, run_plan
 from .query import all_runs, find_run, find_tasks, list_tasks, runs_for, summarize, wait_for_run
 from .runner import EXIT_CODES, load_run, run_task, tty_prompt
 
@@ -106,30 +107,9 @@ def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -
 def build_plan(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -> None:
     if not a.step:
         raise OpsquireError("a plan needs at least one --step <task-id>, in order")
-    steps = [resolve_task(s) for s in a.step]
-    for step in steps:
-        if step.meta is None or step.kind != "task":
-            raise OpsquireError(f"step {step.id} is not a valid task")
-    metas = [s.meta for s in steps if s.meta]
-    changes = any(m.changes_prod for m in metas)
-    meta = Meta(
-        id=name,
-        kind="plan",
-        created=iso(t),
-        author=a.author or os.environ.get("OPSQUIRE_AUTHOR", "unknown"),
-        purpose=a.purpose,
-        area=a.area,
-        entry="",
-        changes_prod=changes,
-        targets=sorted({t for m in metas for t in m.targets}),
-        lock="exclusive" if changes else "shared",
-        lock_reason="",
-        credentials={},
-        uses=[],
-        rollback=a.rollback or ("each step's own rollback, see steps" if changes else "read-only"),
-        links=a.link or [],
-        steps=[{"task": s.id} for s in steps],
-    )
+    steps = [{"task": resolve_task(s).id} for s in a.step]
+    author = a.author or os.environ.get("OPSQUIRE_AUTHOR", "unknown")
+    meta = plan_meta(name, t, a.area, a.purpose, author, steps, a.rollback, a.link or [])
     write_json(folder / "meta.json", meta.to_json())
 
 
@@ -143,6 +123,10 @@ def cmd_lint(a: argparse.Namespace) -> int:
         print(result.output)
         tests = f" ({result.tests} tests)" if result.tests else ""
         print(f"\n{task.id}: {'LINT OK' if result.ok else 'LINT FAILED'}{tests}")
+    if result.ok:
+        note = commit_quietly(home_dir(), [task.folder], f"ready: {task.id}")
+        if note:
+            print(note, file=sys.stderr)
     return 0 if result.ok else 1
 
 
@@ -150,6 +134,9 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.verbose:
         runner.VERBOSE = True
     task = resolve_task(a.task)
+    note = commit_quietly(home_dir(), [home_dir() / "tasks", home_dir() / "general"], f"before running {task.id}")
+    if note:
+        print(f"opsquire: {note}", file=sys.stderr)
     if task.kind == "plan":
         if a.script_args:
             raise OpsquireError("plans take no arguments after --; put them on the steps in meta.json")
@@ -265,7 +252,27 @@ def cmd_ask(a: argparse.Namespace) -> int:
     task_id = resolve_task(a.task).id if a.task else None
     if not a.request and not a.resume:
         raise OpsquireError('say what you want, e.g. opsquire ask "restart the bots on host x"')
-    res = ask(" ".join(a.request) or "Continue where we stopped.", a.agent, task_id, a.new, a.resume, not a.no_grill)
+    if a.max_agents is not None and a.max_agents < 1:
+        raise OpsquireError("--max-agents must be at least 1")
+    res = ask(
+        " ".join(a.request) or "Continue where we stopped.",
+        a.agent,
+        task_id,
+        a.new,
+        a.resume,
+        not a.no_grill,
+        split=not a.no_split,
+        max_agents=a.max_agents,
+        budget=Budget(a.budget, a.strict_budget),
+        reply_given=bool(a.request),
+    )
+    if res.pieces:
+        print(res.text.strip())
+        if res.interrupted or res.waiting:
+            print(f"\nopsquire: continue with: opsquire ask --resume {res.ask_id}", file=sys.stderr)
+        if res.cost_usd:
+            print(f"opsquire: ${res.cost_usd:.2f} spent", file=sys.stderr)
+        return EXIT_CODES["interrupted"] if res.interrupted else res.exit_code
     if res.interrupted:
         print(f"opsquire: interrupted; continue with: opsquire ask --resume {res.ask_id}", file=sys.stderr)
         return EXIT_CODES["interrupted"]
@@ -454,6 +461,16 @@ def parser() -> argparse.ArgumentParser:
     ak.add_argument("--agent", help="agent from retinue.json (default from retinue.json)")
     ak.add_argument("--new", action="store_true", help="start a fresh conversation even with --task")
     ak.add_argument("--no-grill", action="store_true", help="no interview: the agent takes defaults and records them")
+    ak.add_argument("--no-split", action="store_true", help="one agent only, even when the request has parts")
+    ak.add_argument("--max-agents", type=int, metavar="N", help="at most N agents working at once (default: no limit)")
+    ak.add_argument(
+        "--budget",
+        type=float,
+        default=DEFAULT_BUDGET_USD,
+        metavar="USD",
+        help=f"spending reminder for the whole ask, all agents together (default {DEFAULT_BUDGET_USD:g})",
+    )
+    ak.add_argument("--strict-budget", action="store_true", help="make --budget a hard cap instead of a reminder")
     ak.set_defaults(fn=cmd_ask)
 
     wt = sub.add_parser("wait", help="wait for the next finished run of a task, then print it (for agents)")
@@ -467,7 +484,9 @@ def parser() -> argparse.ArgumentParser:
     ct.add_argument("--write", action="store_true", help="write it to the home as AGENTS.md and CLAUDE.md")
     ct.set_defaults(fn=cmd_contract)
 
-    ig = sub.add_parser("integrate", help="install the opsquire skill for Claude agents; register the home in Orca")
+    ig = sub.add_parser(
+        "integrate", help="install the opsquire skill for Claude agents; make the home a local-only git repo"
+    )
     ig.add_argument("--dry-run", action="store_true")
     ig.set_defaults(fn=cmd_integrate)
 

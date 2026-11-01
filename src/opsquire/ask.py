@@ -5,18 +5,19 @@ import os
 import re
 import subprocess
 import sys
-import time
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
+from . import homegit
 from .model import DATA_DIR, OpsquireError, compact, home_dir, iso, now, read_json, var_dir, write_json
 
 SYSTEM_PROMPT = """You are running inside `opsquire ask` for the operator.
 The operator will run whatever you prepare in their own terminal.
 Read {home}/AGENTS.md first and follow it exactly. The `opsquire` command is on your PATH.
-
+{split}
 Turn the request into runnable opsquire task(s):
 1. Search first: `opsquire find <keywords>` (and `opsquire show <id>` on candidates). Reuse a fitting task; if a general
    script fits, create a thin task that calls it with this run's arguments. Archived tasks are reference only.
@@ -33,6 +34,24 @@ Turn the request into runnable opsquire task(s):
 End your final message with plain lines, nothing after them:
 RUN: <exact command>      (one per command, in order; first the dry/read run)
 NEED: <question>          (instead of RUN when blocked on something only the operator can give)"""
+
+SPLIT_ON = """
+Parallel work comes first: if the request holds two or more pieces that can be built independently (no piece needs
+another's result, and no two would edit the same general script), do not build anything yourself. After at most a
+quick `opsquire find`, answer with only these lines, one per piece, and nothing else:
+SPLIT: <a self-contained request for that piece, carrying every detail from the original that it needs>
+Each piece then gets its own agent working in parallel. If the request is one piece of work, carry on below.
+"""
+
+PIECE = """
+You are one of {total} agents working in parallel on one request; build only your piece, the others do the rest.
+Your piece: {piece}
+The whole request, for context only: {whole}
+"""
+
+RESOLVE = """While you worked, other pieces of the same request were merged into the home. Merging them into your
+copy left conflict markers in: {files}. Resolve every conflict keeping the intent of both sides, run `opsquire lint`
+on each task you created or changed, then end with your RUN lines again."""
 
 GRILL_ON = """
 Interview before building (only when something new must be built; reusing an existing task needs no interview):
@@ -54,7 +73,12 @@ design.md in the task folder.
 ACTION_RE = re.compile(r"^(RUN|NEED):\s*(.+?)\s*$", re.M)
 ASK_RE = re.compile(r"^ASK:\s*(.+?)\s*$", re.M)
 RECOMMEND_RE = re.compile(r"^RECOMMEND:\s*(.+?)\s*$", re.M)
+SPLIT_RE = re.compile(r"^SPLIT:\s*(.+?)\s*$", re.M)
+TASK_ID_IN_TEXT = re.compile(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b")
 MAX_ROUNDS = 15
+DEFAULT_BUDGET_USD = 15.0
+
+Answerer = Callable[[str, str], "str | None"]
 
 
 @dataclass
@@ -69,6 +93,9 @@ class AskResult:
     rounds: list[dict[str, Any]] = field(default_factory=list)
     task_ids: list[str] = field(default_factory=list)
     waiting: str | None = None
+    recommend: str = ""
+    split: list[str] = field(default_factory=list)
+    pieces: list[dict[str, Any]] = field(default_factory=list)
 
 
 def agents_config() -> dict[str, Any]:
@@ -93,7 +120,7 @@ def pick_agent(name: str | None) -> tuple[str, dict[str, Any]]:
     return name, agent
 
 
-def build_argv(agent: dict[str, Any], values: dict[str, str], session: str | None) -> list[str]:
+def build_argv(agent: dict[str, Any], values: dict[str, str], session: str | None, cap: float | None) -> list[str]:
     def fill(s: str) -> str:
         for k, v in values.items():
             s = s.replace("{" + k + "}", v)
@@ -109,6 +136,10 @@ def build_argv(agent: dict[str, Any], values: dict[str, str], session: str | Non
         if not agent.get("resume_argv"):
             raise OpsquireError("this agent cannot resume a conversation")
         argv += [fill(i).replace("{session}", session) for i in agent["resume_argv"]]
+    if cap is not None:
+        if not agent.get("budget_argv"):
+            raise OpsquireError("this agent cannot enforce a budget; drop --strict-budget")
+        argv += [fill(i).replace("{budget}", f"{cap:.2f}") for i in agent["budget_argv"]]
     return argv
 
 
@@ -143,36 +174,172 @@ def parse_text(stream: IO[str], progress: Callable[[str], None], res: AskResult)
         res.text += line
 
 
-def parse_orca_launch(stream: IO[str], progress: Callable[[str], None], res: AskResult) -> None:
-    """`orca-ide agent launch --json` answers with a receipt; the conversation itself continues in Orca."""
-    raw = stream.read()
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        res.text, res.exit_code = f"Orca did not return a launch receipt: {raw.strip()[:300]}", 1
-        return
-    if not data.get("ok", False):
-        error = data.get("error") or data
-        code = error.get("code") if isinstance(error, dict) else ""
-        if code == "selector_not_found":
-            res.text = "The opsquire home is not an Orca workspace yet: open Orca, then run `opsquire integrate`."
-        elif code == "runtime_unavailable":
-            res.text = "Orca is not running (or not reachable): open Orca and try again."
-        else:
-            res.text = f"Orca refused the launch: {json.dumps(error)[:300]}"
-        res.exit_code = 1
-        return
-    result = data.get("result") or {}
-    kind = (result.get("outcome") or {}).get("kind", "session")
-    res.text = f"Launched a Claude agent in Orca ({kind}); continue the conversation there."
-    progress(f"orca receipt: {json.dumps(result)[:200]}")
-
-
 PARSERS: dict[str, Callable[[IO[str], Callable[[str], None], AskResult], None]] = {
     "claude-stream-json": parse_claude_stream,
     "text": parse_text,
-    "orca-launch": parse_orca_launch,
 }
+
+OUTPUT_LOCK = threading.Lock()
+
+
+def say(msg: str) -> None:
+    with OUTPUT_LOCK:
+        sys.stderr.write(msg + "\n")
+        sys.stderr.flush()
+
+
+class BudgetSpent(OpsquireError):
+    pass
+
+
+class Budget:
+    """One spending pool for an ask and all its pieces. The limit is a reminder (a notice when passed) unless
+    strict, in which case each agent turn is capped at what is left and nothing starts once it is spent."""
+
+    def __init__(self, limit: float, strict: bool) -> None:
+        self.limit, self.strict = limit, strict
+        self.spent = 0.0
+        self.noticed = False
+        self.lock = threading.Lock()
+
+    def cap(self) -> float | None:
+        if not self.strict:
+            return None
+        with self.lock:
+            left = self.limit - self.spent
+        if left <= 0.005:
+            raise BudgetSpent(f"budget of ${self.limit:.2f} spent")
+        return left
+
+    def add(self, cost: float | None) -> None:
+        with self.lock:
+            self.spent += cost or 0
+            crossed = not self.strict and not self.noticed and self.spent >= self.limit
+            self.noticed = self.noticed or crossed
+        if crossed:
+            say(f"  ! ${self.spent:.2f} spent so far, past the ${self.limit:.2f} reminder (still running)")
+
+
+class Agents:
+    """Every agent process alive in this ask, so Ctrl-C can stop them all."""
+
+    procs: set[subprocess.Popen[str]] = set()
+    lock = threading.Lock()
+
+    @classmethod
+    def stop_all(cls) -> None:
+        with cls.lock:
+            procs = list(cls.procs)
+        for proc in procs:
+            stop(proc)
+
+
+@dataclass
+class Conversation:
+    """One agent conversation in one folder (the home, or a parallel piece's worktree)."""
+
+    name: str
+    agent: dict[str, Any]
+    home: str
+    system: str
+    env: dict[str, str]
+    session: str | None = None
+    label: str = ""
+    cost: float = 0.0
+
+    def progress(self, msg: str) -> None:
+        say(f"  · {self.label + ' ' if self.label else ''}{msg}")
+
+    def turn(self, message: str, budget: Budget) -> AskResult:
+        parser = PARSERS.get(str(self.agent.get("output")))
+        if parser is None:
+            raise OpsquireError(f"agent {self.name!r} has unknown output format {self.agent.get('output')!r}")
+        values = {"prompt": message, "system": self.system, "home": self.home}
+        argv = build_argv(self.agent, values, self.session, budget.cap())
+        resuming = f" (resuming {self.session})" if self.session else ""
+        say(f"opsquire ask via {self.name}{' ' + self.label if self.label else ''}{resuming} ...")
+        res = AskResult()
+        try:
+            proc = subprocess.Popen(
+                argv, cwd=self.home, env=self.env, stdout=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL
+            )
+        except FileNotFoundError:
+            raise OpsquireError(f"agent command not found: {argv[0]}") from None
+        with Agents.lock:
+            Agents.procs.add(proc)
+        assert proc.stdout
+        try:
+            with proc.stdout:
+                parser(proc.stdout, self.progress, res)
+            code = proc.wait()
+        except KeyboardInterrupt:
+            stop(proc)
+            self.session = res.session or self.session
+            raise
+        finally:
+            with Agents.lock:
+                Agents.procs.discard(proc)
+        res.exit_code = res.exit_code or code
+        self.session = res.session or self.session
+        res.session = self.session
+        self.cost += res.cost_usd or 0
+        budget.add(res.cost_usd)
+        res.actions = ACTION_RE.findall(res.text)
+        return res
+
+
+def converse(
+    conv: Conversation,
+    message: str,
+    grill: bool,
+    answer: Answerer,
+    budget: Budget,
+    rounds: list[dict[str, Any]],
+    allow_split: bool = False,
+    stopped: Callable[[], bool] = lambda: False,
+) -> AskResult:
+    """Run turns until the agent hands over RUN/NEED lines, asks something nobody answers, or splits."""
+    res = AskResult()
+    for _ in range(MAX_ROUNDS):
+        if stopped():
+            res.interrupted = True
+            return res
+        res = conv.turn(message, budget)
+        if res.exit_code or stopped():
+            res.interrupted = stopped()
+            return res
+        pieces = SPLIT_RE.findall(res.text)
+        if allow_split and len(pieces) >= 2 and not res.actions:
+            res.split = pieces
+            return res
+        questions = ASK_RE.findall(res.text)
+        if res.actions or not questions or not grill:
+            return res
+        recommends = RECOMMEND_RE.findall(res.text)
+        res.recommend = recommends[-1] if recommends else "your call"
+        question = questions[-1]
+        reply = answer(question, res.recommend) if res.session else None
+        if reply is None:
+            res.waiting = question
+            return res
+        rounds.append({"question": question, "recommended": res.recommend, "answer": reply})
+        message = f"Answer: {reply}"
+    res.waiting = "too many questions in one ask; continue with --resume"
+    return res
+
+
+def system_prompt(home: str, grill: bool, split: bool, piece: str = "") -> str:
+    text = SYSTEM_PROMPT.replace("{home}", home).replace("{grill}", GRILL_ON if grill else GRILL_OFF)
+    return text.replace("{split}", SPLIT_ON if split else piece)
+
+
+def agent_env(name: str, ask_id: str, extra: dict[str, str] | None = None) -> dict[str, str]:
+    return {
+        **os.environ,
+        "OPSQUIRE_AUTHOR": f"opsquire-ask/{name} {ask_id}",
+        "PATH": os.pathsep.join([os.path.dirname(os.path.abspath(sys.argv[0])), os.environ.get("PATH", "")]),
+        **(extra or {}),
+    }
 
 
 def asks_dir() -> Path:
@@ -192,6 +359,14 @@ def ask_records() -> list[dict[str, Any]]:
     return recs
 
 
+def save_record(record: dict[str, Any]) -> None:
+    try:
+        asks_dir().mkdir(parents=True, exist_ok=True)
+        write_json(asks_dir() / f"{record['ask_id']}.json", record)
+    except OSError:
+        say("  (ask not recorded: var/ is not writable here)")
+
+
 def session_for_task(task_id: str) -> str | None:
     for rec in reversed(ask_records()):
         if rec.get("session") and task_id in (rec.get("task_ids") or []):
@@ -199,16 +374,13 @@ def session_for_task(task_id: str) -> str | None:
     return None
 
 
-def session_for_ask(query: str) -> tuple[str, str]:
+def find_ask(query: str) -> dict[str, Any]:
     records = ask_records()
     by_session = [r for r in records if r.get("session") == query]
     matches = by_session[-1:] or [r for r in records if query in str(r.get("ask_id"))]
     if len(matches) != 1:
         raise OpsquireError(f"{query!r} matches {len(matches)} asks; use the ask id or session id it printed")
-    rec = matches[0]
-    if not rec.get("session"):
-        raise OpsquireError(f"ask {rec['ask_id']} has no agent session to resume")
-    return str(rec["session"]), str(rec.get("agent"))
+    return matches[0]
 
 
 def stop(proc: subprocess.Popen[str]) -> None:
@@ -234,6 +406,10 @@ def tty_answer(question: str, recommend: str) -> str | None:
     return line.strip() or recommend
 
 
+def mentioned_tasks(text: str, extra: str | None = None) -> list[str]:
+    return sorted(set(TASK_ID_IN_TEXT.findall(text)) | ({extra} if extra else set()))
+
+
 def ask(
     prompt: str,
     agent_name: str | None,
@@ -241,269 +417,72 @@ def ask(
     new_session: bool,
     resume_ask: str | None = None,
     grill: bool = True,
+    split: bool = True,
+    max_agents: int | None = None,
+    budget: Budget | None = None,
+    reply_given: bool = False,
 ) -> AskResult:
+    budget = budget or Budget(DEFAULT_BUDGET_USD, strict=False)
     session = None
     if resume_ask:
-        session, agent_name = session_for_ask(resume_ask)
+        rec = find_ask(resume_ask)
+        if rec.get("pieces"):
+            from .parallel import resume_parallel
+
+            return resume_parallel(rec, prompt if reply_given else None, max_agents, budget)
+        if not rec.get("session"):
+            raise OpsquireError(f"ask {rec['ask_id']} has no agent session to resume")
+        session, agent_name = str(rec["session"]), str(rec.get("agent"))
     name, agent = pick_agent(agent_name)
-    in_orca = agent.get("output") == "orca-session"
-    parser = PARSERS.get(str(agent.get("output")))
-    if parser is None and not in_orca:
-        raise OpsquireError(f"agent {name!r} has unknown output format {agent.get('output')!r}")
     started = now()
     res = AskResult(ask_id=f"{compact(started)}_{name}")
-    home = str(home_dir())
+    home = home_dir()
     if task_id and not new_session and not session:
         session = session_for_task(task_id)
     if task_id and not session:
         prompt = f"This is about opsquire task {task_id}.\n\n{prompt}"
-    system = SYSTEM_PROMPT.replace("{home}", home).replace("{grill}", GRILL_ON if grill else GRILL_OFF)
-    env = {
-        **os.environ,
-        "OPSQUIRE_AUTHOR": f"opsquire-ask/{name} {res.ask_id}",
-        "PATH": os.pathsep.join([os.path.dirname(os.path.abspath(sys.argv[0])), os.environ.get("PATH", "")]),
-    }
-    first_prompt = prompt
-    resumed = bool(session)
-    turn = AskResult()
-    orca = OrcaSession(agent, home, res.ask_id, session) if in_orca else None
-
-    def progress(msg: str) -> None:
-        sys.stderr.write(f"  · {msg}\n")
-        sys.stderr.flush()
-
+    can_split = split and not session and not task_id and homegit.is_repo(home)
+    conv = Conversation(name, agent, str(home), system_prompt(str(home), grill, can_split), agent_env(name, res.ask_id))
+    conv.session = session
     try:
-        message = prompt
-        for _ in range(MAX_ROUNDS):
-            turn = AskResult()
-            if orca:
-                turn = orca.turn(message, system, progress)
-                code = turn.exit_code
-            else:
-                assert parser
-                code = run_turn(
-                    agent, parser, name, {"prompt": message, "system": system, "home": home}, session, env, turn
-                )
-            res.text, res.cost_usd = turn.text, (res.cost_usd or 0) + (turn.cost_usd or 0)
-            res.session = turn.session or session
-            session = res.session
-            res.exit_code = turn.exit_code or code
-            res.actions = ACTION_RE.findall(res.text)
-            questions = ASK_RE.findall(res.text)
-            if res.exit_code or res.actions or not questions or not grill:
-                break
-            question = questions[-1]
-            recommends = RECOMMEND_RE.findall(res.text)
-            recommend = recommends[-1] if recommends else "your call"
-            if not session:
-                res.waiting = question
-                break
-            answer = tty_answer(question, recommend)
-            if answer is None:
-                res.waiting = question
-                break
-            res.rounds.append({"question": question, "recommended": recommend, "answer": answer})
-            message = f"Answer: {answer}"
-        else:
-            res.waiting = "too many questions in one ask; continue with --resume"
+        turn = converse(conv, prompt, grill, tty_answer, budget, res.rounds, allow_split=can_split)
     except KeyboardInterrupt:
-        res.interrupted = True
-        res.exit_code = 130
-        res.session = res.session or turn.session or (orca.handle if orca else None)
-    except OrcaError as e:
-        res.text, res.exit_code = str(e), 1
-        res.session = res.session or (orca.handle if orca else None)
-    finally:
-        if orca:
-            orca.cleanup()
-    mentioned = sorted(
-        set(re.findall(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b", res.text)) | ({task_id} if task_id else set())
-    )
-    res.task_ids = mentioned
+        turn = AskResult(interrupted=True, exit_code=130)
+    except BudgetSpent as e:
+        turn = AskResult(waiting=f"{e}; continue with --resume and a new --budget")
+    res.text, res.exit_code, res.actions = turn.text, turn.exit_code, turn.actions
+    res.waiting, res.interrupted, res.split = turn.waiting, turn.interrupted, turn.split
+    res.session, res.cost_usd = conv.session, conv.cost
+    if res.split:
+        from .parallel import fan_out
+
+        return fan_out(res, prompt, name, agent, grill, max_agents, budget, started)
+    res.task_ids = mentioned_tasks(res.text, task_id)
+    if res.task_ids:
+        note = homegit.commit_quietly(home, [home / "tasks", home / "general"], f"ask {res.ask_id}: {prompt[:60]}")
+        if note:
+            say(f"  {note}")
     status = (
         "interrupted" if res.interrupted else "waiting" if res.waiting else "ok" if res.exit_code == 0 else "failed"
     )
-    record = {
-        "ask_id": res.ask_id,
-        "agent": name,
-        "status": status,
-        "started": iso(started),
-        "ended": iso(now()),
-        "prompt": first_prompt,
-        "session": res.session,
-        "resumed": resumed,
-        "grill": grill,
-        "rounds": res.rounds,
-        "waiting_on": res.waiting,
-        "exit_code": res.exit_code,
-        "cost_usd": res.cost_usd,
-        "task_ids": mentioned,
-        "actions": [{"kind": k, "text": t} for k, t in res.actions],
-        "text": res.text,
-    }
-    try:
-        asks_dir().mkdir(parents=True, exist_ok=True)
-        write_json(asks_dir() / f"{res.ask_id}.json", record)
-    except OSError:
-        sys.stderr.write("  (ask not recorded: var/ is not writable here)\n")
+    save_record(
+        {
+            "ask_id": res.ask_id,
+            "agent": name,
+            "status": status,
+            "started": iso(started),
+            "ended": iso(now()),
+            "prompt": prompt,
+            "session": res.session,
+            "resumed": bool(session),
+            "grill": grill,
+            "rounds": res.rounds,
+            "waiting_on": res.waiting,
+            "exit_code": res.exit_code,
+            "cost_usd": res.cost_usd,
+            "task_ids": res.task_ids,
+            "actions": [{"kind": k, "text": t} for k, t in res.actions],
+            "text": res.text,
+        }
+    )
     return res
-
-
-def run_turn(
-    agent: dict[str, Any],
-    parser: Callable[[IO[str], Callable[[str], None], AskResult], None],
-    name: str,
-    values: dict[str, str],
-    session: str | None,
-    env: dict[str, str],
-    turn: AskResult,
-) -> int:
-    argv = build_argv(agent, values, session)
-
-    def progress(msg: str) -> None:
-        sys.stderr.write(f"  · {msg}\n")
-        sys.stderr.flush()
-
-    sys.stderr.write(f"opsquire ask via {name}{' (resuming ' + session + ')' if session else ''} ...\n")
-    try:
-        proc = subprocess.Popen(
-            argv, cwd=values["home"], env=env, stdout=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL
-        )
-    except FileNotFoundError:
-        raise OpsquireError(f"agent command not found: {argv[0]}") from None
-    assert proc.stdout
-    try:
-        with proc.stdout:
-            parser(proc.stdout, progress, turn)
-        return proc.wait()
-    except KeyboardInterrupt:
-        stop(proc)
-        raise
-
-
-HANDOFF = """This session is driven by opsquire from the operator's terminal; the operator is not watching this
-terminal. At the end of EVERY turn (a question or your final answer) write your complete message to
-{file} (overwrite it), then stop and wait. Questions end with ASK:/RECOMMEND: lines; final answers with
-RUN:/NEED: lines. Your next input is the operator's reply."""
-TURN_WAIT_MS = 300_000
-
-
-class OrcaError(OpsquireError):
-    pass
-
-
-def orca_handle(data: dict[str, Any]) -> str:
-    result = data.get("result") or {}
-    for outcome in ((result.get("launch") or {}).get("outcome"), result.get("outcome")):
-        if isinstance(outcome, dict) and outcome.get("handle"):
-            return str(outcome["handle"])
-    if result.get("agentTerminalHandle"):
-        return str(result["agentTerminalHandle"])
-    raise OrcaError(f"Orca started the agent but returned no terminal handle: {json.dumps(result)[:300]}")
-
-
-class OrcaSession:
-    """One Claude agent in an Orca terminal, in the background. Each turn: send the message, wait until the agent
-    goes idle, then read its handoff file (never scraped terminal output)."""
-
-    def __init__(self, agent: dict[str, Any], home: str, ask_id: str, handle: str | None) -> None:
-        self.cli = str(agent.get("cli", "orca-ide"))
-        self.home = home
-        self.handle = handle
-        self.answer = Path(home) / ".asks" / f"{ask_id}.md"
-        self.turn_timeout = float(agent.get("turn_timeout_s", 1800))
-
-    def orca(self, *args: str) -> dict[str, Any]:
-        try:
-            r = subprocess.run([self.cli, *args, "--json"], capture_output=True, text=True, timeout=self.turn_timeout)
-        except FileNotFoundError:
-            raise OrcaError(f"{self.cli} not found: install Orca (task workstation_install-orca)") from None
-        try:
-            data: dict[str, Any] = json.loads(r.stdout)
-        except ValueError:
-            raise OrcaError(f"{self.cli} {args[0]} {args[1]}: {(r.stderr or r.stdout).strip()[:300]}") from None
-        if not data.get("ok", False):
-            error = data.get("error") or {}
-            code = error.get("code") if isinstance(error, dict) else ""
-            if code == "selector_not_found":
-                raise OrcaError(
-                    "The opsquire home is not an Orca workspace yet: open Orca, then run `opsquire integrate`."
-                )
-            if code == "runtime_unavailable":
-                raise OrcaError("Orca is not running (or not reachable): open Orca and try again.")
-            raise OrcaError(f"Orca refused {args[0]} {args[1]}: {json.dumps(error)[:300]}")
-        return data
-
-    def cleanup(self) -> None:
-        self.answer.unlink(missing_ok=True)
-
-    def turn(self, message: str, system: str, progress: Callable[[str], None]) -> AskResult:
-        res = AskResult(session=self.handle)
-        self.answer.parent.mkdir(exist_ok=True)
-        self.cleanup()
-        if self.handle is None:
-            prompt = f"{system}\n\n{HANDOFF.format(file=self.answer)}\n\nRequest: {message}"
-            data = self.orca(
-                "agent",
-                "launch",
-                "--agent",
-                "claude",
-                "--worktree",
-                f"path:{self.home}",
-                "--surface",
-                "terminal",
-                "--prompt",
-                prompt,
-            )
-            self.handle = res.session = orca_handle(data)
-            progress(f"agent started in Orca in the background (terminal {self.handle})")
-        else:
-            self.orca("terminal", "send", "--terminal", self.handle, "--text", message, "--enter")
-            progress("reply sent to the agent in Orca")
-        deadline = time.monotonic() + self.turn_timeout
-        while time.monotonic() < deadline:
-            wait_ms = int(min(TURN_WAIT_MS, max(1.0, deadline - time.monotonic()) * 1000))
-            waited = subprocess.run(
-                [
-                    self.cli,
-                    "terminal",
-                    "wait",
-                    "--terminal",
-                    self.handle,
-                    "--for",
-                    "tui-idle",
-                    "--timeout-ms",
-                    str(wait_ms),
-                    "--json",
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if self.answer.is_file():
-                res.text = self.answer.read_text()
-                self.cleanup()
-                return res
-            if '"exited"' in waited.stdout:
-                res.text, res.exit_code = "The agent in Orca exited without an answer.", 1
-                return res
-            if waited.returncode == 0 and not self.stalled(progress):
-                break
-        else:
-            res.text, res.exit_code = f"No answer from the agent in Orca within {self.turn_timeout:.0f}s.", 1
-            return res
-        res.text, res.exit_code = "Stopped waiting for the agent in Orca.", 1
-        return res
-
-    def stalled(self, progress: Callable[[str], None]) -> bool:
-        """Idle without a handoff file: show the agent's screen and let the operator reply. False means stop."""
-        screen = self.orca("terminal", "read", "--terminal", str(self.handle), "--screen")
-        lines = [ln for ln in ((screen.get("result") or {}).get("terminal") or {}).get("tail", []) if ln.strip()]
-        sys.stderr.write("\n  The agent in Orca is idle without an answer. Its screen ends with:\n")
-        sys.stderr.write("".join(f"    {ln}\n" for ln in lines[-12:]))
-        reply = tty_answer("Reply to send to it (Enter: keep waiting, q: stop)", "keep waiting")
-        if reply is None or reply == "q":
-            return False
-        if reply != "keep waiting":
-            self.orca("terminal", "send", "--terminal", str(self.handle), "--text", reply, "--enter")
-            progress("reply sent to the agent in Orca")
-        return True
