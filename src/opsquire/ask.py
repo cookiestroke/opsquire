@@ -152,7 +152,14 @@ def parse_orca_launch(stream: IO[str], progress: Callable[[str], None], res: Ask
         return
     if not data.get("ok", False):
         error = data.get("error") or data
-        res.text, res.exit_code = f"Orca refused the launch: {json.dumps(error)[:300]}", 1
+        code = error.get("code") if isinstance(error, dict) else ""
+        if code == "selector_not_found":
+            res.text = "The opsquire home is not an Orca workspace yet: open Orca, then run `opsquire integrate`."
+        elif code == "runtime_unavailable":
+            res.text = "Orca is not running (or not reachable): open Orca and try again."
+        else:
+            res.text = f"Orca refused the launch: {json.dumps(error)[:300]}"
+        res.exit_code = 1
         return
     result = data.get("result") or {}
     kind = (result.get("outcome") or {}).get("kind", "session")

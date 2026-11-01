@@ -896,11 +896,16 @@ class OpsTest(unittest.TestCase):
         rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
         self.assertEqual((rec["agent"], rec["status"]), ("orca", "ok"))
 
-    def test_ask_via_orca_reports_a_refused_launch(self) -> None:
+    def test_ask_via_orca_explains_a_refused_launch(self) -> None:
         self.fake_orca(running=False)
         r = self.cli("ask", "--agent", "orca", "hi")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("Orca refused the launch", r.stdout + r.stderr)
+        self.assertIn("Orca is not running", r.stdout + r.stderr)
+        self.fake_orca(running=True)
+        self.env["FAKE_ORCA_UNREGISTERED"] = "1"
+        r = self.cli("ask", "--agent", "orca", "hi")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("run `opsquire integrate`", r.stdout + r.stderr)
 
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")

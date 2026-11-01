@@ -17,6 +17,9 @@ elif args[:2] == ["agent", "launch"]:
     if not running:
         print(json.dumps({"ok": False, "error": {"code": "runtime_unavailable", "message": "Orca is not running"}}))
         sys.exit(1)
+    if os.environ.get("FAKE_ORCA_UNREGISTERED") == "1":
+        print(json.dumps({"ok": False, "error": {"code": "selector_not_found", "message": "selector_not_found"}}))
+        sys.exit(1)
     print(json.dumps({"ok": True, "result": {"outcome": {"kind": "terminal"}, "receipt": {"detail": "fake"}}}))
 else:
     print(json.dumps({"ok": False, "error": "unknown"}))
