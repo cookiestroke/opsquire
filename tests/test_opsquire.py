@@ -857,6 +857,7 @@ class OpsTest(unittest.TestCase):
         self.env |= {"PATH": f"{bin_dir}:{self.env['PATH']}", "FAKE_ORCA_LOG": str(log)}
         self.env |= {"FAKE_ORCA_RUNNING": "1" if running else "0", "FAKE_ORCA_REGISTERED": registered}
         self.env["CLAUDE_CONFIG_DIR"] = str(self.tmp / "claude")
+        self.env["HOME"] = str(self.tmp / "user")
         return log
 
     def orca_calls(self, log: Path) -> list[list[str]]:
@@ -864,15 +865,16 @@ class OpsTest(unittest.TestCase):
 
     def test_integrate_installs_the_skill_idempotently(self) -> None:
         self.fake_orca(running=False)
-        skill = self.tmp / "claude/skills/opsquire/SKILL.md"
+        skills = [self.tmp / "claude/skills/opsquire/SKILL.md", self.tmp / "user/.claude/skills/opsquire/SKILL.md"]
         r = self.cli("integrate", "--dry-run")
-        self.assertIn("claude skill: would be installed", r.stdout)
-        self.assertFalse(skill.exists())
+        self.assertEqual(r.stdout.count("claude skill: would be installed"), 2)
+        self.assertFalse(any(s.exists() for s in skills))
         r = self.cli("integrate")
-        self.assertIn("claude skill: installed", r.stdout)
+        self.assertEqual(r.stdout.count("claude skill: installed"), 2)
         self.assertIn("orca: not running", r.stdout)
-        self.assertEqual(skill.read_text(), (ROOT / "src/opsquire/data/skills/opsquire/SKILL.md").read_text())
-        self.assertIn("claude skill: unchanged", self.cli("integrate").stdout)
+        want = (ROOT / "src/opsquire/data/skills/opsquire/SKILL.md").read_text()
+        self.assertTrue(all(s.read_text() == want for s in skills))
+        self.assertEqual(self.cli("integrate").stdout.count("claude skill: unchanged"), 2)
 
     def test_integrate_registers_the_home_in_orca_once(self) -> None:
         log = self.fake_orca(running=True)

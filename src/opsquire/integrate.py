@@ -15,23 +15,30 @@ from .model import DATA_DIR, home_dir, write_text
 SKILL_SRC = DATA_DIR / "skills" / "opsquire" / "SKILL.md"
 
 
-def claude_skill_file() -> Path:
-    base = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
-    return Path(base) / "skills" / "opsquire" / "SKILL.md"
+def claude_skill_files() -> list[Path]:
+    """Every Claude Code config dir an agent may use: $CLAUDE_CONFIG_DIR when set (terminal sessions) and the
+    default ~/.claude (apps started without that variable, such as Orca from the desktop)."""
+    dirs = [os.environ.get("CLAUDE_CONFIG_DIR", ""), str(Path.home() / ".claude")]
+    unique = list(dict.fromkeys(Path(d).expanduser() for d in dirs if d))
+    return [d / "skills" / "opsquire" / "SKILL.md" for d in unique]
 
 
-def install_skill(dry: bool) -> str:
-    """Install or update the opsquire skill for Claude Code agents; returns what happened."""
-    dest = claude_skill_file()
+def install_skill(dry: bool) -> list[str]:
+    """Install or update the opsquire skill in each Claude config dir; one line per dir."""
     want = SKILL_SRC.read_text()
-    if dest.is_file() and dest.read_text() == want:
-        return f"claude skill: unchanged ({dest})"
-    verb = "updated" if dest.exists() else "installed"
-    if dry:
-        return f"claude skill: would be {verb} ({dest})"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    write_text(dest, want)
-    return f"claude skill: {verb} ({dest})"
+    lines = []
+    for dest in claude_skill_files():
+        if dest.is_file() and dest.read_text() == want:
+            lines.append(f"claude skill: unchanged ({dest})")
+            continue
+        verb = "updated" if dest.exists() else "installed"
+        if dry:
+            lines.append(f"claude skill: would be {verb} ({dest})")
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        write_text(dest, want)
+        lines.append(f"claude skill: {verb} ({dest})")
+    return lines
 
 
 def orca_cli() -> str | None:
@@ -70,4 +77,4 @@ def register_home(dry: bool) -> str:
 
 
 def integrate(dry: bool) -> list[str]:
-    return [install_skill(dry), register_home(dry)]
+    return [*install_skill(dry), register_home(dry)]
