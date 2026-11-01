@@ -110,12 +110,15 @@ def commit(home: Path, paths: list[Path] | None, message: str) -> bool:
 
 
 def commit_quietly(home: Path, paths: list[Path], message: str) -> str:
-    """Best-effort commit after a lint pass; returns a note when it could not be made."""
+    """Best-effort commit (after a lint pass, before a run, after an ask); a note when it could not be made, shown
+    only on a terminal: agents lint in sandboxes that cannot sign, and their work is committed by opsquire later."""
     if not is_repo(home):
         return ""
     try:
         commit(home, paths, message)
     except GitError as e:
+        if not os.isatty(2):
+            return ""
         reason = "signing failed" if "gpg" in str(e) else str(e).splitlines()[0]
         return f"(home not committed: {reason}; the next successful commit includes it)"
     return ""

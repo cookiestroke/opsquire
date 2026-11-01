@@ -198,8 +198,8 @@ class Fanout:
     def land(self, piece: Piece, conv: Conversation) -> None:
         """Commit the piece and merge it into the home; on a clash its agent gets one turn to resolve it."""
         wt = Path(piece.worktree)
-        homegit.commit(wt, None, f"ask {self.ask_id} piece {piece.n}: {piece.request[:60]}")
-        message = f"ask {self.ask_id} piece {piece.n}: {piece.request[:60]}"
+        homegit.commit(wt, None, f"ask {self.ask_id} piece {piece.n} ({piece.name}): built\n\n{piece.request}")
+        message = f"ask {self.ask_id}: merge piece {piece.n} ({piece.name})"
         with self.merge_lock:
             if homegit.merge_into(self.home, piece.branch, message):
                 piece.status = "merged"
@@ -213,7 +213,7 @@ class Fanout:
                 why = f"conflicts left in {', '.join(left)}" if left else f"resolving failed ({piece.status})"
                 piece.status, piece.waiting = "clash", f"could not merge into the home: {why}"
                 return
-            homegit.commit(wt, None, f"ask {self.ask_id} piece {piece.n}: resolve merge")
+            homegit.commit(wt, None, f"ask {self.ask_id} piece {piece.n} ({piece.name}): resolve merge")
         with self.merge_lock:
             if homegit.merge_into(self.home, piece.branch, message):
                 piece.status = "merged"
@@ -225,7 +225,9 @@ class Fanout:
         wt = Path(piece.worktree)
         if wt.exists():
             try:
-                homegit.commit(wt, None, f"ask {self.ask_id} piece {piece.n}: unfinished ({piece.status})")
+                homegit.commit(
+                    wt, None, f"ask {self.ask_id} piece {piece.n} ({piece.name}): unfinished ({piece.status})"
+                )
             except homegit.GitError as e:
                 say(f"  ! {piece.label} work could not be saved to {piece.branch}: {e}")
         homegit.remove_worktree(self.home, wt)
