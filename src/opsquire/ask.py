@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from . import homegit
+from . import homegit, pinned
 from .model import DATA_DIR, OpsquireError, compact, home_dir, iso, now, read_json, var_dir, write_json
 
 SYSTEM_PROMPT = """You are running inside `opsquire ask` for the operator.
@@ -180,13 +180,12 @@ PARSERS: dict[str, Callable[[IO[str], Callable[[str], None], AskResult], None]] 
     "text": parse_text,
 }
 
-OUTPUT_LOCK = threading.Lock()
-
 
 def say(msg: str) -> None:
-    with OUTPUT_LOCK:
-        sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
+    with pinned.LOCK:
+        if not pinned.line(msg):
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
 
 
 class BudgetSpent(OpsquireError):
@@ -395,16 +394,16 @@ def stop(proc: subprocess.Popen[str]) -> None:
 
 
 def tty_answer(question: str, recommend: str) -> str | None:
+    """Ask the operator on the terminal (pinned below the progress when it can be); None without a terminal."""
     try:
-        with open("/dev/tty", "w") as out, open("/dev/tty") as inp:
-            out.write(f"\n? {question}\n  [Enter = {recommend}] > ")
-            out.flush()
-            line = inp.readline()
+        line = pinned.ask(question, recommend)
     except OSError:
         return None
-    if not line:
+    if line is None:
         return None
-    return line.strip() or recommend
+    answer = line.strip() or recommend
+    say(f"? {question}\n  -> {answer}")
+    return answer
 
 
 def mentioned_tasks(text: str, extra: str | None = None) -> list[str]:

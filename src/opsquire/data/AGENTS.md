@@ -183,7 +183,8 @@ branch `ask/<ask-id>/<n>`), all at once (`--max-agents N` limits it; `--no-split
 
 - A piece agent builds only its piece, exactly as above. Its `opsquire` commands see its worktree as the home and
   the main home's run records (`OPSQUIRE_VAR`).
-- Interview questions from every piece reach the operator one at a time, labelled `[n/total piece]`.
+- Interview questions from every piece reach the operator one at a time, labelled `[n/total name]` (the name
+  from `SPLIT: name | request`), pinned at the bottom of the terminal while progress scrolls above them.
 - A piece that hands over RUN lines is committed and merged into the home. If another piece changed the same files,
   its agent gets one turn to resolve the conflict markers and lint again; otherwise it is reported as a clash.
 - Every merged piece keeps its own RUN lines, and opsquire also bundles all of them into one plan (a piece's plan

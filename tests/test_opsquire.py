@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fcntl
+import io
 import json
 import os
 import pty
@@ -7,9 +9,11 @@ import re
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import unittest
 from pathlib import Path
@@ -33,9 +37,13 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
-def run_in_pty(cmd: list[str], env: dict[str, str], answers: list[tuple[str, str]]) -> subprocess.CompletedProcess[str]:
+def run_in_pty(
+    cmd: list[str], env: dict[str, str], answers: list[tuple[str, str]], size: tuple[int, int] | None = None
+) -> subprocess.CompletedProcess[str]:
     pid, fd = pty.fork()
     if pid == 0:
+        if size:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", size[0], size[1], 0, 0))
         os.execvpe(cmd[0], cmd, env)
     out = b""
     pending = list(answers)
@@ -646,6 +654,35 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(rec["status"], "ok")
         seen = json.loads((self.tmp / "fake-state.json").read_text())
         self.assertEqual(seen[1:], ["Answer: rec 1", "Answer: my own answer"])
+
+    def test_questions_are_pinned_below_the_progress_on_a_real_terminal(self) -> None:
+        self.grill_env(2)
+        self.env["TERM"] = "xterm"
+        cmd = [*CLI, "ask", "build", "something", "new"]
+        r = run_in_pty(cmd, self.env, [("[Enter = rec 1]", ""), ("[Enter = rec 2]", "mine")], size=(24, 80))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("\x1b[1;21r", r.stdout)
+        self.assertEqual(r.stdout.count("\x1b[r"), 2)
+        self.assertIn("-> rec 1", r.stdout)
+        self.assertIn("RUN: opsquire run 20261030-1749_web1_restart-bots --apply", r.stdout)
+        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
+        self.assertEqual([x["answer"] for x in rec["rounds"]], ["rec 1", "mine"])
+
+    def test_progress_while_a_question_is_pinned_scrolls_above_it(self) -> None:
+        sys.path.insert(0, str(ROOT / "src"))
+        from opsquire import pinned
+
+        out = io.StringIO()
+        self.assertFalse(pinned.line("nothing pinned"))
+        pinned.Pin.out, pinned.Pin.bottom, pinned.Pin.cols = out, 20, 12
+        try:
+            self.assertTrue(pinned.line("a long progress\nline"))
+        finally:
+            pinned.Pin.out = None
+        self.assertEqual(out.getvalue(), "\x1b7\x1b[20;1H\na long prog\x1b8")
+        block = pinned.layout("which host?", "web1 " * 30, 60)
+        self.assertEqual(block[-1], "  [Enter = recommended] > ")
+        self.assertTrue(all(len(x) < 60 for x in block))
 
     def test_grill_without_terminal_waits_and_resumes(self) -> None:
         self.grill_env(1)
