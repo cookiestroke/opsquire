@@ -3,6 +3,7 @@ before a parallel ask, and gives each parallel piece its own worktree and branch
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -39,10 +40,24 @@ def git(home: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     exe = shutil.which("git")
     if not exe:
         raise GitError("git is not installed")
-    r = subprocess.run([exe, "-C", str(home), *args], capture_output=True, text=True)
+    r = subprocess.run([exe, "-C", str(home), *args], capture_output=True, text=True, env=signing_env())
     if check and r.returncode != 0:
         raise GitError(f"git {' '.join(args[:2])} failed: {(r.stderr or r.stdout).strip()[:400]}")
     return r
+
+
+def signing_env() -> dict[str, str]:
+    """GPG asks for a passphrase on the terminal named by GPG_TTY; set it when opsquire runs on one, so signed commits
+    work like they do from the operator's shell."""
+    env = dict(os.environ)
+    if not env.get("GPG_TTY"):
+        for fd in (0, 1, 2):
+            try:
+                env["GPG_TTY"] = os.ttyname(fd)
+                break
+            except OSError:
+                continue
+    return env
 
 
 def is_repo(home: Path) -> bool:
@@ -101,7 +116,8 @@ def commit_quietly(home: Path, paths: list[Path], message: str) -> str:
     try:
         commit(home, paths, message)
     except GitError as e:
-        return f"(not committed: {e})"
+        reason = "signing failed" if "gpg" in str(e) else str(e).splitlines()[0]
+        return f"(home not committed: {reason}; the next successful commit includes it)"
     return ""
 
 
