@@ -36,6 +36,8 @@ from .model import (
 )
 
 OPSQUIRE_PREFIX = "@@OPSQUIRE "
+VERBOSE = os.environ.get("OPSQUIRE_VERBOSE") == "1"
+ALWAYS_SHOWN = {"blocked", "interrupted", "lock_broken", "lock_stale_reclaimed"}
 SCRIPT_EVENTS = {"step", "target", "result", "warn", "error", "confirm", "data"}
 TARGET_STATUSES = {"ok", "failed", "skipped", "unchanged"}
 EXIT_CODES = {"ok": 0, "failed": 1, "partial": 1, "blocked": 2, "aborted": 3, "interrupted": 130}
@@ -88,6 +90,7 @@ class Run:
         self.record: dict[str, Any] = {}
         self.locked: list[str] = []
         self.sync_w = -1
+        self.tests = 0
 
     def event(self, event: str, msg: str = "", level: str = "info", src: str = "runner", **extra: Any) -> None:
         self.seq += 1
@@ -102,7 +105,11 @@ class Run:
             self.events_f.write(json.dumps(rec) + "\n")
             self.events_f.flush()
         if src == "runner":
-            self.line("run", f"[{event}] {msg}", echo=sys.stderr)
+            shown = VERBOSE or event in ALWAYS_SHOWN or level in ("warn", "error")
+            self.line("run", f"[{event}] {msg}", echo=sys.stderr if shown else None)
+        if event == "run_start" and not VERBOSE:
+            sys.stderr.write(style(f"opsquire: {self.task.id} ({self.mode})", "1", sys.stderr) + "\n")
+            sys.stderr.flush()
 
     def line(self, stream: str, text: str, echo: IO[str] | None) -> None:
         text = self.redact(text)
@@ -154,8 +161,9 @@ class Run:
         elif kind == "confirm":
             shown = f"{msg} -> {data.get('answer')}"
         self.line(stream, f"{OPSQUIRE_PREFIX}{kind}: {shown}", echo=None)
-        sys.stdout.write(f"{style(f'[{kind}]', '1', sys.stdout)} {self.redact(shown)}\n")
-        sys.stdout.flush()
+        if kind != "data" or VERBOSE:
+            sys.stdout.write(f"{style(f'[{kind}]', '1', sys.stdout)} {self.redact(shown)}\n")
+            sys.stdout.flush()
 
     def release_prompt(self) -> None:
         """The script printed everything before its prompt and that output is now echoed: let it ask."""
@@ -190,6 +198,7 @@ class Run:
             "files": self.task.file_hashes(),
             "targets": self.targets,
             "lock": self.lock_info,
+            "tests": self.tests,
             "plan_run": self.plan_run,
             "credentials_used": sorted(self.meta.credentials),
             "redactions": self.redact.count,
@@ -211,12 +220,25 @@ class Run:
             if t not in self.targets:
                 self.targets[t] = {"status": inherit if not self.target_events else "skipped", "msg": ""}
 
+    def verdict(self, status: str) -> None:
+        took = round((now() - self.started).total_seconds(), 1)
+        tests = f", {self.tests} tests" if self.tests else ""
+        warns = f", {self.counts['warn']} warnings" if self.counts["warn"] else ""
+        line = (
+            f"opsquire: {self.task.id} {status.upper()} in {took}s{tests}{warns}; details: opsquire log {self.task.id}"
+        )
+        if self.plan_run:
+            return
+        sys.stderr.write(style(line, "1" if status == "ok" else "31;1", sys.stderr) + "\n")
+        sys.stderr.flush()
+
     def blocked(self, reason: str) -> int:
         self.event("blocked", reason, level="error")
         self.last_error = reason
         self.finish_targets("blocked")
         self.write_record("blocked", None)
         self.event("run_end", "status=blocked")
+        self.verdict("blocked")
         return EXIT_CODES["blocked"]
 
     def snapshot(self) -> None:
@@ -264,6 +286,7 @@ class Run:
         self.finish_targets("interrupted")
         self.write_record("interrupted", None)
         self.event("run_end", "status=interrupted")
+        self.verdict("interrupted")
         return EXIT_CODES["interrupted"]
 
     def _execute(self) -> int:
@@ -288,9 +311,10 @@ class Run:
         self.event("lint", "checking script versions with ruff/mypy/shellcheck")
         result = lint_task(self.task)
         save_lint(self.task, result)
+        self.tests = result.tests
         if not result.ok:
             self.line("run", result.output, echo=sys.stderr)
-            return self.blocked("lint failed on the exact files being run")
+            return self.blocked("lint or tests failed on the exact files being run")
         if self.task.content_hash() != result.content_hash:
             return self.blocked("files changed while linting")
 
@@ -404,7 +428,8 @@ class Run:
         self.finish_targets(status)
         self.write_record(status, code)
         self.event("run_end", f"status={status} exit={code}", level="info" if status == "ok" else "error")
-        self.line("run", f"run {self.run_id}: {status.upper()}  ->  {self.dir / 'run.json'}", echo=sys.stderr)
+        self.line("run", f"run {self.run_id}: {status.upper()}  ->  {self.dir / 'run.json'}", echo=None)
+        self.verdict(status)
         return EXIT_CODES[status]
 
     def classify(self, code: int) -> str:

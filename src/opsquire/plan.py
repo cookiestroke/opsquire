@@ -9,7 +9,7 @@ import socket
 import sys
 from typing import IO, Any
 
-from . import locks
+from . import locks, runner
 from .creds import Redactor, Secrets
 from .lint import lint_task
 from .model import (
@@ -77,8 +77,11 @@ class PlanRun:
         if self.out:
             self.out.write(line + "\n")
             self.out.flush()
-        sys.stderr.write(style(line, "1", sys.stderr) + "\n")
-        sys.stderr.flush()
+        if runner.VERBOSE or event in ("plan_start", "step_start", "step_end", "plan_end") or level != "info":
+            sys.stderr.write(
+                style(line if runner.VERBOSE else f"opsquire plan: {self.redact(msg)}", "1", sys.stderr) + "\n"
+            )
+            sys.stderr.flush()
 
     def write_record(self, status: str) -> None:
         ended = now() if status != "running" else None

@@ -176,7 +176,7 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         rec = self.last("badtypes")
         self.assertEqual(rec["status"], "blocked")
-        self.assertIn("lint failed", rec["last_error"])
+        self.assertIn("lint or tests failed", rec["last_error"])
         self.assertFalse(any(e["event"] == "spawn" for e in self.events(rec)))
 
     def test_missing_credential_blocks(self) -> None:
@@ -723,6 +723,79 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(held["web1"][0]["pid_ns"], self.own_ns())
         p.communicate(timeout=60)
         self.assertEqual(p.returncode, 0)
+
+    PASSING_TEST = (
+        "import unittest\n\nfrom logic import double\n\n\nclass T(unittest.TestCase):\n"
+        "    def test_double(self) -> None:\n        self.assertEqual(double(2), 4)\n\n"
+        "    def test_zero(self) -> None:\n        self.assertEqual(double(0), 0)\n"
+    )
+
+    def test_unit_tests_gate_lint_and_runs(self) -> None:
+        folder = self.new("tested", "from logic import double\n\nprint(double(21))\n")
+        (folder / "logic.py").write_text("def double(x: int) -> int:\n    return x * 2\n")
+        (folder / "test_logic.py").write_text(self.PASSING_TEST)
+        r = self.cli("lint", "tested")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("LINT OK (2 tests)", r.stdout)
+        self.assertEqual(self.cli("run", "tested").returncode, 0)
+        self.assertEqual(self.last("tested")["tests"], 2)
+        self.assertEqual(list(folder.rglob("__pycache__")), [])
+
+        (folder / "logic.py").write_text("def double(x: int) -> int:\n    return x * 3\n")
+        r = self.cli("run", "tested")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        rec = self.last("tested")
+        self.assertEqual(rec["status"], "blocked")
+        self.assertIn("lint or tests failed", rec["last_error"])
+        self.assertIn("FAILED (2 tests)", r.stderr)
+
+    def test_tests_of_used_general_scripts_run_too_and_empty_test_files_fail(self) -> None:
+        g = Path(self.cli("new", "web1", "shared", "--general", "--purpose", "shared logic").stdout.strip())
+        (g / "logic.py").write_text("def double(x: int) -> int:\n    return x * 2\n")
+        (g / "test_logic.py").write_text(self.PASSING_TEST)
+        self.new("user", "print(1)\n", "--uses", "web1_shared")
+        self.assertIn("LINT OK (2 tests)", self.cli("lint", "user").stdout)
+        empty = self.new("empty-tests", "print(1)\n")
+        (empty / "test_nothing.py").write_text("import unittest\n\n\nclass T(unittest.TestCase):\n    pass\n")
+        r = self.cli("lint", "empty-tests")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FAILED (0 tests)", r.stdout)
+
+    def test_terminal_is_quiet_by_default_and_full_with_verbose(self) -> None:
+        body = "import opsquire_helpers as sq\n\nsq.step('working')\nsq.data('internal', rows=3)\nprint('plain line')\n"
+        self.new("quiet", body)
+        r = self.cli("run", "quiet")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout + r.stderr
+        for hidden in ("[spawn]", "[lint]", "[lock]", "[data]", "@@OPSQUIRE"):
+            self.assertNotIn(hidden, out)
+        self.assertIn("[step] working", out)
+        self.assertIn("plain line", out)
+        self.assertRegex(r.stderr, r"OK in [0-9.]+s; details: opsquire log \S+quiet")
+        log = Path(self.last("quiet")["paths"]["output"]).read_text()
+        self.assertIn("[spawn]", log)
+        self.assertIn("@@OPSQUIRE data: internal", log)
+        loud = self.cli("run", "quiet", "-v")
+        self.assertIn("[spawn]", loud.stderr)
+        self.assertIn("[data] internal", loud.stdout)
+
+    def test_docs_catalog_and_api_pages_follow_the_code(self) -> None:
+        g = Path(self.cli("new", "web1", "shared", "--general", "--purpose", "shared logic").stdout.strip())
+        code = '"""Doubling helpers."""\n\n\ndef double(x: int) -> int:\n    """Twice x."""\n    return x * 2\n'
+        (g / "logic.py").write_text(code)
+        (g / "test_logic.py").write_text(self.PASSING_TEST)
+        self.new("user", "print(1)\n", "--uses", "web1_shared")
+        self.assertEqual(self.cli("lint", "web1_shared").returncode, 0)
+        catalog = (self.home / "docs/CATALOG.md").read_text()
+        self.assertIn("**web1_shared**: shared logic (tests: 2; used by 1", catalog)
+        self.assertRegex(catalog, r"\d{8}-\d{4}_web1_user \[draft, task\]: test user \(uses web1_shared\)")
+        page = (self.home / "docs/web1_shared.md").read_text()
+        self.assertIn("`double(x: int) -> int`: Twice x.", page)
+        self.assertIn("T: double", page)
+        self.assertIn("Doubling helpers.", page)
+        shutil.rmtree(g)
+        self.assertEqual(self.cli("docs").returncode, 0)
+        self.assertFalse((self.home / "docs/web1_shared.md").exists())
 
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")

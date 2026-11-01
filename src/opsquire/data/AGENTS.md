@@ -33,6 +33,15 @@ retinue.json                                  optional: this home's agents (over
 `<area>` is the host, service or system. Areas and names are lowercase kebab-case. All timestamps
 are UTC ISO-8601 with milliseconds: `2026-10-30T17:20:01.123Z`.
 
+## Docs: read these before code
+
+`docs/CATALOG.md` lists every general script (purpose, test count, users, run record) and every task;
+`docs/<general-id>.md` gives a general script's API (module and function docstrings, signatures), what its tests
+guarantee, and its run history. They are generated from code, tests, meta.json and run records after every
+`new`, `lint` and `run` (or `opsquire docs`), so they are current; never edit them. Read them first and open
+code only to change it. Give general scripts a module docstring and docstrings on public functions: that text
+is what the next agent reads instead of the code.
+
 ## Finding things (use `--json` for structured output)
 
 ```
@@ -58,7 +67,10 @@ opsquire locks
    (`--general` for reusable scripts). Set `OPSQUIRE_AUTHOR` (e.g. `claude-code <session id>`).
 3. Edit `main.py` / `main.sh`. Today Python (ruff + `mypy --strict`) and bash (shellcheck) are linted;
    other languages need a linter wired into `opsquire/lint.py` first.
-4. `opsquire lint <task>` must pass. The runner re-lints the exact files at run time and blocks on failure.
+4. `opsquire lint <task>` must pass: ruff, `mypy --strict`, shellcheck, and every `test_*.py` (unittest) in the
+   task and in the general scripts it uses. The runner re-checks the exact files at run time and blocks on
+   failure. Write offline tests (no ssh, network or credentials) for any logic that decides what gets stopped,
+   started or changed; a test file with no tests fails.
 5. Hand the operator exactly one command per step: `opsquire run <task-id>` (dry/read), then
    `opsquire run <task-id> --apply`.
 6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the

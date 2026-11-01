@@ -12,8 +12,9 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import locks
+from . import locks, runner
 from .ask import ask
+from .docs import write_docs
 from .lint import lint_task, save_lint
 from .model import (
     DATA_DIR,
@@ -139,11 +140,14 @@ def cmd_lint(a: argparse.Namespace) -> int:
         emit({"id": task.id, "ok": result.ok, "content_hash": result.content_hash, "output": result.output}, True)
     else:
         print(result.output)
-        print(f"\n{task.id}: {'LINT OK' if result.ok else 'LINT FAILED'}")
+        tests = f" ({result.tests} tests)" if result.tests else ""
+        print(f"\n{task.id}: {'LINT OK' if result.ok else 'LINT FAILED'}{tests}")
     return 0 if result.ok else 1
 
 
 def cmd_run(a: argparse.Namespace) -> int:
+    if a.verbose:
+        runner.VERBOSE = True
     task = resolve_task(a.task)
     if task.kind == "plan":
         if a.script_args:
@@ -331,6 +335,17 @@ def cmd_contract(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_docs(a: argparse.Namespace) -> int:
+    out = write_docs()
+    print(f"wrote {out / 'CATALOG.md'} and one page per general script in {out}")
+    return 0
+
+
+def refresh_docs() -> None:
+    with contextlib.suppress(OSError):
+        write_docs()
+
+
 def cmd_locks(a: argparse.Namespace) -> int:
     data = {t: [h.__dict__ | {"alive": h.alive()} for h in hs] for t, hs in locks.holders().items() if hs}
     table = [["TARGET", "MODE", "RUN", "TASK", "SINCE", "ALIVE"]] + [
@@ -390,6 +405,7 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("task")
     r.add_argument("--apply", action="store_true", help="really change things (prod-changing tasks only)")
     r.add_argument("--break-lock", action="store_true", help="offer to override a held lock (asks you to type BREAK)")
+    r.add_argument("-v", "--verbose", action="store_true", help="also show the runner's bookkeeping and [data] events")
     r.set_defaults(fn=cmd_run)
 
     ls = sub.add_parser("ls", help="list tasks with derived status")
@@ -444,6 +460,9 @@ def parser() -> argparse.ArgumentParser:
     ct.add_argument("--write", action="store_true", help="write it to the home as AGENTS.md and CLAUDE.md")
     ct.set_defaults(fn=cmd_contract)
 
+    dc = sub.add_parser("docs", help="regenerate docs/: the catalog and an API page per general script")
+    dc.set_defaults(fn=cmd_docs)
+
     hm = sub.add_parser("home", help="show the data home, or set it")
     hm.add_argument("path", nargs="?")
     hm.set_defaults(fn=cmd_home)
@@ -471,6 +490,8 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(sig, to_interrupt)
     try:
         code: int = a.fn(a)
+        if a.cmd in ("new", "lint", "run"):
+            refresh_docs()
         return code
     except OpsquireError as e:
         print(f"opsquire: {e}", file=sys.stderr)

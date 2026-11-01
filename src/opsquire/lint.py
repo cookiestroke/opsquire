@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -8,7 +9,19 @@ import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 
-from .model import DATA_DIR, HELPERS_DIR, LINT_FILE, Task, iso, load_task, now, read_json, task_folder, write_json
+from .model import (
+    DATA_DIR,
+    HELPERS_DIR,
+    LINT_FILE,
+    Task,
+    home_dir,
+    iso,
+    load_task,
+    now,
+    read_json,
+    task_folder,
+    write_json,
+)
 
 RUFF_CONFIG = DATA_DIR / "ruff.toml"
 MYPY_CONFIG = DATA_DIR / "mypy.ini"
@@ -19,6 +32,10 @@ class LintResult:
     ok: bool
     content_hash: str
     output: str
+    tests: int = 0
+
+
+TEST_TIMEOUT = 600
 
 
 def find_tool(name: str) -> str | None:
@@ -59,7 +76,8 @@ def lint_task(task: Task) -> LintResult:
         ruff, mypy = find_tool("ruff"), find_tool("mypy")
         if not ruff or not mypy:
             return LintResult(False, content_hash, "ruff and mypy must be installed (pip install --user ruff mypy)")
-        env = {**os.environ, "MYPYPATH": str(HELPERS_DIR)}
+        uses = [str(home_dir() / "general" / u) for u in task.meta.uses]
+        env = {**os.environ, "MYPYPATH": os.pathsep.join([str(HELPERS_DIR), *uses])}
         by_folder: dict[str, list[str]] = {}
         for f in py:
             by_folder.setdefault(str(Path(f).parent), []).append(f)
@@ -78,7 +96,38 @@ def lint_task(task: Task) -> LintResult:
         passed, out = _run([shellcheck, "-x", "-P", str(HELPERS_DIR), *sh])
         ok &= passed
         parts.append(out)
-    return LintResult(ok, content_hash, "\n\n".join(parts))
+    tests, tests_ok, tests_out = run_tests(task)
+    ok &= tests_ok
+    if tests_out:
+        parts.append(tests_out)
+    return LintResult(ok, content_hash, "\n\n".join(parts), tests)
+
+
+def run_tests(task: Task) -> tuple[int, bool, str]:
+    """unittest discovery in every folder holding test_*.py (the task's own and the general scripts it uses).
+    Tests must be offline: no ssh, no network, no credentials."""
+    assert task.meta
+    folders = sorted({p.parent for p in task.files() if p.name.startswith("test_") and p.suffix == ".py"})
+    python = task.meta.command(Path("main.py"))[0]
+    uses = [str(home_dir() / "general" / u) for u in task.meta.uses]
+    total, ok, report = 0, True, []
+    for folder in folders:
+        path = os.pathsep.join([str(folder), str(HELPERS_DIR), *uses, os.environ.get("PYTHONPATH", "")])
+        env = {**os.environ, "PYTHONPATH": path, "PYTHONDONTWRITEBYTECODE": "1", "OPSQUIRE_TESTING": "1"}
+        cmd = [python, "-m", "unittest", "discover", "-s", str(folder), "-t", str(folder), "-p", "test_*.py"]
+        try:
+            r = subprocess.run(cmd, cwd=folder, capture_output=True, text=True, env=env, timeout=TEST_TIMEOUT)
+            code, text = r.returncode, r.stdout + r.stderr
+        except subprocess.TimeoutExpired:
+            code, text = 1, f"timed out after {TEST_TIMEOUT}s"
+        m = re.search(r"Ran (\d+) tests?", text)
+        ran = int(m.group(1)) if m else 0
+        passed = code == 0 and ran > 0
+        total += ran
+        ok &= passed
+        head = f"$ unittest {folder}: {'ok' if passed else 'FAILED'} ({ran} tests)"
+        report.append(head if passed else head + "\n" + text.strip()[-3000:])
+    return total, ok, "\n".join(report)
 
 
 def lint_plan(plan: Task, content_hash: str) -> LintResult:
@@ -90,14 +139,20 @@ def lint_plan(plan: Task, content_hash: str) -> LintResult:
         sub = lint_task(load_task(folder)) if folder else LintResult(False, "", f"{step['task']} not found")
         steps.append(sub)
         report.append(f"== step {step['task']}: {'ok' if sub.ok else 'FAILED'}\n{sub.output}")
-    return LintResult(all(s.ok for s in steps), content_hash, "\n\n".join(report))
+    return LintResult(all(s.ok for s in steps), content_hash, "\n\n".join(report), sum(s.tests for s in steps))
 
 
 def save_lint(task: Task, result: LintResult) -> None:
     try:
         write_json(
             task.folder / LINT_FILE,
-            {"ok": result.ok, "content_hash": result.content_hash, "checked": iso(now()), "output": result.output},
+            {
+                "ok": result.ok,
+                "content_hash": result.content_hash,
+                "checked": iso(now()),
+                "tests": result.tests,
+                "output": result.output,
+            },
         )
     except OSError:
         pass
