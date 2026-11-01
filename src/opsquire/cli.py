@@ -12,7 +12,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import locks, runner
+from . import locks, repos, runner
 from .ask import DEFAULT_BUDGET_USD, Budget, ask
 from .docs import write_docs
 from .homegit import commit_quietly
@@ -349,6 +349,37 @@ def cmd_integrate(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_repo(a: argparse.Namespace) -> int:
+    if a.action == "list":
+        found = repos.registry()
+        emit(
+            [{"name": r.name, "path": str(r.path), "github": r.github, "base": r.base} for r in found.values()],
+            a.json,
+            [["NAME", "GITHUB", "BASE", "PATH"]] + [[r.name, r.github, r.base, str(r.path)] for r in found.values()],
+        )
+        return 0
+    if a.action == "checkout":
+        if not a.target:
+            raise OpsquireError("say which repo: opsquire repo checkout <name>")
+        print(repos.checkout(a.target))
+        return 0
+    if not a.target or not a.title:
+        raise OpsquireError('opsquire repo pr <copy-path> --title "..." --body-file <file>')
+    body = Path(a.body_file).read_text() if a.body_file else ""
+    result = repos.open_pr(Path(a.target).expanduser().resolve(), a.title, body, a.branch)
+    if result["auto_deploy_base"]:
+        print(f"opsquire: WARNING: {result['base']} auto-deploys; merging this PR deploys it", file=sys.stderr)
+    if a.json:
+        emit(result, True)
+    else:
+        print(f"PR: {result['url']}")
+        print(
+            f"   {result['repo']} {result['branch']} -> {result['base']}, commit {result['commit'][:10]}, "
+            f"{len(result['changed'])} changed, {len(result['deleted'])} deleted"
+        )
+    return 0
+
+
 def cmd_docs(a: argparse.Namespace) -> int:
     out = write_docs()
     print(f"wrote {out / 'CATALOG.md'} and one page per general script in {out}")
@@ -489,6 +520,15 @@ def parser() -> argparse.ArgumentParser:
     )
     ig.add_argument("--dry-run", action="store_true")
     ig.set_defaults(fn=cmd_integrate)
+
+    rp = sub.add_parser("repo", help="change a code/config repo as a GitHub PR: list, checkout <repo>, pr <copy>")
+    rp.add_argument("action", choices=["list", "checkout", "pr"])
+    rp.add_argument("target", nargs="?", help="repo name (checkout) or copy path (pr)")
+    rp.add_argument("--title", help="PR title (first line) and commit message")
+    rp.add_argument("--body-file", help="PR description, markdown")
+    rp.add_argument("--branch", help="branch name (default: <branch_prefix><title words>)")
+    rp.add_argument("--json", action="store_true")
+    rp.set_defaults(fn=cmd_repo)
 
     dc = sub.add_parser("docs", help="regenerate docs/: the catalog and an API page per general script")
     dc.set_defaults(fn=cmd_docs)

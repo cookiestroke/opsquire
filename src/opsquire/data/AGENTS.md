@@ -26,6 +26,8 @@ var/runs/<task-id>/<run-id>/                  one folder per run (run-id = UTC t
     snapshot/       exact copy of every file that ran
 var/locks/locks.json                          held locks
 var/asks/<ask-id>.json                        every `opsquire ask`, with its agent session
+repos.json                                    optional: repos agents may change through PRs
+.repos/<ask-id>/<repo>/                       an ask's copies of those repos (not versioned)
 LOCAL.md                                      local rules, appended to this contract
 retinue.json                                  optional: this home's agents (overrides the packaged one)
 ```
@@ -173,6 +175,30 @@ the recommendation. Questions answerable from code, configs or records are resea
 decisions go into the task's `design.md` before any script is written. Reuse needs no interview.
 `--no-grill` makes the agent take safe defaults and record them in `design.md` instead. Without a
 terminal, the ask stops with status `waiting` and prints how to answer with `--resume`.
+
+### Code and config changes: PRs from a copy
+
+Repos agents may change are registered in the home's `repos.json`:
+`{"branch_prefix": "name/", "repos": {"<name>": {"path": "~/repo", "github": "owner/repo", "base": "main"}}}`.
+Never edit the operator's own checkout of a repo.
+
+```
+opsquire repo list                                          registered repos
+opsquire repo checkout <repo>                               your copy of origin/<base> under .repos/; prints its path
+opsquire repo pr <copy> --title "..." --body-file <file>    GitHub-signed commit of the copy's changes + open the PR
+```
+
+- The copy is a plain export of the base branch (`git archive`; nothing is written to the operator's repo). Edit it,
+  run the repo's own checks there (its CLAUDE.md/AGENTS.md; use the operator checkout's venv with PYTHONPATH at the
+  copy), and write the PR description outside the copy.
+- `repo pr` compares the copy with its base commit, pushes the differences as one commit through GitHub's
+  createCommitOnBranch (signed by GitHub) on `<branch_prefix><title words>` (or `--branch`), and opens the PR.
+  Running it again after more edits adds a commit with only what changed since and keeps the same PR.
+- PRs open ready for review, config repos included; follow the repo's PR conventions (for umm_config, call out
+  risky fields). Opsquire never merges or deploys; a base branch that auto-deploys gets a warning.
+- Hand over each PR with a `PR: <url>` line. An ask removes its copies when it ends `ok`; a waiting or interrupted
+  ask keeps them for `--resume`. Each ask (and each parallel piece) has its own copies; asks refresh every
+  registered repo's origin before the agent starts.
 
 ### Parallel asks: one request, several agents
 

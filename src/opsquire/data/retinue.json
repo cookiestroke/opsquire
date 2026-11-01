@@ -16,11 +16,11 @@
       "output": "claude-stream-json",
       "allowed_tools": [
         "Read", "Glob", "Grep",
-        "Edit(/{home}/tasks/**)", "Edit(/{home}/general/**)",
+        "Edit(/{home}/tasks/**)", "Edit(/{home}/general/**)", "Edit(/{main_home}/.repos/**)",
         "Bash(opsquire find *)", "Bash(opsquire ls)", "Bash(opsquire ls *)", "Bash(opsquire show *)", "Bash(opsquire new *)",
         "Bash(opsquire lint *)", "Bash(opsquire runs)", "Bash(opsquire runs *)", "Bash(opsquire last)", "Bash(opsquire last *)",
         "Bash(opsquire log *)", "Bash(opsquire locks)", "Bash(opsquire locks *)",
-        "Bash(opsquire home)", "Bash(opsquire contract)", "Bash(opsquire docs)", "Bash(opsquire wait *)"
+        "Bash(opsquire repo *)", "Bash(opsquire home)", "Bash(opsquire contract)", "Bash(opsquire docs)", "Bash(opsquire wait *)"
       ]
     },
     "codex": {

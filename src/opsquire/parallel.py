@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import homegit
+from . import homegit, repos
 from .ask import (
     PIECE,
     RESOLVE,
@@ -134,7 +134,7 @@ class Fanout:
             self.agent,
             wt,
             system_prompt(wt, self.grill, split=False, piece=context),
-            {**self.env(), "OPSQUIRE_HOME": wt},
+            {**self.env(), "OPSQUIRE_HOME": wt, "OPSQUIRE_ASK_ID": f"{self.ask_id}-{piece.n}"},
             session=piece.session,
             label=piece.label,
         )
@@ -224,6 +224,7 @@ class Fanout:
         """Lint the handed-over tasks again in the home (under the merge lock): lint results are not versioned, so
         the worktree's do not come along, and this checks the merged files themselves."""
         piece.status = "merged"
+        repos.drop(f"{self.ask_id}-{piece.n}")
         for tid in piece.handed:
             task = resolve_task(tid)
             result = lint_task(task)

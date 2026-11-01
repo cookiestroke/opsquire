@@ -30,6 +30,7 @@ opsquire locks / unlock <target>
 opsquire integrate                 install the opsquire skill for Claude agents; make the home a local git repo
 opsquire ask --no-split "<...>"    one agent only (asks split into parallel pieces by default)
 opsquire ask --max-agents 2 ...    at most 2 agents at once; --budget 20 [--strict-budget] for the spend
+opsquire repo checkout|pr ...      (for agents) change a registered repo through a GitHub-signed PR
 ```
 
 Ctrl-C is always safe: the run is recorded as `interrupted`, scratch work is undone, locks are

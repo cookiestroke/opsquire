@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from . import homegit, pinned
-from .model import DATA_DIR, OpsquireError, compact, home_dir, iso, now, read_json, var_dir, write_json
+from . import homegit, pinned, repos
+from .model import DATA_DIR, OpsquireError, compact, home_dir, iso, main_home, now, read_json, var_dir, write_json
 
 SYSTEM_PROMPT = """You are running inside `opsquire ask` for the operator.
 The operator will run whatever you prepare in their own terminal.
@@ -30,9 +30,17 @@ Turn the request into runnable opsquire task(s):
 4. `opsquire lint <task-or-plan>` must pass before you finish.
 5. Never run `opsquire run`, never use ssh/scp, never read or ask for credential values.
 6. For questions about past runs, use `opsquire runs/last/log ... --json` and answer from the records.
+7. Code or config changes (repos listed by `opsquire repo list`) are made as GitHub PRs, never in the operator's own
+   checkouts: `opsquire repo checkout <repo>` prints the path of your own copy of its base branch; edit it there, run
+   the repo's own checks (its CLAUDE.md/AGENTS.md; use the operator checkout's venv with PYTHONPATH pointing at your
+   copy), write the PR description to a file outside the copy, then `opsquire repo pr <copy> --title "..."
+   --body-file <file>`. It pushes a GitHub-signed commit and opens the PR (run it again after more edits to update
+   it). Follow the repo's PR conventions (for config repos, call out risky fields). Never merge or deploy.
+   Hand over each PR with a `PR: <url>` line.
 {grill}
 End your final message with plain lines, nothing after them:
 RUN: <exact command>      (one per command, in order; first the dry/read run)
+PR: <url>                 (one per pull request you opened or updated)
 NEED: <question>          (instead of RUN when blocked on something only the operator can give)"""
 
 SPLIT_ON = """
@@ -75,7 +83,7 @@ Do not ask questions. Where a decision is open, take the safest reasonable defau
 design.md in the task folder.
 """
 
-ACTION_RE = re.compile(r"^(RUN|NEED):\s*(.+?)\s*$", re.M)
+ACTION_RE = re.compile(r"^(RUN|NEED|PR):\s*(.+?)\s*$", re.M)
 ASK_RE = re.compile(r"^ASK:\s*(.+?)\s*$", re.M)
 RECOMMEND_RE = re.compile(r"^RECOMMEND:\s*(.+?)\s*$", re.M)
 SPLIT_RE = re.compile(r"^SPLIT:\s*(.+?)\s*$", re.M)
@@ -258,7 +266,7 @@ class Conversation:
         parser = PARSERS.get(str(self.agent.get("output")))
         if parser is None:
             raise OpsquireError(f"agent {self.name!r} has unknown output format {self.agent.get('output')!r}")
-        values = {"prompt": message, "system": self.system, "home": self.home}
+        values = {"prompt": message, "system": self.system, "home": self.home, "main_home": str(main_home())}
         argv = build_argv(self.agent, values, self.session, budget.cap())
         resuming = f" (resuming {self.session})" if self.session else ""
         say(f"opsquire ask via {self.name}{' ' + self.label if self.label else ''}{resuming} ...")
@@ -341,6 +349,7 @@ def agent_env(name: str, ask_id: str, extra: dict[str, str] | None = None) -> di
     return {
         **os.environ,
         "OPSQUIRE_AUTHOR": f"opsquire-ask/{name} {ask_id}",
+        "OPSQUIRE_ASK_ID": ask_id,
         "PATH": os.pathsep.join([os.path.dirname(os.path.abspath(sys.argv[0])), os.environ.get("PATH", "")]),
         **(extra or {}),
     }
@@ -428,8 +437,10 @@ def ask(
 ) -> AskResult:
     budget = budget or Budget(DEFAULT_BUDGET_USD, strict=False)
     session = None
+    copies = None
     if resume_ask:
         rec = find_ask(resume_ask)
+        copies = str(rec.get("copies") or rec["ask_id"])
         if rec.get("pieces"):
             from .parallel import resume_parallel
 
@@ -446,7 +457,11 @@ def ask(
     if task_id and not session:
         prompt = f"This is about opsquire task {task_id}.\n\n{prompt}"
     can_split = split and not session and not task_id and homegit.is_repo(home)
-    conv = Conversation(name, agent, str(home), system_prompt(str(home), grill, can_split), agent_env(name, res.ask_id))
+    copies = copies or res.ask_id
+    for repo in repos.registry().values():
+        repos.fetch(repo)
+    env = agent_env(name, res.ask_id, {"OPSQUIRE_ASK_ID": copies})
+    conv = Conversation(name, agent, str(home), system_prompt(str(home), grill, can_split), env)
     conv.session = session
     try:
         turn = converse(conv, prompt, grill, tty_answer, budget, res.rounds, allow_split=can_split)
@@ -469,6 +484,8 @@ def ask(
     status = (
         "interrupted" if res.interrupted else "waiting" if res.waiting else "ok" if res.exit_code == 0 else "failed"
     )
+    if status == "ok":
+        repos.drop(copies)
     save_record(
         {
             "ask_id": res.ask_id,
@@ -478,6 +495,7 @@ def ask(
             "ended": iso(now()),
             "prompt": prompt,
             "session": res.session,
+            "copies": copies,
             "resumed": bool(session),
             "grill": grill,
             "rounds": res.rounds,

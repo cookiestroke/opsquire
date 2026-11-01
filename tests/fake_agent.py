@@ -82,11 +82,21 @@ if grill and "Do not ask questions" not in system:
         print(json.dumps({"type": "result", "result": text, "session_id": session}), flush=True)
         sys.exit(0)
 
+pr_line = ""
+if os.environ.get("FAKE_REPO"):
+    copy = Path(opsquire("repo", "checkout", os.environ["FAKE_REPO"]))
+    (copy / "README.md").write_text("changed by the agent\n")
+    notes = Path(os.environ["FAKE_STATE"]).with_name("pr-body.md")
+    notes.write_text("Why: test\n")
+    pr_line = (
+        "\n" + opsquire("repo", "pr", str(copy), "--title", "Agent change", "--body-file", str(notes)).splitlines()[0]
+    )
+
 tool = {"type": "tool_use", "name": "Bash", "input": {"command": "opsquire find web1 restart"}}
 print(json.dumps({"type": "assistant", "message": {"content": [tool]}}), flush=True)
 text = (
     f"Reusing 20261030-1749_web1_restart-bots. author={os.environ.get('OPSQUIRE_AUTHOR')} argv={json.dumps(argv)}\n"
     "RUN: opsquire run 20261030-1749_web1_restart-bots\n"
-    "RUN: opsquire run 20261030-1749_web1_restart-bots --apply"
+    "RUN: opsquire run 20261030-1749_web1_restart-bots --apply" + pr_line
 )
 print(json.dumps({"type": "result", "result": text, "session_id": session, "total_cost_usd": 0.01}), flush=True)

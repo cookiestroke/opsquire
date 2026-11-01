@@ -107,6 +107,12 @@ def home_dir() -> Path:
     return Path(configured).expanduser().resolve() if isinstance(configured, str) else DEFAULT_HOME
 
 
+def main_home() -> Path:
+    """The operator's home even inside a parallel piece's worktree (whose OPSQUIRE_VAR points back at it)."""
+    env = os.environ.get("OPSQUIRE_VAR")
+    return Path(env).parent if env else home_dir()
+
+
 def var_dir() -> Path:
     """Run records live in the main home; agents of a parallel ask work in worktrees and get OPSQUIRE_VAR."""
     env = os.environ.get("OPSQUIRE_VAR")

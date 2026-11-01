@@ -1038,6 +1038,97 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(r.stderr.count("past the $15.00 reminder"), 1)
         self.assertIn("$20.01 spent", r.stderr)
 
+    def code_repo(self) -> Path:
+        """A registered repo whose origin/main has three files, and a fake gh that records what reaches GitHub."""
+        repo = self.tmp / "umm"
+        repo.mkdir()
+        gitconfig = self.tmp / "gitconfig"
+        gitconfig.write_text("[user]\n\tname = Test\n\temail = test@example.com\n")
+        self.env |= {"GIT_CONFIG_GLOBAL": str(gitconfig), "GIT_CONFIG_NOSYSTEM": "1"}
+        files = {"README.md": "hello\n", "src/app.py": "x = 1\n", "old.txt": "gone soon\n", "c/__pycache__/k.pyc": "o"}
+        (repo / "link").symlink_to("missing-target")
+        for name, text in files.items():
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text(text)
+        for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "base"]):
+            subprocess.run(["git", "-C", str(repo), *cmd], env=self.env, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", "HEAD"], env=self.env, check=True
+        )
+        cfg = {"branch_prefix": "mandar/", "repos": {"umm": {"path": str(repo), "github": "acme/umm", "base": "main"}}}
+        (self.home / "repos.json").write_text(json.dumps(cfg))
+        bin_dir = self.tmp / "gh-bin"
+        bin_dir.mkdir()
+        (bin_dir / "gh").write_text(f'#!/bin/sh\nexec {sys.executable} {ROOT / "tests/fake_gh.py"} "$@"\n')
+        (bin_dir / "gh").chmod(0o755)
+        self.env |= {"PATH": f"{bin_dir}:{self.env['PATH']}", "FAKE_GH_STATE": str(self.tmp / "gh.json")}
+        self.env["FAKE_GH_LOG"] = str(self.tmp / "gh.log")
+        return repo
+
+    def gh_state(self) -> dict[str, Any]:
+        state: dict[str, Any] = json.loads((self.tmp / "gh.json").read_text())
+        return state
+
+    def test_repo_pr_pushes_a_copy_as_signed_commits_and_updates_the_pr(self) -> None:
+        repo = self.code_repo()
+        base = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+        self.env["OPSQUIRE_ASK_ID"] = "ask-1"
+        r = self.cli("repo", "checkout", "umm")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        copy = Path(r.stdout.strip())
+        self.assertEqual(copy, self.home / ".repos/ask-1/umm")
+        self.assertEqual(self.cli("repo", "checkout", "umm").stdout.strip(), str(copy))
+        (copy / "src/app.py").write_text("x = 2\n")
+        (copy / "src/new.py").write_text("y = 1\n")
+        (copy / "old.txt").unlink()
+        (copy / "src/__pycache__").mkdir()
+        (copy / "src/__pycache__/app.cpython-310.pyc").write_bytes(b"junk")
+        body = self.tmp / "body.md"
+        body.write_text("Why: because\n")
+        r = self.cli("repo", "pr", str(copy), "--title", "Fix the app", "--body-file", str(body))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("PR: https://github.com/acme/umm/pull/1", r.stdout)
+        state = self.gh_state()
+        self.assertEqual(state["prs"][0]["head"], "mandar/fix-the-app")
+        first = state["commits"][0]
+        self.assertEqual(first["added"], {"src/app.py": "x = 2\n", "src/new.py": "y = 1\n"})
+        self.assertEqual(first["deleted"], ["old.txt"])
+        calls = [json.loads(x) for x in (self.tmp / "gh.log").read_text().splitlines()]
+        refs = [c for c in calls if c[:3] == ["api", "-X", "POST"]]
+        self.assertIn(f"sha={base.strip()}", refs[0])
+        (copy / "README.md").write_text("better\n")
+        r = self.cli("repo", "pr", str(copy), "--title", "Fix the app")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        state = self.gh_state()
+        self.assertEqual(state["commits"][1]["added"], {"README.md": "better\n"})
+        self.assertEqual(state["commits"][1]["deleted"], [])
+        self.assertEqual(len(state["prs"]), 1)
+        self.assertEqual((repo / "src/app.py").read_text(), "x = 1\n")
+        self.assertEqual(self.cli("repo", "pr", str(copy), "--title", "Fix the app").returncode, 0)
+        self.assertEqual(len(self.gh_state()["commits"]), 2)
+
+    def test_ask_hands_over_its_pr_and_drops_its_repo_copy(self) -> None:
+        self.code_repo()
+        self.agents_file()
+        self.env |= {"FAKE_REPO": "umm", "FAKE_STATE": str(self.tmp / "fake-state.json")}
+        r = self.cli("ask", "--no-split", "change", "the", "readme")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("PR: https://github.com/acme/umm/pull/1", r.stdout)
+        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
+        self.assertEqual([a["kind"] for a in rec["actions"]], ["RUN", "RUN", "PR"])
+        self.assertEqual(self.gh_state()["commits"][0]["added"], {"README.md": "changed by the agent\n"})
+        self.assertFalse((self.home / ".repos").exists())
+
+    def test_home_commits_never_include_repo_copies(self) -> None:
+        self.git_home()
+        self.code_repo()
+        self.assertEqual(self.cli("repo", "checkout", "umm").returncode, 0)
+        self.new("tidy", "print(1)\n")
+        self.assertEqual(self.cli("lint", "tidy").returncode, 0)
+        r = self.cli("run", "tidy")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([f for f in self.git("ls-files").splitlines() if f.startswith(".repos")], [])
+
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")
         self.assertEqual(self.cli("run", "rw").returncode, 0)

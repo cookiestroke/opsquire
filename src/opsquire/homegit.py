@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 from .model import OpsquireError
@@ -30,6 +31,8 @@ __pycache__/
 """
 
 WORKTREES = ".worktrees"
+REPO_COPIES = ".repos"
+EXCLUDE_LOCK = threading.Lock()
 
 
 class GitError(OpsquireError):
@@ -88,16 +91,21 @@ def ensure_repo(home: Path, dry: bool) -> str:
 
 
 def exclude_worktrees(home: Path) -> None:
-    common = Path(git(home, "rev-parse", "--git-common-dir").stdout.strip())
-    exclude = (common if common.is_absolute() else home / common) / "info" / "exclude"
-    lines = exclude.read_text().splitlines() if exclude.is_file() else []
-    if f"/{WORKTREES}/" not in lines:
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        exclude.write_text("\n".join([*lines, f"/{WORKTREES}/"]) + "\n")
+    """Keep opsquire's scratch folders (parallel piece worktrees, repo copies) out of the home's commits, without
+    touching the operator's .gitignore."""
+    with EXCLUDE_LOCK:
+        common = Path(git(home, "rev-parse", "--git-common-dir").stdout.strip())
+        exclude = (common if common.is_absolute() else home / common) / "info" / "exclude"
+        lines = exclude.read_text().splitlines() if exclude.is_file() else []
+        missing = [e for e in (f"/{WORKTREES}/", f"/{REPO_COPIES}/") if e not in lines]
+        if missing:
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            exclude.write_text("\n".join([*lines, *missing]) + "\n")
 
 
 def commit(home: Path, paths: list[Path] | None, message: str) -> bool:
     """Stage `paths` (everything when None) and commit if anything changed. True when a commit was made."""
+    exclude_worktrees(home)
     if paths is not None:
         paths = [p for p in paths if p.exists()]
         if not paths:
