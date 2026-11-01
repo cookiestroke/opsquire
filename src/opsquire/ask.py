@@ -41,14 +41,16 @@ another's result, and no two would edit the same general script), do not build a
 quick `opsquire find`, answer with only these lines, one per piece, and nothing else:
 SPLIT: <short-kebab-name> | <a self-contained request for that piece, carrying every detail it needs>
 The name (at most 30 characters, e.g. umm-disk-usage) labels the piece for the operator; make each one distinct.
-Build each piece's request from the operator's own words and the facts you looked up; do not settle open
-decisions for it (scope, format, defaults): its own agent interviews the operator about those.
+Settle the small decisions in each piece's request yourself (format, defaults, what to skip) from the request
+and what you looked up; leave a decision open only when it truly needs the operator. Piece agents record the
+decisions they were given in design.md.
 Each piece then gets its own agent working in parallel. If the request is one piece of work, carry on below.
 """
 
 PIECE = """
 You are one of {total} agents working in parallel on one request; build only your piece, the others do the rest.
 Your piece: {piece}
+Decisions already made in your piece count as settled: write them to design.md and only ask about what is open.
 The whole request, for context only: {whole}
 """
 
