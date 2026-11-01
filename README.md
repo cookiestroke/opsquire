@@ -28,7 +28,8 @@ opsquire log <task>                full output of the latest run
 opsquire wait <task>               (for agents) block until your next run of a task finishes
 opsquire locks / unlock <target>
 opsquire integrate                 install the opsquire skill for Claude agents; register the home in Orca
-opsquire ask --agent orca "<...>"  launch a visible agent in Orca instead of a headless one
+opsquire ask --agent orca "<...>"  run the ask in Orca in the background; answers come back here
+                                   (--agent orca-visible: open a focused agent in Orca instead)
 ```
 
 Ctrl-C is always safe: the run is recorded as `interrupted`, scratch work is undone, locks are

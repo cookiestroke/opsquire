@@ -53,6 +53,8 @@ def run_in_pty(cmd: list[str], env: dict[str, str], answers: list[tuple[str, str
         if pending and pending[0][0].encode() in out.rsplit(b"\n", 1)[-1]:
             answer = pending.pop(0)[1]
             os.write(fd, (answer if answer == "\x03" else answer + "\n").encode())
+    if time.monotonic() >= deadline:
+        os.kill(pid, signal.SIGKILL)
     _, status = os.waitpid(pid, 0)
     os.close(fd)
     return subprocess.CompletedProcess(cmd, os.waitstatus_to_exitcode(status), out.decode(errors="replace"), "")
@@ -898,7 +900,7 @@ class OpsTest(unittest.TestCase):
 
     def test_ask_via_orca_launches_a_visible_agent_on_the_home(self) -> None:
         log = self.fake_orca(running=True)
-        r = self.cli("ask", "--agent", "orca", "restart", "web1")
+        r = self.cli("ask", "--agent", "orca-visible", "restart", "web1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Launched a Claude agent in Orca (terminal)", r.stdout)
         launch = [c for c in self.orca_calls(log) if c[:2] == ["agent", "launch"]][0]
@@ -908,18 +910,64 @@ class OpsTest(unittest.TestCase):
         self.assertIn("Request: restart web1", prompt)
         self.assertIn("AGENTS.md", prompt)
         rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
-        self.assertEqual((rec["agent"], rec["status"]), ("orca", "ok"))
+        self.assertEqual((rec["agent"], rec["status"]), ("orca-visible", "ok"))
 
     def test_ask_via_orca_explains_a_refused_launch(self) -> None:
         self.fake_orca(running=False)
-        r = self.cli("ask", "--agent", "orca", "hi")
+        r = self.cli("ask", "--agent", "orca-visible", "hi")
         self.assertEqual(r.returncode, 1)
         self.assertIn("Orca is not running", r.stdout + r.stderr)
         self.fake_orca(running=True)
         self.env["FAKE_ORCA_UNREGISTERED"] = "1"
+        r = self.cli("ask", "--agent", "orca-visible", "hi")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("run `opsquire integrate`", r.stdout + r.stderr)
+
+    def orca_session(self, *turns: str, silent: bool = False) -> Path:
+        log = self.fake_orca(running=True)
+        self.env |= {"FAKE_ORCA_TURNS": json.dumps(list(turns)), "FAKE_ORCA_STATE": str(self.tmp / "orca-state.json")}
+        if silent:
+            self.env["FAKE_ORCA_SILENT"] = "1"
+        return log
+
+    TASK = "20261101-0000_web1_restart-bots"
+    FINAL = f"Done.\nRUN: opsquire run {TASK}\nRUN: opsquire run {TASK} --apply"
+
+    def test_orca_runs_in_the_background_and_relays_the_interview(self) -> None:
+        turns = ("Q1\nASK: which host?\nRECOMMEND: web1", "Q2\nASK: order?\nRECOMMEND: gw first", self.FINAL)
+        log = self.orca_session(*turns)
+        r = self.cli(
+            "ask", "--agent", "orca", "restart", "bots", answers=[("[Enter =", ""), ("[Enter =", "bots first")]
+        )
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("RUN: opsquire run 20261101-0000_web1_restart-bots --apply", r.stdout)
+        calls = self.orca_calls(log)
+        launch = [c for c in calls if c[:2] == ["agent", "launch"]][0]
+        self.assertIn("--surface", launch)
+        self.assertNotIn("--focus", launch)
+        sends = [c[c.index("--text") + 1] for c in calls if c[:2] == ["terminal", "send"]]
+        self.assertEqual(sends, ["Answer: web1", "Answer: bots first"])
+        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
+        self.assertEqual((rec["agent"], rec["status"], rec["session"]), ("orca", "ok", "term-1"))
+        self.assertEqual([x["answer"] for x in rec["rounds"]], ["web1", "bots first"])
+        self.assertEqual(list((self.home / ".asks").glob("*")), [])
+
+    def test_orca_agent_stuck_at_a_prompt_gets_the_operators_reply(self) -> None:
+        log = self.orca_session(self.FINAL, self.FINAL, silent=True)
+        r = self.cli("ask", "--agent", "orca", "restart", "bots", answers=[("[Enter = keep waiting]", "1")])
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("Do you want to create .asks/x.md?", r.stdout)
+        self.assertIn("RUN: opsquire run", r.stdout)
+        sends = [c[c.index("--text") + 1] for c in self.orca_calls(log) if c[:2] == ["terminal", "send"]]
+        self.assertEqual(sends, ["1"])
+
+    def test_orca_background_ask_reports_unregistered_home_cleanly(self) -> None:
+        self.orca_session(self.FINAL)
+        self.env["FAKE_ORCA_UNREGISTERED"] = "1"
         r = self.cli("ask", "--agent", "orca", "hi")
         self.assertEqual(r.returncode, 1)
         self.assertIn("run `opsquire integrate`", r.stdout + r.stderr)
+        self.assertEqual(list((self.home / ".asks").glob("*")) if (self.home / ".asks").exists() else [], [])
 
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")

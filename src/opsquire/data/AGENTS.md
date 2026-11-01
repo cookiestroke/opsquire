@@ -178,8 +178,12 @@ terminal, the ask stops with status `waiting` and prints how to answer with `--r
 
 `opsquire integrate` installs the `opsquire` skill into Claude Code's user skills, so agents in any folder or
 worktree (Orca included) load this contract when they need tooling, and registers the home as an Orca workspace.
-`opsquire ask --agent orca "<request>"` launches a visible Claude agent in Orca on the home with the same rules;
-the conversation and any interview continue in Orca, and the ask record keeps Orca's launch receipt.
+`opsquire ask --agent orca "<request>"` runs the ask in Orca in the background: the agent starts in an Orca
+terminal on the home without taking focus, every turn (interview question or final answer) comes back to the
+operator's terminal through a handoff file in `.asks/` (deleted after each read), and the RUN lines land in the ask
+record as usual. The session stays in Orca for viewing; `--resume <ask-id>` continues it. If the agent stops at
+a prompt of its own (a permission question), its screen is shown and the operator's reply is typed into it.
+`--agent orca-visible` instead opens a focused agent in Orca and hands the whole conversation to it.
 
 ### Adding an agent tool (the retinue)
 

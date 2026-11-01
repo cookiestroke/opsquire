@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -245,8 +246,9 @@ def ask(
     if resume_ask:
         session, agent_name = session_for_ask(resume_ask)
     name, agent = pick_agent(agent_name)
+    in_orca = agent.get("output") == "orca-session"
     parser = PARSERS.get(str(agent.get("output")))
-    if parser is None:
+    if parser is None and not in_orca:
         raise OpsquireError(f"agent {name!r} has unknown output format {agent.get('output')!r}")
     started = now()
     res = AskResult(ask_id=f"{compact(started)}_{name}")
@@ -264,13 +266,24 @@ def ask(
     first_prompt = prompt
     resumed = bool(session)
     turn = AskResult()
+    orca = OrcaSession(agent, home, res.ask_id, session) if in_orca else None
+
+    def progress(msg: str) -> None:
+        sys.stderr.write(f"  · {msg}\n")
+        sys.stderr.flush()
+
     try:
         message = prompt
         for _ in range(MAX_ROUNDS):
             turn = AskResult()
-            code = run_turn(
-                agent, parser, name, {"prompt": message, "system": system, "home": home}, session, env, turn
-            )
+            if orca:
+                turn = orca.turn(message, system, progress)
+                code = turn.exit_code
+            else:
+                assert parser
+                code = run_turn(
+                    agent, parser, name, {"prompt": message, "system": system, "home": home}, session, env, turn
+                )
             res.text, res.cost_usd = turn.text, (res.cost_usd or 0) + (turn.cost_usd or 0)
             res.session = turn.session or session
             session = res.session
@@ -296,7 +309,13 @@ def ask(
     except KeyboardInterrupt:
         res.interrupted = True
         res.exit_code = 130
-        res.session = res.session or turn.session
+        res.session = res.session or turn.session or (orca.handle if orca else None)
+    except OrcaError as e:
+        res.text, res.exit_code = str(e), 1
+        res.session = res.session or (orca.handle if orca else None)
+    finally:
+        if orca:
+            orca.cleanup()
     mentioned = sorted(
         set(re.findall(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b", res.text)) | ({task_id} if task_id else set())
     )
@@ -360,3 +379,131 @@ def run_turn(
     except KeyboardInterrupt:
         stop(proc)
         raise
+
+
+HANDOFF = """This session is driven by opsquire from the operator's terminal; the operator is not watching this
+terminal. At the end of EVERY turn (a question or your final answer) write your complete message to
+{file} (overwrite it), then stop and wait. Questions end with ASK:/RECOMMEND: lines; final answers with
+RUN:/NEED: lines. Your next input is the operator's reply."""
+TURN_WAIT_MS = 300_000
+
+
+class OrcaError(OpsquireError):
+    pass
+
+
+def orca_handle(data: dict[str, Any]) -> str:
+    result = data.get("result") or {}
+    for outcome in ((result.get("launch") or {}).get("outcome"), result.get("outcome")):
+        if isinstance(outcome, dict) and outcome.get("handle"):
+            return str(outcome["handle"])
+    if result.get("agentTerminalHandle"):
+        return str(result["agentTerminalHandle"])
+    raise OrcaError(f"Orca started the agent but returned no terminal handle: {json.dumps(result)[:300]}")
+
+
+class OrcaSession:
+    """One Claude agent in an Orca terminal, in the background. Each turn: send the message, wait until the agent
+    goes idle, then read its handoff file (never scraped terminal output)."""
+
+    def __init__(self, agent: dict[str, Any], home: str, ask_id: str, handle: str | None) -> None:
+        self.cli = str(agent.get("cli", "orca-ide"))
+        self.home = home
+        self.handle = handle
+        self.answer = Path(home) / ".asks" / f"{ask_id}.md"
+        self.turn_timeout = float(agent.get("turn_timeout_s", 1800))
+
+    def orca(self, *args: str) -> dict[str, Any]:
+        try:
+            r = subprocess.run([self.cli, *args, "--json"], capture_output=True, text=True, timeout=self.turn_timeout)
+        except FileNotFoundError:
+            raise OrcaError(f"{self.cli} not found: install Orca (task workstation_install-orca)") from None
+        try:
+            data: dict[str, Any] = json.loads(r.stdout)
+        except ValueError:
+            raise OrcaError(f"{self.cli} {args[0]} {args[1]}: {(r.stderr or r.stdout).strip()[:300]}") from None
+        if not data.get("ok", False):
+            error = data.get("error") or {}
+            code = error.get("code") if isinstance(error, dict) else ""
+            if code == "selector_not_found":
+                raise OrcaError(
+                    "The opsquire home is not an Orca workspace yet: open Orca, then run `opsquire integrate`."
+                )
+            if code == "runtime_unavailable":
+                raise OrcaError("Orca is not running (or not reachable): open Orca and try again.")
+            raise OrcaError(f"Orca refused {args[0]} {args[1]}: {json.dumps(error)[:300]}")
+        return data
+
+    def cleanup(self) -> None:
+        self.answer.unlink(missing_ok=True)
+
+    def turn(self, message: str, system: str, progress: Callable[[str], None]) -> AskResult:
+        res = AskResult(session=self.handle)
+        self.answer.parent.mkdir(exist_ok=True)
+        self.cleanup()
+        if self.handle is None:
+            prompt = f"{system}\n\n{HANDOFF.format(file=self.answer)}\n\nRequest: {message}"
+            data = self.orca(
+                "agent",
+                "launch",
+                "--agent",
+                "claude",
+                "--worktree",
+                f"path:{self.home}",
+                "--surface",
+                "terminal",
+                "--prompt",
+                prompt,
+            )
+            self.handle = res.session = orca_handle(data)
+            progress(f"agent started in Orca in the background (terminal {self.handle})")
+        else:
+            self.orca("terminal", "send", "--terminal", self.handle, "--text", message, "--enter")
+            progress("reply sent to the agent in Orca")
+        deadline = time.monotonic() + self.turn_timeout
+        while time.monotonic() < deadline:
+            wait_ms = int(min(TURN_WAIT_MS, max(1.0, deadline - time.monotonic()) * 1000))
+            waited = subprocess.run(
+                [
+                    self.cli,
+                    "terminal",
+                    "wait",
+                    "--terminal",
+                    self.handle,
+                    "--for",
+                    "tui-idle",
+                    "--timeout-ms",
+                    str(wait_ms),
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if self.answer.is_file():
+                res.text = self.answer.read_text()
+                self.cleanup()
+                return res
+            if '"exited"' in waited.stdout:
+                res.text, res.exit_code = "The agent in Orca exited without an answer.", 1
+                return res
+            if waited.returncode == 0 and not self.stalled(progress):
+                break
+        else:
+            res.text, res.exit_code = f"No answer from the agent in Orca within {self.turn_timeout:.0f}s.", 1
+            return res
+        res.text, res.exit_code = "Stopped waiting for the agent in Orca.", 1
+        return res
+
+    def stalled(self, progress: Callable[[str], None]) -> bool:
+        """Idle without a handoff file: show the agent's screen and let the operator reply. False means stop."""
+        screen = self.orca("terminal", "read", "--terminal", str(self.handle), "--screen")
+        lines = [ln for ln in ((screen.get("result") or {}).get("terminal") or {}).get("tail", []) if ln.strip()]
+        sys.stderr.write("\n  The agent in Orca is idle without an answer. Its screen ends with:\n")
+        sys.stderr.write("".join(f"    {ln}\n" for ln in lines[-12:]))
+        reply = tty_answer("Reply to send to it (Enter: keep waiting, q: stop)", "keep waiting")
+        if reply is None or reply == "q":
+            return False
+        if reply != "keep waiting":
+            self.orca("terminal", "send", "--terminal", str(self.handle), "--text", reply, "--enter")
+            progress("reply sent to the agent in Orca")
+        return True

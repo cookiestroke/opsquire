@@ -24,6 +24,13 @@
     },
     "orca": {
       "enabled": true,
+      "about": "A Claude agent in an Orca terminal on the opsquire home, in the background: opsquire waits for it, relays the interview in your terminal and brings the answer back. Needs Orca running.",
+      "output": "orca-session",
+      "cli": "orca-ide",
+      "turn_timeout_s": 1800
+    },
+    "orca-visible": {
+      "enabled": true,
       "about": "A visible Claude agent in Orca on the opsquire home; the conversation (and any interview) continues in Orca. Needs Orca running.",
       "argv": [
         "orca-ide", "agent", "launch", "--agent", "claude", "--worktree", "path:{home}",
