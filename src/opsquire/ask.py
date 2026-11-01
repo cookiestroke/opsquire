@@ -39,7 +39,8 @@ SPLIT_ON = """
 Parallel work comes first: if the request holds two or more pieces that can be built independently (no piece needs
 another's result, and no two would edit the same general script), do not build anything yourself. After at most a
 quick `opsquire find`, answer with only these lines, one per piece, and nothing else:
-SPLIT: <a self-contained request for that piece, carrying every detail from the original that it needs>
+SPLIT: <short-kebab-name> | <a self-contained request for that piece, carrying every detail it needs>
+The name (at most 30 characters, e.g. umm-disk-usage) labels the piece for the operator; make each one distinct.
 Each piece then gets its own agent working in parallel. If the request is one piece of work, carry on below.
 """
 

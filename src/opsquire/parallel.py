@@ -47,6 +47,7 @@ class Piece:
     request: str
     branch: str
     worktree: str
+    name: str = ""
     status: str = "pending"
     session: str | None = None
     waiting: str | None = None
@@ -59,8 +60,7 @@ class Piece:
 
     @property
     def label(self) -> str:
-        words = re.sub(r"[^a-z0-9]+", "-", self.request.lower()).strip("-")
-        return f"[{self.n}/{self.total} {words[:28].rstrip('-')}]"
+        return f"[{self.n}/{self.total} {self.name or kebab(self.request)}]"
 
     @property
     def handed(self) -> list[str]:
@@ -268,14 +268,49 @@ class Fanout:
         return not interrupted
 
 
-def piece_for(ask_id: str, home: Path, n: int, total: int, request: str) -> Piece:
+def kebab(text: str, limit: int = 30) -> str:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    out = ""
+    for w in words:
+        if len(out) + len(w) + 1 > limit:
+            break
+        out = f"{out}-{w}" if out else w
+    return out or "piece"
+
+
+def split_pieces(lines: list[str]) -> list[tuple[str, str]]:
+    """(name, request) per SPLIT line. Agents name pieces as `name | request`; without a name, a piece is named by
+    the words its request does not share with the others, so labels stay distinct."""
+    parsed = []
+    for line in lines:
+        m = re.match(r"([a-z0-9][a-z0-9-]{0,29})\s*\|\s*(.+)$", line.strip())
+        parsed.append((m.group(1), m.group(2)) if m else ("", line.strip()))
+    word_sets = [set(re.findall(r"[a-z0-9]+", r.lower())) for _, r in parsed]
+    common = set.intersection(*word_sets) if word_sets else set()
+    named = []
+    for name, request in parsed:
+        if not name:
+            name = kebab(" ".join(w for w in re.findall(r"[a-z0-9]+", request.lower()) if w not in common))
+        named.append((name, request))
+    return named
+
+
+def piece_for(ask_id: str, home: Path, n: int, total: int, name: str, request: str) -> Piece:
     return Piece(
         n=n,
         total=total,
         request=request,
         branch=f"ask/{ask_id}/{n}",
         worktree=str(home / homegit.WORKTREES / ask_id / str(n)),
+        name=name,
     )
+
+
+def run_lines(task_id: str) -> list[str]:
+    """The commands that hand a task over: dry then apply for a changing one, a single read run otherwise."""
+    meta = resolve_task(task_id).meta
+    changes = bool(meta and meta.changes_prod)
+    return [f"opsquire run {task_id}"] + ([f"opsquire run {task_id} --apply"] if changes else [])
 
 
 def bundle(fan: Fanout, pieces: list[Piece]) -> str | None:
@@ -295,7 +330,8 @@ def bundle(fan: Fanout, pieces: list[Piece]) -> str | None:
         return None
     t = now()
     area = areas.pop() if len(areas) == 1 else "multi"
-    name = f"{t:%Y%m%d-%H%M}_{area}_ask-{fan.ask_id[-8:].lower().replace('_', '-')}"
+    names = "-".join(p.name or f"piece{p.n}" for p in pieces if p.status == "merged" and p.handed)
+    name = f"{t:%Y%m%d-%H%M}_{area}_{kebab('all ' + names.replace('-', ' '), 48)}"
     folder = fan.home / "tasks" / f"{t:%Y-%m}" / name
     purpose = f"Every piece of ask {fan.ask_id} in one command: {fan.whole[:200]}"
     meta = plan_meta(name, t, area, purpose, f"opsquire-ask/{fan.name} {fan.ask_id}", steps)
@@ -324,7 +360,7 @@ def summary(pieces: list[Piece], plan: str | None) -> str:
             lines.append(f"  {p.text.strip().splitlines()[-1][:300]}")
     if plan:
         lines += ["", "Every ready piece in one plan (in order):"]
-        lines += [f"RUN: opsquire run {plan}", f"RUN: opsquire run {plan} --apply"]
+        lines += [f"RUN: {cmd}" for cmd in run_lines(plan)]
     return "\n".join(lines)
 
 
@@ -345,7 +381,7 @@ def finish(fan: Fanout, res: AskResult, pieces: list[Piece], started: dt.datetim
     res.task_ids = sorted({t for p in pieces for t in p.task_ids} | ({plan} if plan else set()))
     res.actions = [(k, t) for p in pieces if p.status == "merged" for k, t in p.actions]
     if plan:
-        res.actions += [("RUN", f"opsquire run {plan}"), ("RUN", f"opsquire run {plan} --apply")]
+        res.actions += [("RUN", cmd) for cmd in run_lines(plan)]
     status = "interrupted" if not ok else "waiting" if res.waiting else "ok" if res.exit_code == 0 else "failed"
     save_record(
         {
@@ -384,8 +420,9 @@ def fan_out(
 ) -> AskResult:
     fan = Fanout(res.ask_id, whole, name, agent, grill, max_agents, budget)
     homegit.commit(fan.home, None, f"snapshot before ask {res.ask_id}")
-    total = len(res.split)
-    pieces = [piece_for(res.ask_id, fan.home, i, total, r) for i, r in enumerate(res.split, 1)]
+    named = split_pieces(res.split)
+    pieces = [piece_for(res.ask_id, fan.home, i, len(named), n, r) for i, (n, r) in enumerate(named, 1)]
+    total = len(pieces)
     say(f"opsquire: split into {total} pieces, one agent each:")
     for p in pieces:
         say(f"  {p.label} {p.request}")
