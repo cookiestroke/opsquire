@@ -8,6 +8,7 @@ import os
 import select
 import signal
 import sys
+import time
 from collections.abc import Callable
 from types import FrameType
 from typing import Any
@@ -58,6 +59,19 @@ def _wait_for_echo() -> None:
             os.read(int(fd), 1)
     except (OSError, ValueError):
         pass
+
+
+_last_progress = [0.0]
+
+
+def progress(label: str, done: float, total: float, unit: str = "") -> None:
+    """Report progress; opsquire draws one updating bar and logs every 10%. unit "B" means bytes (shown as
+    KB/MB/GB with speed). Calls closer than 0.2 s apart are dropped, except the final one."""
+    now = time.monotonic()
+    if done < total and now - _last_progress[0] < 0.2:
+        return
+    _last_progress[0] = now
+    emit("progress", label, done=done, total=total, unit=unit)
 
 
 def confirm(question: str) -> None:

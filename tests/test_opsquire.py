@@ -797,6 +797,56 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("docs").returncode, 0)
         self.assertFalse((self.home / "docs/web1_shared.md").exists())
 
+    PROGRESS_BODY = (
+        "import json\n\n"
+        "for i in range(51):\n"
+        "    ev = {'event': 'progress', 'msg': 'download', 'done': i * 2 << 20, 'total': 100 << 20, 'unit': 'B'}\n"
+        "    print('@@OPSQUIRE ' + json.dumps(ev), flush=True)\n"
+        "    if i == 25:\n"
+        "        print('halfway note', flush=True)\n"
+    )
+
+    def test_progress_without_terminal_prints_every_ten_percent_and_logs_sparingly(self) -> None:
+        self.new("prog", self.PROGRESS_BODY)
+        r = self.cli("run", "prog")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = [x for x in r.stdout.splitlines() if x.startswith("download [")]
+        self.assertLessEqual(len(lines), 12)
+        self.assertIn("100/100 MB 100%", lines[-1])
+        self.assertIn("halfway note", r.stdout)
+        rec = self.last("prog")
+        events = [e for e in self.events(rec) if e["event"] == "progress"]
+        self.assertTrue(2 <= len(events) <= 12, len(events))
+        self.assertEqual(events[-1]["done"], events[-1]["total"])
+
+    def test_progress_on_a_terminal_redraws_one_line_and_steps_print_above_it(self) -> None:
+        self.new("progtty", self.PROGRESS_BODY)
+        r = self.cli("run", "progtty", answers=[])
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("\r\x1b[K", r.stdout)
+        self.assertIn("█", r.stdout)
+        self.assertRegex(r.stdout, r"\r\x1b\[Khalfway note")
+
+    def test_bash_progress_helper(self) -> None:
+        body = BASH_HEADER + "sq_progress files 3 10\nsq_progress files 10 10\n"
+        self.new("progsh", body, lang="sh")
+        r = self.cli("run", "progsh")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("files [", r.stdout)
+        self.assertIn("10/10 100%", r.stdout)
+
+    def test_progress_formatting(self) -> None:
+        sys.path.insert(0, str(ROOT / "src"))
+        from opsquire import progress
+
+        self.assertEqual(progress.human(113 << 20, "B"), "113 MB")
+        self.assertEqual(progress.human(1.5 * (1 << 20), "B"), "1.5 MB")
+        self.assertEqual(progress.amount(113 << 20, 181 << 20, "B"), "113/181 MB")
+        self.assertEqual(progress.amount(900 << 10, 2 << 20, "B"), "900 KB/2.0 MB")
+        self.assertEqual(progress.amount(3, 10, "files"), "3/10 files")
+        self.assertEqual(progress.duration(42), "~42 s")
+        self.assertEqual(progress.duration(300), "~5 min")
+
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")
         self.assertEqual(self.cli("run", "rw").returncode, 0)

@@ -34,11 +34,12 @@ from .model import (
     runs_dir,
     write_json,
 )
+from .progress import ProgressBar
 
 OPSQUIRE_PREFIX = "@@OPSQUIRE "
 VERBOSE = os.environ.get("OPSQUIRE_VERBOSE") == "1"
 ALWAYS_SHOWN = {"blocked", "interrupted", "lock_broken", "lock_stale_reclaimed"}
-SCRIPT_EVENTS = {"step", "target", "result", "warn", "error", "confirm", "data"}
+SCRIPT_EVENTS = {"step", "target", "result", "warn", "error", "confirm", "data", "progress"}
 TARGET_STATUSES = {"ok", "failed", "skipped", "unchanged"}
 EXIT_CODES = {"ok": 0, "failed": 1, "partial": 1, "blocked": 2, "aborted": 3, "interrupted": 130}
 
@@ -91,6 +92,7 @@ class Run:
         self.locked: list[str] = []
         self.sync_w = -1
         self.tests = 0
+        self.bar = ProgressBar(sys.stdout)
 
     def event(self, event: str, msg: str = "", level: str = "info", src: str = "runner", **extra: Any) -> None:
         self.seq += 1
@@ -118,8 +120,10 @@ class Run:
             self.output_f.write(f"{ts} {stream:<3} | {text}\n")
             self.output_f.flush()
         if echo:
+            self.bar.suspend()
             echo.write(f"{text}\n" if stream != "run" else style(f"{ts} run | {text}", "2", echo) + "\n")
             echo.flush()
+            self.bar.resume()
         if stream in ("out", "err"):
             self.counts["lines"] += 1
 
@@ -138,6 +142,9 @@ class Run:
         level = str(data.pop("level", "error" if kind == "error" else "warn" if kind == "warn" else "info"))
         if kind not in SCRIPT_EVENTS:
             self.event("warn", f"unknown script event {kind!r}", level="warn")
+            return
+        if kind == "progress":
+            self.show_progress(msg, data, stream)
             return
         if kind == "target":
             name, status = str(data.get("target", "")), str(data.get("status", ""))
@@ -162,11 +169,25 @@ class Run:
             shown = f"{msg} -> {data.get('answer')}"
         self.line(stream, f"{OPSQUIRE_PREFIX}{kind}: {shown}", echo=None)
         if kind != "data" or VERBOSE:
+            self.bar.suspend()
             sys.stdout.write(f"{style(f'[{kind}]', '1', sys.stdout)} {self.redact(shown)}\n")
             sys.stdout.flush()
+            self.bar.resume()
+
+    def show_progress(self, label: str, data: dict[str, Any], stream: str) -> None:
+        try:
+            done, total = float(data.get("done", 0)), float(data.get("total", 0))
+        except (TypeError, ValueError):
+            self.event("warn", f"bad progress event for {label!r}", level="warn")
+            return
+        text = self.bar.update(self.redact(label), done, total, str(data.get("unit", "")))
+        if text:
+            self.event("progress", label, src="script", done=done, total=total, unit=data.get("unit", ""))
+            self.line(stream, f"{OPSQUIRE_PREFIX}progress: {text}", echo=None)
 
     def release_prompt(self) -> None:
         """The script printed everything before its prompt and that output is now echoed: let it ask."""
+        self.bar.close()
         if self.sync_w >= 0:
             with contextlib.suppress(OSError):
                 os.write(self.sync_w, b"x")
@@ -419,6 +440,7 @@ class Run:
                     self.line(name, text, echo=sys.stdout if name == "out" else sys.stderr)
             code = proc.wait()
         finally:
+            self.bar.close()
             for s, h in previous.items():
                 signal.signal(s, h)
             os.close(self.sync_w)

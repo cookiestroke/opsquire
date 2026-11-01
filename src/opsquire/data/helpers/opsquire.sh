@@ -22,6 +22,7 @@ sq_step() { sq_emit event step msg "$*"; }
 sq_result() { sq_emit event result msg "$*"; }
 sq_warn() { sq_emit event warn msg "$*"; }
 sq_error() { sq_emit event error msg "$*"; }
+sq_progress() { sq_emit event progress msg "$1" "done" "$2" total "$3" unit "${4:-}"; }
 sq_target() { sq_emit event target target "$1" status "$2" msg "${3:-}"; }
 
 sq__wait_for_echo() {
