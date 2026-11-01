@@ -15,6 +15,7 @@ from typing import Any
 from . import locks, runner
 from .ask import ask
 from .docs import write_docs
+from .integrate import integrate
 from .lint import lint_task, save_lint
 from .model import (
     DATA_DIR,
@@ -335,6 +336,12 @@ def cmd_contract(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_integrate(a: argparse.Namespace) -> int:
+    for line in integrate(a.dry_run):
+        print(line)
+    return 0
+
+
 def cmd_docs(a: argparse.Namespace) -> int:
     out = write_docs()
     print(f"wrote {out / 'CATALOG.md'} and one page per general script in {out}")
@@ -459,6 +466,10 @@ def parser() -> argparse.ArgumentParser:
     ct = sub.add_parser("contract", help="print the agent contract (packaged AGENTS.md + the home's LOCAL.md)")
     ct.add_argument("--write", action="store_true", help="write it to the home as AGENTS.md and CLAUDE.md")
     ct.set_defaults(fn=cmd_contract)
+
+    ig = sub.add_parser("integrate", help="install the opsquire skill for Claude agents; register the home in Orca")
+    ig.add_argument("--dry-run", action="store_true")
+    ig.set_defaults(fn=cmd_integrate)
 
     dc = sub.add_parser("docs", help="regenerate docs/: the catalog and an API page per general script")
     dc.set_defaults(fn=cmd_docs)

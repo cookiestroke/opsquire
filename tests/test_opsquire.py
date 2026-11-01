@@ -847,6 +847,61 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(progress.duration(42), "~42 s")
         self.assertEqual(progress.duration(300), "~5 min")
 
+    def fake_orca(self, running: bool, registered: str = "") -> Path:
+        bin_dir = self.tmp / "orca-bin"
+        bin_dir.mkdir(exist_ok=True)
+        cli = bin_dir / "orca-ide"
+        cli.write_text(f'#!/bin/sh\nexec {sys.executable} {ROOT / "tests/fake_orca.py"} "$@"\n')
+        cli.chmod(0o755)
+        log = self.tmp / "orca-calls.jsonl"
+        self.env |= {"PATH": f"{bin_dir}:{self.env['PATH']}", "FAKE_ORCA_LOG": str(log)}
+        self.env |= {"FAKE_ORCA_RUNNING": "1" if running else "0", "FAKE_ORCA_REGISTERED": registered}
+        self.env["CLAUDE_CONFIG_DIR"] = str(self.tmp / "claude")
+        return log
+
+    def orca_calls(self, log: Path) -> list[list[str]]:
+        return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+
+    def test_integrate_installs_the_skill_idempotently(self) -> None:
+        self.fake_orca(running=False)
+        skill = self.tmp / "claude/skills/opsquire/SKILL.md"
+        r = self.cli("integrate", "--dry-run")
+        self.assertIn("claude skill: would be installed", r.stdout)
+        self.assertFalse(skill.exists())
+        r = self.cli("integrate")
+        self.assertIn("claude skill: installed", r.stdout)
+        self.assertIn("orca: not running", r.stdout)
+        self.assertEqual(skill.read_text(), (ROOT / "src/opsquire/data/skills/opsquire/SKILL.md").read_text())
+        self.assertIn("claude skill: unchanged", self.cli("integrate").stdout)
+
+    def test_integrate_registers_the_home_in_orca_once(self) -> None:
+        log = self.fake_orca(running=True)
+        r = self.cli("integrate")
+        self.assertIn(f"orca: registered {self.home}", r.stdout)
+        self.assertIn(["repo", "add", "--path", str(self.home), "--json"], self.orca_calls(log))
+        self.fake_orca(running=True, registered=str(self.home))
+        self.assertIn("orca: home already registered", self.cli("integrate").stdout)
+
+    def test_ask_via_orca_launches_a_visible_agent_on_the_home(self) -> None:
+        log = self.fake_orca(running=True)
+        r = self.cli("ask", "--agent", "orca", "restart", "web1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Launched a Claude agent in Orca (terminal)", r.stdout)
+        launch = [c for c in self.orca_calls(log) if c[:2] == ["agent", "launch"]][0]
+        self.assertIn(f"path:{self.home}", launch)
+        self.assertIn("--focus", launch)
+        prompt = launch[launch.index("--prompt") + 1]
+        self.assertIn("Request: restart web1", prompt)
+        self.assertIn("AGENTS.md", prompt)
+        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
+        self.assertEqual((rec["agent"], rec["status"]), ("orca", "ok"))
+
+    def test_ask_via_orca_reports_a_refused_launch(self) -> None:
+        self.fake_orca(running=False)
+        r = self.cli("ask", "--agent", "orca", "hi")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Orca refused the launch", r.stdout + r.stderr)
+
     def test_unwritable_var_gives_clear_error(self) -> None:
         self.new("rw", "print(1)\n")
         self.assertEqual(self.cli("run", "rw").returncode, 0)

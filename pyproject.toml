@@ -20,7 +20,7 @@ opsquire = "opsquire.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-opsquire = ["data/*.json", "data/*.toml", "data/*.ini", "data/*.md", "data/helpers/*", "data/templates/*"]
+opsquire = ["data/*.json", "data/*.toml", "data/*.ini", "data/*.md", "data/helpers/*", "data/templates/*", "data/skills/*/*"]
 
 [tool.mypy]
 strict = true

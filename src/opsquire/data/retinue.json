@@ -18,8 +18,18 @@
         "Edit(/{home}/tasks/**)", "Edit(/{home}/general/**)",
         "Bash(opsquire find *)", "Bash(opsquire ls)", "Bash(opsquire ls *)", "Bash(opsquire show *)", "Bash(opsquire new *)",
         "Bash(opsquire lint *)", "Bash(opsquire runs)", "Bash(opsquire runs *)", "Bash(opsquire last)", "Bash(opsquire last *)",
-        "Bash(opsquire log *)", "Bash(opsquire locks)", "Bash(opsquire locks *)"
+        "Bash(opsquire log *)", "Bash(opsquire locks)", "Bash(opsquire locks *)",
+        "Bash(opsquire home)", "Bash(opsquire contract)", "Bash(opsquire docs)", "Bash(opsquire wait *)"
       ]
+    },
+    "orca": {
+      "enabled": true,
+      "about": "A visible Claude agent in Orca on the opsquire home; the conversation (and any interview) continues in Orca. Needs Orca running.",
+      "argv": [
+        "orca-ide", "agent", "launch", "--agent", "claude", "--worktree", "path:{home}",
+        "--prompt", "{system}\n\nRequest: {prompt}", "--focus", "--json"
+      ],
+      "output": "orca-launch"
     },
     "codex": {
       "enabled": false,

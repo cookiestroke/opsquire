@@ -142,9 +142,28 @@ def parse_text(stream: IO[str], progress: Callable[[str], None], res: AskResult)
         res.text += line
 
 
+def parse_orca_launch(stream: IO[str], progress: Callable[[str], None], res: AskResult) -> None:
+    """`orca-ide agent launch --json` answers with a receipt; the conversation itself continues in Orca."""
+    raw = stream.read()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        res.text, res.exit_code = f"Orca did not return a launch receipt: {raw.strip()[:300]}", 1
+        return
+    if not data.get("ok", False):
+        error = data.get("error") or data
+        res.text, res.exit_code = f"Orca refused the launch: {json.dumps(error)[:300]}", 1
+        return
+    result = data.get("result") or {}
+    kind = (result.get("outcome") or {}).get("kind", "session")
+    res.text = f"Launched a Claude agent in Orca ({kind}); continue the conversation there."
+    progress(f"orca receipt: {json.dumps(result)[:200]}")
+
+
 PARSERS: dict[str, Callable[[IO[str], Callable[[str], None], AskResult], None]] = {
     "claude-stream-json": parse_claude_stream,
     "text": parse_text,
+    "orca-launch": parse_orca_launch,
 }
 
 
