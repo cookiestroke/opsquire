@@ -133,12 +133,17 @@ sq.result("db1 restarted on v1.2.3")  # sq_result "..."
 sq.warn("...")
 sq.error("...")
 sq.data("counts", rows=12)
+sq.progress("download", done, total, "B")  # live bar, logged every 10%  (sq_progress label done total [unit])
 if sq.APPLY:
     sq.confirm("Restart all four?")  # sq_confirm "...": asks on the terminal, exits 3 on no
 sq.run(main, cleanup=undo_scratch)  # bash: redefine sq_cleanup() after sourcing
 ```
 
 Remote payload (no helpers): `print("@@OPSQUIRE " + json.dumps({"event": "target", "target": "db2", "status": "ok", "msg": "..."}), flush=True)`.
+
+Anything that can take more than a few seconds (downloads, waits, loops over many hosts or files) reports
+`progress`: the operator sees one updating bar with speed and time left instead of a silent terminal (a silent
+download got interrupted twice before this existed). Unit `"B"` means bytes; other units are shown as counts.
 
 Report every target with a `target` event. If a script reports none, all targets inherit the run
 outcome. If it reports some, the unreported ones become `skipped`.
