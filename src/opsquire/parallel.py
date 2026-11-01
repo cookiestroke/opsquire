@@ -202,7 +202,7 @@ class Fanout:
         message = f"ask {self.ask_id}: merge piece {piece.n} ({piece.name})"
         with self.merge_lock:
             if homegit.merge_into(self.home, piece.branch, message):
-                piece.status = "merged"
+                self.merged(piece)
                 return
         conflicts = homegit.merge_from(wt, self.base)
         if conflicts:
@@ -216,9 +216,20 @@ class Fanout:
             homegit.commit(wt, None, f"ask {self.ask_id} piece {piece.n} ({piece.name}): resolve merge")
         with self.merge_lock:
             if homegit.merge_into(self.home, piece.branch, message):
-                piece.status = "merged"
+                self.merged(piece)
                 return
         piece.status, piece.waiting = "clash", "could not merge into the home (it changed again, or has local edits)"
+
+    def merged(self, piece: Piece) -> None:
+        """Lint the handed-over tasks again in the home (under the merge lock): lint results are not versioned, so
+        the worktree's do not come along, and this checks the merged files themselves."""
+        piece.status = "merged"
+        for tid in piece.handed:
+            task = resolve_task(tid)
+            result = lint_task(task)
+            save_lint(task, result)
+            if not result.ok:
+                say(f"  ! {piece.label} {tid} does not pass lint in the home after merging:\n{result.output}")
 
     def park(self, piece: Piece) -> None:
         """Keep an unfinished piece's work on its branch and remove its worktree, so nothing is left lying around."""

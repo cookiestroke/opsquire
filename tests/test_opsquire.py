@@ -954,7 +954,8 @@ class OpsTest(unittest.TestCase):
         self.assertNotIn("--apply", r.stdout)
         plan = json.loads(next(self.home.glob(f"tasks/*/{runs[-1]}/meta.json")).read_text())
         self.assertEqual([s["task"] for s in plan["steps"]], runs[:2])
-        self.assertEqual(json.loads(self.cli("show", runs[-1], "--json").stdout)["status"], "ready")
+        for tid in runs:
+            self.assertEqual(json.loads(self.cli("show", tid, "--json").stdout)["status"], "ready", tid)
         calls = [json.loads(x) for x in log.read_text().splitlines()]
         cwds = {c["piece"]: c["cwd"] for c in calls if c["piece"]}
         self.assertEqual(set(cwds), {"alpha task", "beta task"})

@@ -1,5 +1,9 @@
 line-length = 120
 target-version = "py310"
 
+# No first-party source roots: otherwise ruff treats modules next to the current directory as first-party, and the
+# import order a script needs would depend on where `opsquire lint` was started.
+src = []
+
 [lint]
 select = ["E", "F", "W", "I", "B", "UP"]
