@@ -858,6 +858,10 @@ class OpsTest(unittest.TestCase):
         self.env |= {"FAKE_ORCA_RUNNING": "1" if running else "0", "FAKE_ORCA_REGISTERED": registered}
         self.env["CLAUDE_CONFIG_DIR"] = str(self.tmp / "claude")
         self.env["HOME"] = str(self.tmp / "user")
+        git = bin_dir / "git"
+        git.write_text(f'#!/bin/sh\nexec {sys.executable} {ROOT / "tests/fake_git.py"} "$@"\n')
+        git.chmod(0o755)
+        self.env |= {"FAKE_GIT_REPO": "1", "FAKE_GIT_REMOTES": ""}
         return log
 
     def orca_calls(self, log: Path) -> list[list[str]]:
@@ -883,6 +887,14 @@ class OpsTest(unittest.TestCase):
         self.assertIn(["repo", "add", "--path", str(self.home), "--json"], self.orca_calls(log))
         self.fake_orca(running=True, registered=str(self.home))
         self.assertIn("orca: home already registered", self.cli("integrate").stdout)
+
+    def test_integrate_requires_a_local_only_git_home(self) -> None:
+        log = self.fake_orca(running=True)
+        self.env["FAKE_GIT_REPO"] = "0"
+        self.assertIn("is not a git repository yet: run `git init", self.cli("integrate").stdout)
+        self.env |= {"FAKE_GIT_REPO": "1", "FAKE_GIT_REMOTES": "origin"}
+        self.assertIn("refusing: the home repository has remotes (origin)", self.cli("integrate").stdout)
+        self.assertFalse(any(c[:2] == ["repo", "add"] for c in self.orca_calls(log)))
 
     def test_ask_via_orca_launches_a_visible_agent_on_the_home(self) -> None:
         log = self.fake_orca(running=True)

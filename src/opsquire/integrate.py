@@ -55,6 +55,23 @@ def orca_json(cli: str, *args: str) -> dict[str, Any]:
     return data
 
 
+def home_repo_problem(home: str) -> str:
+    """Orca registers git repositories only. The home holds operator-specific tasks and run history, so it must be
+    a local-only repository: a configured remote is refused."""
+    git = shutil.which("git")
+    if not git:
+        return "git is not installed; the home must be a local git repository for Orca"
+    inside = subprocess.run([git, "-C", home, "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+    if inside.stdout.strip() != "true":
+        return (
+            f"{home} is not a git repository yet: run `git init {home}` and make a first commit, then integrate again"
+        )
+    remotes = subprocess.run([git, "-C", home, "remote"], capture_output=True, text=True).stdout.split()
+    if remotes:
+        return f"refusing: the home repository has remotes ({', '.join(remotes)}); it must stay local-only"
+    return ""
+
+
 def register_home(dry: bool) -> str:
     """Register the opsquire home as an Orca workspace, so agents can be launched there."""
     cli = orca_cli()
@@ -64,6 +81,9 @@ def register_home(dry: bool) -> str:
     if not ((status.get("result") or {}).get("runtime") or {}).get("reachable"):
         return "orca: not running; open Orca and run `opsquire integrate` again to register the home"
     home = str(home_dir())
+    problem = home_repo_problem(home)
+    if problem:
+        return f"orca: {problem}"
     repos = orca_json(cli, "repo", "list")
     listed = json.dumps(repos.get("result", ""))
     if home in listed:
