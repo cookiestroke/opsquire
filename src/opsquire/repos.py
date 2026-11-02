@@ -198,7 +198,7 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
     if earlier and not explicit and state.get("title") != title:
         raise OpsquireError(
             f"{copy} already pushed to branch {earlier} ({state.get('pr')}) for "
-            f"{state.get('title') or 'an earlier PR'!r}; for a new PR run `opsquire repo checkout {repo.name}` and "
+            f"{repr(state['title']) if state.get('title') else 'an earlier PR'}; for a new PR run `opsquire repo checkout {repo.name}` and "
             f"edit the new copy, or pass --branch {earlier} to add these changes to that PR"
         )
     branch = branch or earlier or f"{repo.branch_prefix}{slug(title)}"
