@@ -105,6 +105,11 @@ def checkout(name: str, base: str | None = None) -> Path:
     (and push) each other's edits."""
     repo = get_repo(name)
     base = base or repo.base
+    if (
+        base.startswith("-")
+        or subprocess.run(["git", "check-ref-format", "--branch", base], capture_output=True).returncode
+    ):
+        raise OpsquireError(f"not a branch name: {base!r}")
     owner = owner_id()
     label = name if base == repo.base else f"{name}-{slug(base)}"
     dest = copies_dir(owner) / (label if owner != "chat" else f"{label}-{secrets.token_hex(4)}")
@@ -238,7 +243,7 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
     current = {f: blob_digest(copy / f) for f in changed} | {f: "deleted" for f in deleted}
     current |= {f: blob_digest(copy / f) for f in pushed if f not in current and (copy / f).is_file()}
     send = {f: d for f, d in current.items() if pushed.get(f) != d}
-    if not send and state.get("pr"):
+    if not send and state.get("commit"):
         return summary(repo, state, changed, deleted)
     additions = [
         {"path": f, "contents": base64.b64encode((copy / f).read_bytes()).decode()}

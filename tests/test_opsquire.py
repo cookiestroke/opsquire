@@ -1197,6 +1197,32 @@ class OpsTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("refusing to commit straight onto main", r.stderr)
 
+    def test_repo_checkout_refuses_a_base_that_is_not_a_branch_name(self) -> None:
+        self.code_repo()
+        for bad in ("--upload-pack=touch pwned", "a..b", "x y"):
+            r = self.cli("repo", "checkout", "umm", f"--base={bad}")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("not a branch name", r.stderr)
+        self.assertFalse((self.home / ".repos").exists())
+
+    def test_repo_pr_onto_a_branch_without_a_pr_does_not_repeat_the_commit(self) -> None:
+        repo = self.code_repo()
+        head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+        subprocess.run(
+            ["git", "-C", str(repo), "update-ref", "refs/remotes/origin/peer/review", head.strip()],
+            env=self.env,
+            check=True,
+        )
+        (self.tmp / "gh.json").write_text(json.dumps({"refs": {"peer/review": head.strip()}, "commits": [], "prs": []}))
+        copy = Path(self.cli("repo", "checkout", "umm", "--base", "peer/review").stdout.strip())
+        (copy / "README.md").write_text("on top\n")
+        for _ in range(2):
+            r = self.cli("repo", "pr", str(copy), "--title", "On top", "--branch", "peer/review")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("Pushed to peer/review (no open PR)", r.stdout)
+        self.assertEqual(len(self.gh_state()["commits"]), 1)
+        self.assertEqual(self.gh_state()["prs"], [])
+
     def test_repo_pr_from_another_base_opens_the_pr_against_that_base(self) -> None:
         repo = self.code_repo()
         head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
