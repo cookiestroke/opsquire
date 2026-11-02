@@ -28,6 +28,7 @@ var/locks/locks.json                          held locks
 var/asks/<ask-id>.json                        every `opsquire ask`, with its agent session
 repos.json                                    optional: repos agents may change through PRs
 .repos/<ask-id>/<repo>/                       an ask's copies of those repos (not versioned)
+.repos/chat/<repo>-<id>/                      a copy made outside an ask, one per checkout (not versioned)
 LOCAL.md                                      local rules, appended to this contract
 retinue.json                                  optional: this home's agents (overrides the packaged one)
 ```
@@ -184,7 +185,7 @@ Never edit the operator's own checkout of a repo.
 
 ```
 opsquire repo list                                          registered repos
-opsquire repo checkout <repo>                               your copy of origin/<base> under .repos/; prints its path
+opsquire repo checkout <repo>                               a copy of origin/<base> under .repos/; prints its path
 opsquire repo pr <copy> --title "..." --body-file <file>    GitHub-signed commit of the copy's changes + open the PR
 ```
 
@@ -193,7 +194,11 @@ opsquire repo pr <copy> --title "..." --body-file <file>    GitHub-signed commit
   copy), and write the PR description outside the copy.
 - `repo pr` compares the copy with its base commit, pushes the differences as one commit through GitHub's
   createCommitOnBranch (signed by GitHub) on `<branch_prefix><title words>` (or `--branch`), and opens the PR.
-  Running it again after more edits adds a commit with only what changed since and keeps the same PR.
+  Running it again with the same title after more edits adds a commit with only what changed since and keeps the
+  same PR. A different title on a copy that already has a branch is refused: start a new PR from a new checkout,
+  or pass `--branch <that branch>` to add to the earlier PR on purpose.
+- Inside an ask, `repo checkout` reuses the ask's one copy per repo. Outside an ask (a chat session) every
+  `repo checkout` makes a new copy and prints its path; use that path, never another session's copy.
 - PRs open ready for review, config repos included; follow the repo's PR conventions (for umm_config, call out
   risky fields). Opsquire never merges or deploys; a base branch that auto-deploys gets a warning.
 - Hand over each PR with a `PR: <url>` line. An ask removes its copies when it ends `ok`; a waiting or interrupted
