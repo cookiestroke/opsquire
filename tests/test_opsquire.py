@@ -941,6 +941,27 @@ class OpsTest(unittest.TestCase):
         self.assertIn(f"ready: {folder.name}", self.git("log", "--format=%s"))
         self.assertEqual(self.git("status", "--short"), "")
 
+    def test_home_commits_are_not_signed_even_when_the_operator_signs_everything(self) -> None:
+        gpg = self.tmp / "gpg-that-fails"
+        gpg.write_text("#!/bin/sh\necho 'gpg: signing failed: no passphrase' >&2\nexit 2\n")
+        gpg.chmod(0o755)
+        gitconfig = self.tmp / "gitconfig"
+        gitconfig.write_text(
+            "[user]\n\tname = Test\n\temail = test@example.com\n\tsigningkey = ABC\n"
+            f"[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = {gpg}\n"
+        )
+        self.env |= {"GIT_CONFIG_GLOBAL": str(gitconfig), "GIT_CONFIG_NOSYSTEM": "1"}
+        self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
+        self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))
+        self.assertIn("home repo: initialized", self.cli("integrate").stdout)
+        folder = self.new("tidy", "print(1)\n")
+        r = self.cli("lint", "tidy")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("home not committed", r.stdout + r.stderr)
+        self.assertIn(f"ready: {folder.name}", self.git("log", "--format=%s"))
+        self.assertEqual(set(self.git("log", "--format=%G?").split()), {"N"})
+        self.assertEqual(self.git("config", "--global", "commit.gpgsign").strip(), "true")
+
     def test_parallel_ask_builds_each_piece_in_its_own_worktree_and_bundles_a_plan(self) -> None:
         log = self.split("alpha-build | alpha task", "beta task")
         r = self.cli("ask", "build", "alpha", "and", "beta")

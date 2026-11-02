@@ -226,9 +226,10 @@ branch `ask/<ask-id>/<n>`), all at once (`--max-agents N` limits it; `--no-split
 `opsquire integrate` installs the `opsquire` skill into Claude Code's user skills, so agents in any folder or
 worktree load this contract when they need tooling, and makes the home a local-only git repository (it refuses one
 with a remote). Opsquire commits in it by itself: when `opsquire lint` passes (the ready version), before every
-`opsquire run`, at the end of an ask, as a snapshot before a parallel ask, and when a piece merges. Commits follow
-the operator's git config, signing included; a commit that cannot be made (for example in an agent sandbox) is
-skipped with a note and picked up by the next one.
+`opsquire run`, at the end of an ask, as a snapshot before a parallel ask, and when a piece merges. These commits
+use the operator's name and email but are never signed (the repository cannot leave the machine, so a signature
+proves nothing and would ask for a passphrase before every run); a commit that cannot be made is skipped with a note
+and picked up by the next one.
 
 ### Adding an agent tool (the retinue)
 

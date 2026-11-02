@@ -1,5 +1,8 @@
 """The home as a local-only git repository: opsquire commits ready versions (lint passes), snapshots loose changes
-before a parallel ask, and gives each parallel piece its own worktree and branch that merge back when done."""
+before a parallel ask, and gives each parallel piece its own worktree and branch that merge back when done.
+
+Home commits and merges are never signed, whatever the operator's git config says: the repository cannot have a
+remote, so a signature would prove nothing to anyone, and signing would ask for a passphrase before every run."""
 
 from __future__ import annotations
 
@@ -43,24 +46,10 @@ def git(home: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     exe = shutil.which("git")
     if not exe:
         raise GitError("git is not installed")
-    r = subprocess.run([exe, "-C", str(home), *args], capture_output=True, text=True, env=signing_env())
+    r = subprocess.run([exe, "-C", str(home), "-c", "commit.gpgsign=false", *args], capture_output=True, text=True)
     if check and r.returncode != 0:
         raise GitError(f"git {' '.join(args[:2])} failed: {(r.stderr or r.stdout).strip()[:400]}")
     return r
-
-
-def signing_env() -> dict[str, str]:
-    """GPG asks for a passphrase on the terminal named by GPG_TTY; set it when opsquire runs on one, so signed commits
-    work like they do from the operator's shell."""
-    env = dict(os.environ)
-    if not env.get("GPG_TTY"):
-        for fd in (0, 1, 2):
-            try:
-                env["GPG_TTY"] = os.ttyname(fd)
-                break
-            except OSError:
-                continue
-    return env
 
 
 def is_repo(home: Path) -> bool:
@@ -119,7 +108,7 @@ def commit(home: Path, paths: list[Path] | None, message: str) -> bool:
 
 def commit_quietly(home: Path, paths: list[Path], message: str) -> str:
     """Best-effort commit (after a lint pass, before a run, after an ask); a note when it could not be made, shown
-    only on a terminal: agents lint in sandboxes that cannot sign, and their work is committed by opsquire later."""
+    only on a terminal: an agent sandbox may not be able to write the repository, and the next commit includes it."""
     if not is_repo(home):
         return ""
     try:
@@ -127,8 +116,7 @@ def commit_quietly(home: Path, paths: list[Path], message: str) -> str:
     except GitError as e:
         if not os.isatty(2):
             return ""
-        reason = "signing failed" if "gpg" in str(e) else str(e).splitlines()[0]
-        return f"(home not committed: {reason}; the next successful commit includes it)"
+        return f"(home not committed: {str(e).splitlines()[0]}; the next successful commit includes it)"
     return ""
 
 
