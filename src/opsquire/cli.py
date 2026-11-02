@@ -124,7 +124,8 @@ def cmd_lint(a: argparse.Namespace) -> int:
         tests = f" ({result.tests} tests)" if result.tests else ""
         print(f"\n{task.id}: {'LINT OK' if result.ok else 'LINT FAILED'}{tests}")
     if result.ok:
-        note = commit_quietly(home_dir(), [task.folder], f"ready: {task.id}")
+        uses = [home_dir() / "general" / u for u in (task.meta.uses if task.meta else [])]
+        note = commit_quietly(home_dir(), [task.folder, *uses], f"ready: {task.id}")
         if note:
             print(note, file=sys.stderr)
     return 0 if result.ok else 1

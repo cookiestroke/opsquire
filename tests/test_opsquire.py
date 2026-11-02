@@ -941,6 +941,17 @@ class OpsTest(unittest.TestCase):
         self.assertIn(f"ready: {folder.name}", self.git("log", "--format=%s"))
         self.assertEqual(self.git("status", "--short"), "")
 
+    def test_lint_pass_commits_the_general_scripts_it_checked(self) -> None:
+        self.git_home()
+        g = Path(self.cli("new", "web1", "shared", "--general", "--purpose", "shared logic").stdout.strip())
+        folder = self.new("user", "print(1)\n", "--uses", "web1_shared")
+        self.assertEqual(self.cli("lint", "user").returncode, 0)
+        (g / "main.py").write_text('"""Shared."""\n\nVALUE = 2\n')
+        self.assertEqual(self.cli("lint", "user").returncode, 0)
+        self.assertEqual(self.git("status", "--short"), "")
+        self.assertIn("VALUE = 2", self.git("show", "HEAD:general/web1_shared/main.py"))
+        self.assertIn(f"ready: {folder.name}", self.git("log", "-1", "--format=%s"))
+
     def test_home_commits_are_not_signed_even_when_the_operator_signs_everything(self) -> None:
         gpg = self.tmp / "gpg-that-fails"
         gpg.write_text("#!/bin/sh\necho 'gpg: signing failed: no passphrase' >&2\nexit 2\n")
