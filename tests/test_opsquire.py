@@ -1144,6 +1144,74 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("repo", "pr", str(copy), "--title", "Fix the app").returncode, 0)
         self.assertEqual(len(self.gh_state()["commits"]), 2)
 
+    def test_repo_checkout_of_another_branch_commits_onto_it_only_while_it_is_unmoved(self) -> None:
+        repo = self.code_repo()
+
+        def git(*args: str) -> str:
+            out = subprocess.run(["git", "-C", str(repo), *args], env=self.env, check=True, capture_output=True)
+            return out.stdout.decode().strip()
+
+        git("checkout", "-q", "-b", "peer/review")
+        (repo / "src/app.py").write_text("x = 1\npeer = True\n")
+        git("commit", "-qam", "peer")
+        head = git("rev-parse", "HEAD")
+        git("update-ref", "refs/remotes/origin/peer/review", head)
+        state_path = self.tmp / "gh.json"
+        state_path.write_text(
+            json.dumps(
+                {
+                    "refs": {"peer/review": head},
+                    "commits": [],
+                    "prs": [{"url": "https://github.com/acme/umm/pull/7", "head": "peer/review", "base": "main"}],
+                }
+            )
+        )
+        self.env["OPSQUIRE_ASK_ID"] = "ask-1"
+        copy = Path(self.cli("repo", "checkout", "umm", "--base", "peer/review").stdout.strip())
+        self.assertEqual(copy, self.home / ".repos/ask-1/umm-peer-review")
+        self.assertEqual((copy / "src/app.py").read_text(), "x = 1\npeer = True\n")
+        (copy / "src/app.py").write_text("x = 1\npeer = True\nmine = True\n")
+        body = self.tmp / "body.md"
+        body.write_text("No PR is opened, so this explains the commit.\n")
+        r = self.cli(
+            "repo", "pr", str(copy), "--title", "Add mine", "--branch", "peer/review", "--body-file", str(body)
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("PR: https://github.com/acme/umm/pull/7", r.stdout)
+        self.assertEqual(self.gh_state()["commits"][0]["body"], "No PR is opened, so this explains the commit.")
+        gh = self.gh_state()
+        self.assertEqual(gh["commits"][0]["branch"], "peer/review")
+        self.assertEqual(gh["commits"][0]["added"], {"src/app.py": "x = 1\npeer = True\nmine = True\n"})
+        self.assertEqual(len(gh["prs"]), 1)
+        gh["refs"]["peer/review"] = "f" * 40
+        state_path.write_text(json.dumps(gh))
+        (copy / "README.md").write_text("later\n")
+        r = self.cli("repo", "pr", str(copy), "--title", "Add mine", "--branch", "peer/review")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("expectedHeadOid mismatch", r.stderr)
+        other = Path(self.cli("repo", "checkout", "umm", "--base", "peer/review").stdout.strip())
+        self.assertEqual(other, copy)
+        main_copy = Path(self.cli("repo", "checkout", "umm").stdout.strip())
+        (main_copy / "README.md").write_text("direct\n")
+        r = self.cli("repo", "pr", str(main_copy), "--title", "Direct", "--branch", "main")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("refusing to commit straight onto main", r.stderr)
+
+    def test_repo_pr_from_another_base_opens_the_pr_against_that_base(self) -> None:
+        repo = self.code_repo()
+        head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+        subprocess.run(
+            ["git", "-C", str(repo), "update-ref", "refs/remotes/origin/peer/review", head.strip()],
+            env=self.env,
+            check=True,
+        )
+        copy = Path(self.cli("repo", "checkout", "umm", "--base", "peer/review").stdout.strip())
+        (copy / "README.md").write_text("on top\n")
+        r = self.cli("repo", "pr", str(copy), "--title", "On top")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("dev/on-top -> peer/review", r.stdout)
+        self.assertEqual(self.gh_state()["prs"][0]["base"], "peer/review")
+
     def test_chat_checkouts_never_share_a_copy(self) -> None:
         self.code_repo()
         first = self.cli("repo", "checkout", "umm")

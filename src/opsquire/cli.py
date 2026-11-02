@@ -362,7 +362,7 @@ def cmd_repo(a: argparse.Namespace) -> int:
     if a.action == "checkout":
         if not a.target:
             raise OpsquireError("say which repo: opsquire repo checkout <name>")
-        print(repos.checkout(a.target))
+        print(repos.checkout(a.target, a.base))
         return 0
     if not a.target or not a.title:
         raise OpsquireError('opsquire repo pr <copy-path> --title "..." --body-file <file>')
@@ -373,7 +373,7 @@ def cmd_repo(a: argparse.Namespace) -> int:
     if a.json:
         emit(result, True)
     else:
-        print(f"PR: {result['url']}")
+        print(f"PR: {result['url']}" if result["url"] else f"Pushed to {result['branch']} (no open PR)")
         print(
             f"   {result['repo']} {result['branch']} -> {result['base']}, commit {result['commit'][:10]}, "
             f"{len(result['changed'])} changed, {len(result['deleted'])} deleted"
@@ -528,6 +528,7 @@ def parser() -> argparse.ArgumentParser:
     rp.add_argument("--title", help="PR title (first line) and commit message")
     rp.add_argument("--body-file", help="PR description, markdown")
     rp.add_argument("--branch", help="branch name (default: <branch_prefix><title words>)")
+    rp.add_argument("--base", help="checkout: branch to copy and open the PR against (default: the repo's base)")
     rp.add_argument("--json", action="store_true")
     rp.set_defaults(fn=cmd_repo)
 

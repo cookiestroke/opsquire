@@ -38,6 +38,7 @@ elif args[:2] == ["api", "graphql"]:
         {
             "branch": branch,
             "headline": inp["message"]["headline"],
+            "body": inp["message"]["body"],
             "added": {a["path"]: base64.b64decode(a["contents"]).decode() for a in changes.get("additions", [])},
             "deleted": [d["path"] for d in changes.get("deletions", [])],
         }

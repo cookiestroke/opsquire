@@ -79,13 +79,13 @@ def gh(*args: str, stdin: str | None = None) -> str:
     return r.stdout
 
 
-def fetch(repo: Repo) -> bool:
+def fetch(repo: Repo, base: str) -> bool:
     """Best effort: refresh origin/<base>. Fails quietly where .git is not writable (agent sandboxes); asks fetch
     every registered repo from the operator's terminal before the agent starts."""
     exe = shutil.which("git")
     if not exe or not repo.path.is_dir():
         return False
-    r = subprocess.run([exe, "-C", str(repo.path), "fetch", "-q", "origin", repo.base], capture_output=True)
+    r = subprocess.run([exe, "-C", str(repo.path), "fetch", "-q", "origin", base], capture_output=True)
     return r.returncode == 0
 
 
@@ -99,16 +99,19 @@ def owner_id() -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "-", os.environ.get("OPSQUIRE_ASK_ID", "chat"))
 
 
-def checkout(name: str) -> Path:
-    """Export the repo's base branch into a copy; returns its path. An ask reuses its one copy per repo; outside an
-    ask every checkout is a new copy, so chat sessions never share (and push) each other's edits."""
+def checkout(name: str, base: str | None = None) -> Path:
+    """Export the repo's base branch (or `base`, e.g. a colleague's PR branch) into a copy; returns its path. An ask
+    reuses its one copy per repo and base; outside an ask every checkout is a new copy, so chat sessions never share
+    (and push) each other's edits."""
     repo = get_repo(name)
+    base = base or repo.base
     owner = owner_id()
-    dest = copies_dir(owner) / (name if owner != "chat" else f"{name}-{secrets.token_hex(4)}")
+    label = name if base == repo.base else f"{name}-{slug(base)}"
+    dest = copies_dir(owner) / (label if owner != "chat" else f"{label}-{secrets.token_hex(4)}")
     if (dest / STATE).is_file():
         return dest
-    fetch(repo)
-    sha = git(repo.path, "rev-parse", f"origin/{repo.base}").strip()
+    fetch(repo, base)
+    sha = git(repo.path, "rev-parse", f"origin/{base}").strip()
     staging = dest.with_name(f".{name}.{os.getpid()}.tmp")
     try:
         staging.mkdir(parents=True)
@@ -117,7 +120,7 @@ def checkout(name: str) -> Path:
         with tarfile.open(archive) as tar:
             tar.extractall(staging, filter="tar")
         archive.unlink()
-        write_json(staging / STATE, {"repo": name, "base": repo.base, "base_sha": sha})
+        write_json(staging / STATE, {"repo": name, "base": base, "base_sha": sha})
         staging.rename(dest)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
@@ -190,9 +193,10 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
     """Commit the copy's changes (GitHub-signed) to a branch and open its PR, or add a commit to an existing one."""
     state = copy_state(copy)
     repo = get_repo(state["repo"])
+    base = state.get("base", repo.base)
     changed, deleted = changes(copy)
     if not changed and not deleted:
-        raise OpsquireError(f"{copy} has no changes against {repo.base}")
+        raise OpsquireError(f"{copy} has no changes against {base}")
     explicit = branch is not None
     earlier = state.get("branch")
     if earlier and not explicit and state.get("title") != title:
@@ -205,8 +209,15 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
     branch = branch or earlier or f"{repo.branch_prefix}{slug(title)}"
     if earlier and branch != earlier:
         state["pushed"] = {}
+    onto_base = branch == base
+    if onto_base and base == repo.base:
+        raise OpsquireError(f"refusing to commit straight onto {base}; open a PR from a new branch")
     head = branch_head(repo, branch)
-    if head is None:
+    if onto_base:
+        # The copy holds whole files from base_sha; if the branch moved since, pushing them would revert those
+        # commits, so GitHub must refuse unless the head is still what this copy last saw.
+        head = state.get("commit") or state["base_sha"]
+    elif head is None:
         gh(
             "api",
             "-X",
@@ -243,7 +254,10 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
             "input": {
                 "branch": {"repositoryNameWithOwner": repo.github, "branchName": branch},
                 "expectedHeadOid": head,
-                "message": {"headline": headline, "body": rest.strip()},
+                "message": {
+                    "headline": headline,
+                    "body": (rest.strip() or body.strip()) if onto_base else rest.strip(),
+                },
                 "fileChanges": {"additions": additions, "deletions": removals},
             }
         },
@@ -255,15 +269,15 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
     existing = gh("pr", "list", "--repo", repo.github, "--head", branch, "--state", "open", "--json", "url")
     urls = [p["url"] for p in json.loads(existing or "[]")]
     url = (
-        urls[0]
-        if urls
+        (urls[0] if urls else "")
+        if urls or onto_base
         else gh(
             "pr",
             "create",
             "--repo",
             repo.github,
             "--base",
-            repo.base,
+            base,
             "--head",
             branch,
             "--title",
@@ -280,15 +294,16 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
 
 
 def summary(repo: Repo, state: dict[str, Any], changed: list[str], deleted: list[str]) -> dict[str, Any]:
+    base = state.get("base", repo.base)
     return {
         "repo": repo.name,
         "branch": state["branch"],
-        "base": repo.base,
+        "base": base,
         "commit": state["commit"],
         "url": state["pr"],
         "changed": changed,
         "deleted": deleted,
-        "auto_deploy_base": repo.base in AUTO_DEPLOY_BRANCHES,
+        "auto_deploy_base": base in AUTO_DEPLOY_BRANCHES or state["branch"] in AUTO_DEPLOY_BRANCHES,
     }
 
 

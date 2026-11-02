@@ -459,7 +459,7 @@ def ask(
     can_split = split and not session and not task_id and homegit.is_repo(home)
     copies = copies or res.ask_id
     for repo in repos.registry().values():
-        repos.fetch(repo)
+        repos.fetch(repo, repo.base)
     env = agent_env(name, res.ask_id, {"OPSQUIRE_ASK_ID": copies})
     conv = Conversation(name, agent, str(home), system_prompt(str(home), grill, can_split), env)
     conv.session = session

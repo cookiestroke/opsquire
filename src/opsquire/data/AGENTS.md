@@ -186,6 +186,7 @@ Never edit the operator's own checkout of a repo.
 ```
 opsquire repo list                                          registered repos
 opsquire repo checkout <repo>                               a copy of origin/<base> under .repos/; prints its path
+opsquire repo checkout <repo> --base <branch>               a copy of another branch (e.g. a colleague's PR)
 opsquire repo pr <copy> --title "..." --body-file <file>    GitHub-signed commit of the copy's changes + open the PR
 ```
 
@@ -197,6 +198,11 @@ opsquire repo pr <copy> --title "..." --body-file <file>    GitHub-signed commit
   Running it again with the same title after more edits adds a commit with only what changed since and keeps the
   same PR. A different title on a copy that already has a branch is refused: start a new PR from a new checkout,
   or pass `--branch <that branch>` to add to the earlier PR on purpose.
+- `--base <branch>` copies that branch instead; `repo pr` then opens its PR against it, or with `--branch <that same
+  branch>` commits straight onto it (its open PR, if any, gets the commit; with none, `--body-file` becomes the
+  commit description). Committing onto it only succeeds while its head is still the commit the copy was made from
+  (or this copy's last push); if it moved, check out again. Only push onto someone else's branch when the operator
+  asked for it. Never onto the repo's own base.
 - Inside an ask, `repo checkout` reuses the ask's one copy per repo. Outside an ask (a chat session) every
   `repo checkout` makes a new copy and prints its path; use that path, never another session's copy.
 - PRs open ready for review, config repos included; follow the repo's PR conventions (for umm_config, call out
