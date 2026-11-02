@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tarfile
@@ -99,9 +100,11 @@ def owner_id() -> str:
 
 
 def checkout(name: str) -> Path:
-    """Export the repo's base branch into a copy (reused when this ask already has one); returns its path."""
+    """Export the repo's base branch into a copy; returns its path. An ask reuses its one copy per repo; outside an
+    ask every checkout is a new copy, so chat sessions never share (and push) each other's edits."""
     repo = get_repo(name)
-    dest = copies_dir(owner_id()) / name
+    owner = owner_id()
+    dest = copies_dir(owner) / (name if owner != "chat" else f"{name}-{secrets.token_hex(4)}")
     if (dest / STATE).is_file():
         return dest
     fetch(repo)
@@ -191,7 +194,17 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
     if not changed and not deleted:
         raise OpsquireError(f"{copy} has no changes against {repo.base}")
     explicit = branch is not None
-    branch = branch or state.get("branch") or f"{repo.branch_prefix}{slug(title)}"
+    earlier = state.get("branch")
+    if earlier and not explicit and state.get("title") != title:
+        before = repr(state["title"]) if state.get("title") else "an earlier PR"
+        raise OpsquireError(
+            f"{copy} already pushed to branch {earlier} ({state.get('pr')}) for {before}; "
+            f"for a new PR run `opsquire repo checkout {repo.name}` and edit the new copy, "
+            f"or pass --branch {earlier} to add these changes to that PR"
+        )
+    branch = branch or earlier or f"{repo.branch_prefix}{slug(title)}"
+    if earlier and branch != earlier:
+        state["pushed"] = {}
     head = branch_head(repo, branch)
     if head is None:
         gh(
@@ -261,7 +274,7 @@ def open_pr(copy: Path, title: str, body: str, branch: str | None = None) -> dic
         .strip()
         .splitlines()[-1]
     )
-    state |= {"branch": branch, "pr": url, "commit": oid, "pushed": pushed | send}
+    state |= {"branch": branch, "title": title, "pr": url, "commit": oid, "pushed": pushed | send}
     write_json(copy / STATE, state)
     return summary(repo, state, changed, deleted)
 

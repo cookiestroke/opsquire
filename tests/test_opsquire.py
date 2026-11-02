@@ -471,7 +471,9 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 124)
 
     def test_repo_contains_nothing_employer_specific(self) -> None:
-        banned = [w[::-1] for w in ("tsj", "vedpactsj", "03.271", "radnaM", "ldvb", "dovb", "inimeg", "sgol-tsj")]
+        banned = [
+            w[::-1].lower() for w in ("tsj", "vedpactsj", "03.271", "radnaM", "ldvb", "dovb", "inimeg", "sgol-tsj")
+        ]
         listed = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
             cwd=ROOT,
@@ -748,22 +750,25 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.fake_running(self.own_ns(), 2), "interrupted")
 
     def test_live_run_beats_and_locks_follow_it(self) -> None:
-        self.new("beating", "import time\n\nimport opsquire_helpers as sq\n\nsq.run(lambda: time.sleep(8))\n")
+        body = "import time\n\nimport opsquire_helpers as sq\n\n\ndef main() -> None:\n"
+        body += "    print('start', flush=True)\n    time.sleep(120)\n\n\nsq.run(main)\n"
+        self.new("beating", body)
         p = self.start("run", "beating")
+        assert p.stdout
+        p.stdout.readline()
+        beat = next((self.home / "var/runs").rglob("heartbeat"))
+        first = beat.stat().st_mtime
         deadline = time.monotonic() + 30
-        beats: list[Path] = []
-        while time.monotonic() < deadline and not beats:
-            beats = list((self.home / "var/runs").rglob("heartbeat"))
+        while time.monotonic() < deadline and beat.stat().st_mtime == first:
             time.sleep(0.2)
-        self.assertTrue(beats)
-        first = beats[0].stat().st_mtime
-        time.sleep(6)
-        self.assertGreater(beats[0].stat().st_mtime, first)
+        self.assertGreater(beat.stat().st_mtime, first)
         held = json.loads(self.cli("locks", "--json").stdout)
         self.assertTrue(held["web1"][0]["alive"])
         self.assertEqual(held["web1"][0]["pid_ns"], self.own_ns())
+        os.killpg(p.pid, signal.SIGINT)
         p.communicate(timeout=60)
-        self.assertEqual(p.returncode, 0)
+        self.assertEqual(p.returncode, 130)
+        self.assertEqual(json.loads(self.cli("locks", "--json").stdout), {})
 
     PASSING_TEST = (
         "import unittest\n\nfrom logic import double\n\n\nclass T(unittest.TestCase):\n"
@@ -1087,7 +1092,7 @@ class OpsTest(unittest.TestCase):
         subprocess.run(
             ["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", "HEAD"], env=self.env, check=True
         )
-        cfg = {"branch_prefix": "mandar/", "repos": {"umm": {"path": str(repo), "github": "acme/umm", "base": "main"}}}
+        cfg = {"branch_prefix": "dev/", "repos": {"umm": {"path": str(repo), "github": "acme/umm", "base": "main"}}}
         (self.home / "repos.json").write_text(json.dumps(cfg))
         bin_dir = self.tmp / "gh-bin"
         bin_dir.mkdir()
@@ -1121,7 +1126,7 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("PR: https://github.com/acme/umm/pull/1", r.stdout)
         state = self.gh_state()
-        self.assertEqual(state["prs"][0]["head"], "mandar/fix-the-app")
+        self.assertEqual(state["prs"][0]["head"], "dev/fix-the-app")
         first = state["commits"][0]
         self.assertEqual(first["added"], {"src/app.py": "x = 2\n", "src/new.py": "y = 1\n"})
         self.assertEqual(first["deleted"], ["old.txt"])
@@ -1138,6 +1143,46 @@ class OpsTest(unittest.TestCase):
         self.assertEqual((repo / "src/app.py").read_text(), "x = 1\n")
         self.assertEqual(self.cli("repo", "pr", str(copy), "--title", "Fix the app").returncode, 0)
         self.assertEqual(len(self.gh_state()["commits"]), 2)
+
+    def test_chat_checkouts_never_share_a_copy(self) -> None:
+        self.code_repo()
+        first = self.cli("repo", "checkout", "umm")
+        second = self.cli("repo", "checkout", "umm")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        a, b = Path(first.stdout.strip()), Path(second.stdout.strip())
+        self.assertNotEqual(a, b)
+        self.assertEqual({a.parent, b.parent}, {self.home / ".repos/chat"})
+        (a / "README.md").write_text("from session a\n")
+        self.assertEqual((b / "README.md").read_text(), "hello\n")
+
+    def test_repo_pr_refuses_a_new_title_on_a_copy_with_an_earlier_branch(self) -> None:
+        self.code_repo()
+        copy = Path(self.cli("repo", "checkout", "umm").stdout.strip())
+        (copy / "README.md").write_text("first\n")
+        self.assertEqual(self.cli("repo", "pr", str(copy), "--title", "First change").returncode, 0)
+        (copy / "src/app.py").write_text("x = 3\n")
+        r = self.cli("repo", "pr", str(copy), "--title", "Unrelated change")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("already pushed to branch dev/first-change", r.stderr)
+        self.assertIn("--branch dev/first-change", r.stderr)
+        self.assertEqual(len(self.gh_state()["commits"]), 1)
+        state = json.loads((copy / ".opsquire-pr.json").read_text())
+        del state["title"]
+        (copy / ".opsquire-pr.json").write_text(json.dumps(state))
+        r = self.cli("repo", "pr", str(copy), "--title", "First change")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("an earlier PR", r.stderr)
+        r = self.cli("repo", "pr", str(copy), "--title", "Unrelated change", "--branch", "dev/first-change")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        gh = self.gh_state()
+        self.assertEqual([c["branch"] for c in gh["commits"]], ["dev/first-change"] * 2)
+        self.assertEqual(gh["commits"][1]["added"], {"src/app.py": "x = 3\n"})
+        r = self.cli("repo", "pr", str(copy), "--title", "Split out", "--branch", "dev/split-out")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        gh = self.gh_state()
+        self.assertEqual(gh["commits"][2]["branch"], "dev/split-out")
+        self.assertEqual(gh["commits"][2]["added"], {"README.md": "first\n", "src/app.py": "x = 3\n"})
+        self.assertEqual(len(gh["prs"]), 2)
 
     def test_ask_hands_over_its_pr_and_drops_its_repo_copy(self) -> None:
         self.code_repo()
