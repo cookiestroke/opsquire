@@ -65,12 +65,34 @@ def guarantees(path: Path) -> list[str]:
     return out
 
 
+def final_mode(task: Task) -> str:
+    """The mode whose `ok` run means the task did its job: apply for a changing task, read otherwise."""
+    return "apply" if task.meta and task.meta.changes_prod else "read"
+
+
+def run_stats(runs: list[dict[str, Any]], final: dict[str, str]) -> dict[str, Any]:
+    """Runs, successes (ok in the owning task's final mode) and runs per success: how much operator time each
+    success cost. A number well above 2 (one dry, one apply) says the script was debugged by rerunning it."""
+    ok = sum(1 for r in runs if r.get("status") == "ok" and r.get("mode") == final.get(str(r.get("task_id"))))
+    per_ok = f"{len(runs) / ok:.1f}" if ok else "never"
+    return {"runs": len(runs), "ok": ok, "per_ok": per_ok}
+
+
+def stats_text(s: dict[str, Any], mode: str) -> str:
+    if not s["runs"]:
+        return "never run"
+    text = f"runs {s['runs']}, {s['ok']} ok {mode}"
+    if mode == "apply" and s["ok"]:
+        text += f", {s['per_ok']} runs per ok apply"
+    return text
+
+
 def usage(task: Task, tasks: list[Task]) -> dict[str, Any]:
     users = [t.id for t in tasks if t.meta and task.id in t.meta.uses]
+    final = {t.id: final_mode(t) for t in tasks}
     runs = [r for tid in [task.id, *users] for r in runs_for(tid)]
-    ok = sum(1 for r in runs if r.get("status") == "ok")
     last = max((str(r.get("started")) for r in runs), default="")
-    return {"users": users, "runs": len(runs), "ok": ok, "last_run": last}
+    return {"users": users, "last_run": last, **run_stats(runs, final)}
 
 
 def api_page(task: Task, tasks: list[Task]) -> str:
@@ -80,7 +102,7 @@ def api_page(task: Task, tasks: list[Task]) -> str:
     targets = ", ".join(meta.get("targets") or [])
     lines.append(f"- kind: {task.kind}; changes prod: {meta.get('changes_prod')}; targets: {targets}")
     lines.append(f"- used by: {', '.join(u['users']) or 'nothing yet'}")
-    lines.append(f"- runs (it and its users): {u['runs']}, ok {u['ok']}, last {u['last_run'] or 'never'}\n")
+    lines.append(f"- runs (it and its users): {stats_text(u, final_mode(task))}, last {u['last_run'] or 'never'}\n")
     code = sorted(p for p in task.folder.glob("*.py") if not p.name.startswith("test_"))
     for path in code:
         api = module_api(path)
@@ -108,17 +130,24 @@ def catalog(tasks: list[Task]) -> str:
         tests = sum(len(guarantees(p)) for p in t.folder.glob("test_*.py"))
         rows.append(
             f"- **{t.id}**: {t.raw.get('purpose', '')} "
-            f"(tests: {tests}; used by {len(u['users'])}; runs {u['runs']}, ok {u['ok']}) -> docs/{t.id}.md"
+            f"(tests: {tests}; used by {len(u['users'])}; {stats_text(u, final_mode(t))}) -> docs/{t.id}.md"
         )
     if not general:
         rows.append("- (none yet)")
     rows.append("\n## Tasks and plans\n")
+    rows.append(
+        "Runs are operator time. Above 2 runs per ok apply (one dry, one apply), or a read task run many times, "
+        "means the task was debugged by rerunning it.\n"
+    )
+    final = {t.id: final_mode(t) for t in tasks}
     for t in tasks:
         if t.kind == "general":
             continue
         uses = t.raw.get("uses") or []
         extra = f" (uses {', '.join(uses)})" if uses else ""
-        rows.append(f"- {t.id} [{task_status(t, runs_for(t.id))}, {t.kind}]: {t.raw.get('purpose', '')}{extra}")
+        runs = runs_for(t.id)
+        stats = stats_text(run_stats(runs, final), final_mode(t))
+        rows.append(f"- {t.id} [{task_status(t, runs)}, {t.kind}; {stats}]: {t.raw.get('purpose', '')}{extra}")
     return "\n".join(rows) + "\n"
 
 
