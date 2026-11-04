@@ -1272,6 +1272,101 @@ class OpsTest(unittest.TestCase):
             proc.send_signal(signal.SIGINT)
             self.assertEqual(proc.wait(timeout=15), 0)
 
+    def test_run_records_usage_and_state_shows_agent_work(self) -> None:
+        tid = self.new("usage", "import opsquire_helpers as sq\n\nsq.result('x' * 10)\n").name
+        self.assertEqual(self.cli("run", tid).returncode, 0)
+        rec = self.last(tid)
+        self.assertGreater(rec["usage"]["max_rss_mb"], 1)
+        self.assertGreaterEqual(rec["usage"]["cpu_s"], 0)
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual(state["runs"][rec["run_id"]]["usage"], rec["usage"])
+        self.assertTrue(state["tasks"][tid]["settled"])
+        self.assertEqual(state["tasks"][tid]["agents"]["asks"], 0)
+        self.assertGreater(state["tasks"][tid]["agents"]["operator_s"], 0)
+        self.agents_file()
+        r = self.cli("ask", "--no-grill", "restart", "web1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ask = self.asks()[-1]
+        made = self.new("after-ask", "print(1)\n").name
+        ask["task_ids"] = [made]
+        ask["ended"] = "2999-01-01T00:00:00.000Z"
+        ask["cost_usd"] = 1.5
+        ask["pieces"] = [{"name": "a", "status": "merged"}, {"name": "b", "status": "merged"}]
+        Path(self.home / "var/asks" / "patched.json").write_text(json.dumps(ask))
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual(state["tasks"][made]["agents"], {"asks": 1, "pieces": 2, "cost_usd": 1.5, "operator_s": 0.0})
+
+    def test_judge_closes_from_the_record_or_keeps_it_open(self) -> None:
+        self.agents_file()
+        body = "import opsquire_helpers as sq\n\nsq.target('web1', 'failed', 'refused')\n"
+        tid = self.new("judged", body, "--changes-prod", "--rollback", "none").name
+        (self.home / f"tasks/{tid[:4]}-{tid[4:6]}/{tid}/design.md").write_text("# why\n\nbecause\n")
+        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 1)
+        self.env["FAKE_JUDGE"] = "KEEP: no evidence that web1 came back"
+        r = self.cli("judge", tid)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("kept open: no evidence", r.stdout)
+        self.assertIsNone(json.loads(self.cli("show", tid, "--json").stdout)["meta"]["outcome"])
+        judged = json.loads(self.cli("threads", "--json").stdout)["tasks"][tid]["judged"]
+        self.assertEqual((judged["decision"], judged["note"]), ("keep", "no evidence that web1 came back"))
+        self.env["FAKE_JUDGE"] = "CLOSE: partial | web1 refused but web2 was done by hand; see run above"
+        r = self.cli("judge", tid, "--json")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual((out["decision"], out["cost_usd"]), ("partial", 0.02))
+        meta = json.loads(self.cli("show", tid, "--json").stdout)["meta"]
+        self.assertEqual((meta["outcome"]["state"], meta["outcome"]["closed_by"]), ("partial", "opsquire judge (fake)"))
+        self.assertIn("web2 was done by hand", meta["outcome"]["note"])
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertTrue(state["tasks"][tid]["settled"])
+        self.assertEqual(self.cli("judge", "nothing-like-this").returncode, 2)
+
+    def test_ui_judge_job_ticks_a_task_off(self) -> None:
+        import http.client
+
+        self.agents_file()
+        tid = self.new(
+            "tick",
+            "import opsquire_helpers as sq\n\nsq.target('web1', 'failed')\n",
+            "--changes-prod",
+            "--rollback",
+            "none",
+        ).name
+        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 1)
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
+                conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                return resp.status, json.loads(resp.read())
+
+            _, state = call("GET", "/api/state")
+            self.assertFalse(state["tasks"][tid]["settled"])
+            self.assertEqual([i["task_id"] for i in state["inbox"]], [tid])
+            status, started = call("POST", "/api/judge", {"task": tid})
+            self.assertEqual(status, 200, started)
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                _, j = call("GET", f"/api/job?id={started['job_id']}&offset=0")
+                if j["status"] == "done":
+                    break
+                time.sleep(0.2)
+            self.assertEqual((j["mode"], j["exit_code"], j["run_id"]), ("judge", 0, None), j)
+            self.assertIn("closed done", j["text"])
+            _, state = call("GET", "/api/state")
+            self.assertTrue(state["tasks"][tid]["settled"])
+            self.assertEqual(state["tasks"][tid]["outcome"]["closed_by"], "opsquire judge (fake)")
+            self.assertEqual(state["inbox"], [])
+            self.assertEqual(state["jobs"][0]["mode"], "judge")
+            conn.close()
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+
     def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
         self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
         self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))

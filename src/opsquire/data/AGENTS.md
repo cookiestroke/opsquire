@@ -56,13 +56,14 @@ opsquire last                        most recent run
 opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, latest run for a task
 opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it
 opsquire threads [--json]            tasks grouped into threads (the stories they belong to), with suggestions
+opsquire judge <task> [--json]       an agent reads the task's record and closes it (or says what is missing)
 opsquire locks
 opsquire ui [--port N] [--open]      the operator's console in the browser (localhost): the inbox of handed-over
                                      tasks, running them with their prompts, threads, targets, scripts, logs
 ```
 
 `<task>` may be the full id or any unique part of it. To answer "did it work", read `run.json`:
-`status`, `targets`, `last_error`, `results`. Read `output.log` only when you need detail.
+`status`, `targets`, `last_error`, `results` (and `usage`: peak memory and CPU time of the script). Read `output.log` only when you need detail.
 
 ## Writing a task
 
@@ -89,8 +90,9 @@ opsquire ui [--port N] [--open]      the operator's console in the browser (loca
    `opsquire close <task> --outcome done|partial|abandoned --note "what actually happened" [--run <run-id>]`
    (done when the host ended up right despite the record, partial when some of it did, abandoned when it will not
    happen). `close` only annotates meta.json and touches no host. A changing task is not settled until it is closed,
-   and its thread stays open; the operator never has to close anything, only what agents leave behind shows up as a
-   suggestion in the UI.
+   and its thread stays open; the operator never has to close anything. What agents leave behind shows up in the UI
+   as "needs a decision", where `opsquire judge` (an agent reading purpose, design, runs and the last output, under a
+   small budget) decides and closes it, marked as the judge's; the operator can amend any close.
 
 ### Threads: the story a task belongs to
 

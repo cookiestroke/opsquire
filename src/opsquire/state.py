@@ -216,6 +216,29 @@ def suggestions(
     return out
 
 
+def agent_work(tasks: list[Task], asks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per task: how many asks produced it, how many parallel pieces, and what the agents cost (an ask's cost is
+    shared evenly between the tasks it created)."""
+    out: dict[str, dict[str, Any]] = {}
+    by_id = {t.id: t for t in tasks}
+    for a in asks:
+        made = [x for x in a.get("task_ids") or [] if x in by_id and created_during(by_id[x], a)]
+        if not made:
+            continue
+        share = float(a.get("cost_usd") or 0) / len(made)
+        pieces = len(a.get("pieces") or [])
+        for tid in made:
+            rec = out.setdefault(tid, {"asks": 0, "pieces": 0, "cost_usd": 0.0, "operator_s": 0.0})
+            rec["asks"] += 1
+            rec["pieces"] += pieces
+            rec["cost_usd"] = round(rec["cost_usd"] + share, 2)
+    for t in tasks:
+        if t.meta and " piece " in t.meta.author:
+            rec = out.setdefault(t.id, {"asks": 0, "pieces": 0, "cost_usd": 0.0, "operator_s": 0.0})
+            rec["pieces"] = max(rec["pieces"], 1)
+    return out
+
+
 def is_settled(view: dict[str, Any]) -> bool:
     """A task is settled when its end is recorded: closed, retired, or a read-only task that ran ok. A changing task
     whose apply ran ok still waits for `opsquire close` to say what really ended up live."""
@@ -255,6 +278,7 @@ def run_view(r: dict[str, Any]) -> dict[str, Any]:
         "targets": {t: (v.get("status") if isinstance(v, dict) else v) for t, v in targets.items()},
         "last_error": r.get("last_error"),
         "results": r.get("results") or [],
+        "usage": r.get("usage"),
         "warnings": r.get("warnings") or [],
         "plan_run": r.get("plan_run"),
         "steps": r.get("steps"),
@@ -291,6 +315,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
     asks = load_asks()
     threads_of = infer_threads(tasks, asks)
     final = {t.id: final_mode(t) for t in tasks}
+    agents_of = agent_work(tasks, asks)
     task_views: dict[str, dict[str, Any]] = {}
     for t in tasks:
         m = t.meta
@@ -312,6 +337,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
             "links": m.links if m else [],
             "steps": [s.get("task") for s in (m.steps or [])] if m else [],
             "outcome": m.outcome if m else None,
+            "judged": raw.get("judged"),
             "superseded_by": m.superseded_by if m else None,
             "abandoned_reason": m.abandoned_reason if m else None,
             "archived": bool(m.archived) if m else False,
@@ -323,8 +349,12 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
             "has_design": (t.folder / "design.md").is_file(),
             "has_result": has_result(t.folder),
             "suggestions": suggestions(t, status, trs, tasks, at),
+            "settled": False,
+            "agents": agents_of.get(t.id, {"asks": 0, "pieces": 0, "cost_usd": 0.0, "operator_s": 0.0}),
             "path": str(t.folder),
         }
+        task_views[t.id]["settled"] = is_settled(task_views[t.id])
+        task_views[t.id]["agents"]["operator_s"] = round(sum(float(r.get("duration_s") or 0) for r in trs), 1)
     threads: dict[str, dict[str, Any]] = {}
     for t in tasks:
         tid = threads_of.get(t.id)

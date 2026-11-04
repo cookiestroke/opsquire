@@ -37,6 +37,11 @@ if os.environ.get("FAKE_SLEEP") and (("slow" in piece) if piece else not os.envi
     except KeyboardInterrupt:
         sys.exit(130)
 
+if "You judge how an operations task ended" in system:
+    verdict = os.environ.get("FAKE_JUDGE", "CLOSE: done | the apply run landed it on web1")
+    assert "Purpose:" in prompt and "Runs (" in prompt, prompt[:200]
+    result(f"Looked at the record.\n{verdict}", cost=0.02)
+
 if os.environ.get("FAKE_SPLIT") and "Parallel work comes first" in system:
     result("\n".join(f"SPLIT: {p}" for p in json.loads(os.environ["FAKE_SPLIT"])))
 

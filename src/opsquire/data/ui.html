@@ -27,7 +27,8 @@
   }
 }
 * { box-sizing: border-box; }
-html { font-size: 13.5px; }
+html { font-size: 15px; }
+html.dev { font-size: 13.5px; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px); }
 .mono, code, pre, kbd, .id, .cmd, .prompt { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .93em; }
 a { color: var(--accent); text-decoration: none; }
@@ -40,7 +41,7 @@ button:disabled { opacity: .5; cursor: default; }
 button.runbtn.apply { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); font-weight: 600; }
 button.runbtn.apply.armed { background: var(--warn); color: #fff; }
 input, select, textarea { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
-input:focus, select:focus, textarea:focus, button:focus-visible, .head:focus-visible, .run:focus-visible, .trow:focus-visible, .ib:focus-visible, .job:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input:focus, select:focus, textarea:focus, button:focus-visible, .head:focus-visible, .run:focus-visible, .trow:focus-visible, .ib:focus-visible, .job:focus-visible, .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 6px 16px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
 .brand { font-weight: 650; font-size: 1.1rem; letter-spacing: .01em; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
@@ -215,6 +216,68 @@ svg.flow, svg.map { display: block; overflow: visible; }
 .legend i.grey { background: var(--grey-bg); border-color: var(--faint); border-style: dashed; }
 .legend i.dot { border-radius: 50%; width: 8px; height: 8px; }
 .legend i.dot.good { background: var(--good); } .legend i.dot.bad { background: var(--bad); } .legend i.dot.warn { background: var(--warn); } .legend i.dot.grey { background: var(--faint); }
+/* simple mode: tiles, chips, ticks, plain rows */
+#devtoggle { background: transparent; color: var(--muted); border-color: transparent; }
+#devtoggle[aria-pressed="true"] { color: var(--accent-fg); background: var(--accent-bg); border-color: var(--accent-bg); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 2px 0 10px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 2px; min-width: 0; white-space: normal; }
+.tile:hover { border-color: var(--accent); }
+.tile .num { font-size: 2rem; font-weight: 650; line-height: 1.1; letter-spacing: -.01em; }
+.tile .lbl { color: var(--muted); font-size: .95em; }
+.tile.zero .num { color: var(--faint); }
+.tile.amber .num { color: var(--warn); }
+.tile.live .num { color: var(--accent); }
+.tile.good .num { color: var(--good); }
+.tile .act { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+html.dev .tile { padding: 8px 12px; border-radius: 8px; }
+html.dev .tile .num { font-size: 1.5rem; }
+.statsline { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--muted); font-size: .95em; margin: 0 2px 14px; }
+.statsline b { color: var(--fg); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.chip { display: inline-block; padding: 0 7px; border-radius: 4px; font-size: .85em; background: var(--panel2); color: var(--muted); border: 1px solid var(--line2); white-space: nowrap; }
+.chip b { color: var(--fg); font-weight: 600; }
+.tick { display: inline-block; width: 1.3em; text-align: center; flex: none; font-weight: 600; }
+.tick.done { color: var(--good); }
+.tick.open { color: var(--faint); }
+.tick.gone { color: var(--faint); }
+.tick.busy { color: var(--accent); }
+.name { font-weight: 600; overflow-wrap: anywhere; }
+.area { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: .8em; background: var(--grey-bg); color: var(--muted); white-space: nowrap; }
+.next { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: .85em; background: var(--grey-bg); color: var(--grey); white-space: nowrap; }
+.next.apply { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+.sr { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line2); }
+.sr:first-child { border-top: 0; }
+.sr:hover { background: var(--panel2); }
+.sr .purpose { flex: 1 1 240px; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr .verdict { flex-basis: 100%; color: var(--muted); font-size: .92em; padding-left: 1.6em; white-space: pre-wrap; }
+.sr .verdict.good { color: var(--good); }
+.sr.busy { background: var(--accent-bg); }
+.spin { display: inline-block; width: .85em; height: .85em; border: 2px solid var(--accent-bg); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.tl { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; padding: 6px 8px; border-top: 1px solid var(--line2); border-radius: 4px; cursor: pointer; }
+.tl:first-child { border-top: 0; }
+.tl:hover { background: var(--panel2); }
+.tl.sel { background: var(--accent-bg); }
+.tl .purpose { flex: 1 1 200px; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.why { font-size: .9em; }
+.pane-name { font-size: 1.25rem; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; }
+.status-words { font-size: 1rem; font-weight: 600; margin: 2px 0 8px; }
+.status-words.good { color: var(--good); }
+.status-words.warn { color: var(--warn); }
+.status-words.bad { color: var(--bad); }
+.status-words.grey { color: var(--muted); }
+.status-words.live { color: var(--accent); }
+.what { background: var(--panel2); border-radius: 8px; padding: 8px 12px; margin: 6px 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.what ul { margin: 2px 0; padding-left: 20px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+.actions button { padding: 6px 14px; border-radius: 7px; }
+.details { border-top: 1px dashed var(--line); margin-top: 12px; padding-top: 4px; }
+.reason { max-height: 260px; overflow: auto; }
+h3.sec .err { font-weight: 500; text-transform: none; letter-spacing: 0; }
+html:not(.dev) .row { margin-bottom: 10px; border-radius: 10px; }
+html:not(.dev) .head { padding: 10px 14px; }
+html:not(.dev) h3.sec { margin-top: 22px; }
+html:not(.dev) main#main { padding-top: 16px; }
 @media (max-width: 700px) {
   .body { padding-left: 12px; }
   .tdetail { padding-left: 12px; }
@@ -226,6 +289,7 @@ svg.flow, svg.map { display: block; overflow: visible; }
   <span class="brand" id="brand">Opsquire</span>
   <div class="seg" role="tablist" id="seg"></div>
   <input id="search" type="search" placeholder="Search id, purpose, area, target  ( / )" aria-label="Search">
+  <button id="devtoggle" type="button" aria-pressed="false" title="Show ids, commands, runs and jobs in full">Developer</button>
   <span id="conn" title="Connection to the local server">connecting</span>
 </header>
 <div class="app" id="app">
@@ -423,6 +487,96 @@ function mapBuckets(tasks, columns) {
 const LEGEND = { good: 'done', neutral: 'ready', grey: 'draft / retired', bad: 'failed', warn: 'partial' };
 function nextMode(t) { return t.changes_prod ? 'dry' : 'read'; }
 function runCommand(id, mode) { return `opsquire run ${id}${mode === 'apply' ? ' --apply' : ''}`; }
+/* simple mode: plain words for what the operator sees */
+function areaOf(id) { const m = /^\d{8}-\d{4}_([^_]+)_/.exec(String(id || '')); return m ? m[1] : ''; }
+function scriptArea(id) { const m = /^([a-z0-9-]+)_[a-z0-9-]+$/.exec(String(id || '')); return m ? m[1] : ''; }
+function scriptName(id) { const m = /^[a-z0-9-]+_([a-z0-9-]+)$/.exec(String(id || '')); return (m ? m[1] : String(id || '')).replace(/-/g, ' '); }
+function nextLabel(mode) { return mode === 'apply' ? 'Apply' : 'Check first'; }
+function lastRunOf(t, runs) { const ids = (t && t.runs) || []; for (let i = ids.length - 1; i >= 0; i--) { const r = runs && runs[ids[i]]; if (r) return r; } return null; }
+function needsDecision(t, inboxIds, runs) {
+  if (!t || t.settled || t.kind === 'general' || t.archived || inboxIds.has(t.id)) return false;
+  if ((t.suggestions || []).length) return true;
+  const last = lastRunOf(t, runs);
+  return !!last && last.status !== 'ok' && last.status !== 'running';
+}
+function decisionList(data) {
+  const inboxIds = new Set((data.inbox || []).map(i => i.task_id));
+  return Object.values(data.tasks || {}).filter(t => needsDecision(t, inboxIds, data.runs)).sort((a, b) => b.id.localeCompare(a.id));
+}
+function settledDay(t, runs) {
+  if (!t || !t.settled) return null;
+  if (t.outcome && t.outcome.closed) return dayKey(t.outcome.closed);
+  const last = lastRunOf(t, runs);
+  return last ? dayKey(last.ended || last.started) : null;
+}
+function tickOf(t) {
+  if (!t) return 'open';
+  if (t.settled) return ['abandoned', 'superseded', 'archived'].includes(t.status) || (t.outcome && t.outcome.state === 'abandoned') ? 'gone' : 'done';
+  return 'open';
+}
+const TICK = { done: '✓', open: '◯', gone: '✗' };
+function statusWords(t, inboxItem, decide) {
+  if (!t) return { text: '?', tone: 'grey' };
+  const st = t.status;
+  if (st === 'superseded') return { text: 'Superseded', tone: 'grey' };
+  if (st === 'archived') return { text: 'Archived', tone: 'grey' };
+  if (st === 'abandoned' || (t.outcome && t.outcome.state === 'abandoned')) return { text: 'Abandoned', tone: 'grey' };
+  if (t.settled) return { text: t.outcome && t.outcome.state === 'partial' ? 'Partly done' : 'Done', tone: 'good' };
+  if (st === 'running') return { text: 'Running', tone: 'live' };
+  if (inboxItem) return { text: inboxItem.next === 'apply' ? 'Waiting for apply' : 'Waiting for your check', tone: 'warn' };
+  if (decide) return { text: 'Needs a decision', tone: 'warn' };
+  if (st === 'draft') return { text: 'Draft', tone: 'grey' };
+  if (st === 'done') return { text: 'Ran ok, not closed', tone: 'warn' };
+  if (st === 'failed' || st === 'blocked') return { text: 'Failed', tone: 'bad' };
+  return { text: st ? st[0].toUpperCase() + st.slice(1) : 'Draft', tone: tone(st) };
+}
+function lastLine(text) { const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean); return lines.length ? lines[lines.length - 1] : ''; }
+function verdictWords(line) { const s = String(line || ''); const i = s.indexOf(': '); return /^\d{8}-\d{4}_/.test(s) && i > 0 ? s.slice(i + 2) : s; }
+function mb(x) { return typeof x === 'number' ? (x >= 1024 ? `${(x / 1024).toFixed(1)} GB` : `${Math.round(x)} MB`) : ''; }
+function usageChips(r) {
+  const out = [];
+  if (r && r.duration_s !== null && r.duration_s !== undefined) out.push(['took', duration(r.duration_s)]);
+  const u = r && r.usage;
+  if (u && typeof u.cpu_s === 'number') out.push(['cpu', duration(u.cpu_s)]);
+  if (u && typeof u.max_rss_mb === 'number') out.push(['peak', mb(u.max_rss_mb)]);
+  return out;
+}
+function agentChips(a) {
+  if (!a) return [];
+  const out = [];
+  if (a.asks) out.push(['asks', String(a.asks)]);
+  if (a.pieces) out.push(['agents spun', String(a.pieces)]);
+  if (typeof a.cost_usd === 'number' && a.cost_usd > 0) out.push(['agent spend', money(a.cost_usd)]);
+  if (a.operator_s) out.push(['your runs', duration(a.operator_s)]);
+  return out;
+}
+function threadAgents(thread, tasks) {
+  const sum = { cost_usd: 0, operator_s: 0, pieces: 0, asks: 0 };
+  for (const id of thread.tasks || []) {
+    const a = tasks[id] && tasks[id].agents; if (!a) continue;
+    sum.cost_usd += Number(a.cost_usd) || 0; sum.operator_s += Number(a.operator_s) || 0; sum.pieces += Number(a.pieces) || 0; sum.asks += Number(a.asks) || 0;
+  }
+  sum.cost_usd = Math.round(sum.cost_usd * 100) / 100;
+  return sum;
+}
+function threadSummary(sum) {
+  const bits = [];
+  if (sum.cost_usd > 0) bits.push(`${money(sum.cost_usd)} agents`);
+  if (sum.operator_s > 0) bits.push(`${duration(sum.operator_s)} of your runs`);
+  if (sum.pieces > 0) bits.push(plural(sum.pieces, 'agent') + ' spun');
+  return bits.join(' · ');
+}
+function todayStats(data, today) {
+  const out = { spend: 0, operator_s: 0, ok: 0, failed: 0, runs: 0 };
+  for (const r of Object.values(data.runs || {})) {
+    if (dayKey(r.started) !== today) continue;
+    out.runs++; out.operator_s += Number(r.duration_s) || 0;
+    if (r.status === 'ok') out.ok++; else if (r.status !== 'running') out.failed++;
+  }
+  for (const a of data.asks || []) if (dayKey(a.started) === today) out.spend += Number(a.cost_usd) || 0;
+  out.spend = Math.round(out.spend * 100) / 100;
+  return out;
+}
 /* minimal markdown: headings, paragraphs, lists, fenced code, rules, inline code, links, bold. Only text nodes, never HTML. */
 function inlineMd(text) {
   const out = []; const re = /(`[^`]+`)|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*/g;
@@ -529,14 +683,28 @@ async function api(path, opts) {
 }
 function post(path, body) { return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
 /* ---- state ---- */
-const S = { data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, mapDays: 14 };
+const S = { data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, mapDays: 14,
+  dev: false, details: new Set(), judging: new Map(), judgeText: new Map(), decideAll: null };
 const task = id => (S.data && S.data.tasks && S.data.tasks[id]) || null;
 const run = id => (S.data && S.data.runs && S.data.runs[id]) || null;
 const inbox = () => (S.data && S.data.inbox) || [];
+const inboxItem = taskId => inbox().find(i => i.task_id === taskId) || null;
 const jobs = () => (S.data && S.data.jobs) || [];
 const jobById = id => jobs().find(j => j.job_id === id) || null;
 const activeJobFor = taskId => jobs().find(j => j.task_id === taskId && j.status !== 'done') || null;
+const judgeJobsFor = taskId => jobs().filter(j => j.task_id === taskId && j.mode === 'judge').sort((a, b) => String(a.started || '').localeCompare(String(b.started || '')));
+const lastJudgeFor = taskId => { const js = judgeJobsFor(taskId); return js.length ? js[js.length - 1] : null; };
+const isDeciding = taskId => S.judging.has(taskId) || !!jobs().find(j => j.task_id === taskId && j.mode === 'judge' && j.status !== 'done');
 const selectedTask = () => (S.pane && S.pane.kind === 'task' ? S.pane.id : null);
+const DEV_KEY = 'opsquire.dev';
+function readDev() { try { return localStorage.getItem(DEV_KEY) === '1'; } catch (e) { return false; } }
+function setDev(on) {
+  S.dev = !!on;
+  try { localStorage.setItem(DEV_KEY, S.dev ? '1' : '0'); } catch (e) { /* private window */ }
+  document.documentElement.classList.toggle('dev', S.dev);
+  const b = $('#devtoggle'); if (b) b.setAttribute('aria-pressed', String(S.dev));
+  if (S.data) render();
+}
 function setHash(h) { S.hash = h; if (location.hash.slice(1) !== h) history.replaceState(null, '', '#' + h); }
 function applyHash() {
   const h = location.hash.slice(1); if (h === S.hash) return;
@@ -629,9 +797,16 @@ function empty(text) { return el('div', { class: 'empty' }, text); }
 function noMatch() { return empty(`Nothing matches "${S.q}".`); }
 function targetLink(name) { return el('a', { class: 'tag', href: '#target/' + encodeURIComponent(name), onclick: e => { e.preventDefault(); focusKey('targets', 'g:' + name, 'target/' + encodeURIComponent(name)); } }, name); }
 function scriptLink(id) { return el('a', { class: 'tag mono', href: '#script/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); focusKey('scripts', 's:' + id, 'script/' + encodeURIComponent(id)); } }, id); }
-function taskLink(id) { return el('a', { class: 'id', href: '#task/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); selectTask(id); } }, id); }
+function taskLink(id) {
+  const simple = !S.dev && /^\d{8}-\d{4}_/.test(String(id || ''));
+  return el('a', { class: simple ? 'name' : 'id', href: '#task/' + encodeURIComponent(id), title: simple ? id : null, onclick: e => { e.preventDefault(); selectTask(id); } }, simple ? shortName(id) : id);
+}
+function areaTag(t) { const a = (t && t.area) || areaOf(t && t.id); return a ? el('span', { class: 'area', title: 'area' }, a) : null; }
+function tick(t) { const k = tickOf(t); return el('span', { class: `tick ${k}`, title: k === 'done' ? 'settled' : k === 'gone' ? 'abandoned' : 'open' }, TICK[k]); }
+function chipsRow(pairs, cls) { return pairs.length ? el('span', { class: `chips ${cls || ''}` }, pairs.map(([k, v]) => el('span', { class: 'chip' }, `${k} `, el('b', {}, v)))) : null; }
+function scrollToKey(key) { const n = $('#main').querySelector(`[data-key="${CSS.escape(key)}"]`); if (n) n.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
 function prodMarker(t) { return t.changes_prod ? tag('changes production', 'warn') : tag('read-only'); }
-function sec(title, extra) { return el('h3', { class: 'sec' }, title, extra ? el('span', { class: 'n' }, extra) : null); }
+function sec(title, extra, more) { return el('h3', { class: 'sec' }, title, extra ? el('span', { class: 'n' }, extra) : null, more || null); }
 /* run buttons: apply needs a second click within 5 s */
 function arm(key) {
   S.confirm = key; clearTimeout(S.confirmTimer);
@@ -642,10 +817,68 @@ function disarm() { S.confirm = null; clearTimeout(S.confirmTimer); }
 function runButton(taskId, mode) {
   const active = activeJobFor(taskId);
   if (active) return btn(active.status, () => openJob(active.job_id), 'sm', { title: 'a job for this task is still running; open it' });
-  if (mode !== 'apply') return btn(`Run ${mode}`, () => startRun(taskId, mode), 'runbtn');
+  if (mode !== 'apply') return btn(S.dev ? `Run ${mode}` : 'Run', () => startRun(taskId, mode), 'runbtn', { title: S.dev ? null : `${mode === 'read' ? 'read-only' : 'dry'} run: nothing changes` });
   const key = taskId + ':apply', armed = S.confirm === key;
-  return btn(armed ? 'Confirm apply' : 'Run apply', () => { if (armed) { disarm(); startRun(taskId, 'apply'); } else arm(key); },
-    'runbtn apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : 'asks for a second click' });
+  return btn(armed ? 'Confirm apply' : S.dev ? 'Run apply' : 'Run', () => { if (armed) { disarm(); startRun(taskId, 'apply'); } else arm(key); },
+    'runbtn apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : 'changes production; asks for a second click' });
+}
+/* the judge: an agent reads the task's record and closes it, or keeps it open and says why */
+async function awaitJob(jobId) {
+  let offset = 0, text = '';
+  for (;;) {
+    const r = await api(`/api/job?id=${encodeURIComponent(jobId)}&offset=${offset}`);
+    if (r.text) text += r.text;
+    if (typeof r.offset === 'number') offset = Math.max(offset, r.offset);
+    if (r.status === 'done') { S.judgeText.set(jobId, crFold(stripAnsi(text))); return { exit: r.exit_code, text: S.judgeText.get(jobId) }; }
+    await new Promise(res => setTimeout(res, 1000));
+  }
+}
+async function decide(taskId) {
+  if (isDeciding(taskId)) return null;
+  let jobId;
+  try { jobId = (await post('/api/judge', { task: taskId })).job_id; } catch (e) { toast(`decide failed: ${e.message}`); throw e; }
+  S.judging.set(taskId, jobId); refresh(); render();
+  try {
+    const r = await awaitJob(jobId);
+    toast(r.exit === 0 ? 'closed' : r.exit === 1 ? 'kept open' : `judge exit ${r.exit}`);
+    return r;
+  } finally { S.judging.delete(taskId); refresh(); render(); }
+}
+async function decideAll() {
+  if (S.decideAll && S.decideAll.running) return;
+  const ids = decisionList(S.data).map(t => t.id).filter(id => !isDeciding(id));
+  S.decideAll = { running: true, total: ids.length, done: 0, error: null, current: null }; render();
+  try {
+    for (const id of ids) {
+      S.decideAll.current = id; render();
+      await decide(id);
+      S.decideAll.done++;
+    }
+  } catch (e) { S.decideAll.error = `${shortName(S.decideAll.current || '')}: ${e.message}`; }
+  S.decideAll.running = false; S.decideAll.current = null; render();
+}
+function ensureJudgeText(job) {
+  if (!job || job.status !== 'done' || S.judgeText.has(job.job_id) || S.judgeText.has('loading:' + job.job_id)) return;
+  S.judgeText.set('loading:' + job.job_id, true);
+  awaitJob(job.job_id).then(() => render(), () => S.judgeText.delete('loading:' + job.job_id));
+}
+function judgedLine(t) {
+  const jd = t && t.judged; if (!jd || !jd.note) return null;
+  return el('span', { class: 'verdict', title: `${jd.by || 'the judge'}, ${relTime(jd.when)}` }, `Kept open: ${jd.note}`);
+}
+function judgeLine(taskId) {
+  const j = lastJudgeFor(taskId); if (!j) return judgedLine(task(taskId));
+  if (j.status !== 'done') return el('span', { class: 'verdict' }, el('span', { class: 'spin' }), 'Deciding…');
+  ensureJudgeText(j);
+  const text = S.judgeText.get(j.job_id);
+  if (text === undefined) return judgedLine(task(taskId)) || el('span', { class: 'verdict' }, 'reading the decision…');
+  const line = verdictWords(lastLine(text)) || (j.exit_code === 0 ? 'closed' : 'kept open');
+  return el('span', { class: `verdict ${j.exit_code === 0 ? 'good' : ''}`, title: 'the judge, ' + relTime(j.ended || j.started) }, line);
+}
+function decideButton(taskId) {
+  if (isDeciding(taskId)) return el('span', { class: 'muted' }, el('span', { class: 'spin' }), 'Deciding…');
+  if (activeJobFor(taskId)) return null;
+  return btn('Decide', () => decide(taskId).catch(() => {}), 'sm decide', { title: 'an agent reads the record and closes the task, or says why it stays open' });
 }
 async function startRun(taskId, mode) {
   try {
@@ -682,31 +915,90 @@ function promptControls(jobId, status, prompt, idSuffix) {
 }
 /* inbox */
 function renderInbox() {
-  const q = S.q, parts = [];
+  const q = S.q, parts = [], d = S.data;
+  const match = id => !q || taskMatches(task(id) || { id }, q);
   const items = inbox().filter(it => !q || taskMatches(task(it.task_id) || { id: it.task_id, purpose: it.purpose, author: it.author }, q, it.thread));
-  parts.push(sec('Inbox', items.length ? plural(items.length, 'item') : null));
-  parts.push(el('div', { class: 'block' }, items.length ? items.map(renderInboxItem) : el('div', { class: 'quiet' }, inbox().length ? `Nothing matches "${S.q}".` : 'Nothing waiting on you')));
-  const js = jobs().filter(j => !q || taskMatches(task(j.task_id) || { id: j.task_id }, q));
-  if (js.length) {
-    parts.push(sec('Jobs', `${js.filter(j => j.status !== 'done').length} active`));
-    parts.push(el('div', { class: 'block' }, js.map(renderJob)));
-  }
+  const running = (d.running || []).map(run).filter(Boolean);
+  const activeJobs = jobs().filter(j => j.status !== 'done');
+  const runningRows = [...activeJobs.filter(j => match(j.task_id)).map(renderJob),
+    ...running.filter(r => !activeJobs.some(j => j.run_id === r.run_id) && match(r.task_id)).map(r => renderRunRow(r, true))];
+  const decideAllList = decisionList(d);
+  const judged = jobs().filter(j => j.mode === 'judge').map(j => j.task_id);
+  const decideRows = [...new Set([...decideAllList.map(t => t.id), ...judged])].map(task).filter(t => t && match(t.id)).sort((a, b) => b.id.localeCompare(a.id));
   const today = dayKey(new Date().toISOString());
-  const runsToday = Object.values(S.data.runs || {}).filter(r => dayKey(r.started) === today && (!q || taskMatches(task(r.task_id) || { id: r.task_id }, q)))
-    .sort((a, b) => String(b.started || '').localeCompare(String(a.started || '')));
-  parts.push(sec('Today', runsToday.length ? plural(runsToday.length, 'run') : null));
-  parts.push(el('div', { class: 'block' }, runsToday.length ? runsToday.map(r => el('div', { class: 'tr', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`,
-    onclick: e => { if (e.target.closest('a')) return; openLog(r.run_id, null); }, onkeydown: e => { if (e.key === 'Enter') openLog(r.run_id, null); } },
-    modeTag(r.mode), pill(r.status), taskLink(r.task_id || '?'), el('span', { class: 'purpose muted' }, (task(r.task_id) || {}).purpose || ''),
-    el('span', { class: 'muted small' }, duration(r.duration_s)), when(r.started))) : el('div', { class: 'quiet' }, 'No run today.')));
-  parts.push(el('div', { class: 'faint small mono', style: 'margin-top:10px' }, S.data.home || ''));
+  const doneToday = Object.values(d.tasks || {}).filter(t => t.kind !== 'general' && settledDay(t, d.runs) === today && match(t.id)).sort((a, b) => b.id.localeCompare(a.id));
+  const tile = (key, n, label, cls, extra) => el('div', { class: `tile ${n ? cls : 'zero'}`, role: 'button', tabindex: '0', title: `go to ${label}`,
+    onclick: e => { if (e.target.closest('button')) return; scrollToKey(key); }, onkeydown: e => { if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') scrollToKey(key); } },
+    el('span', { class: 'num' }, String(n)), el('span', { class: 'lbl' }, label), extra || null);
+  const da = S.decideAll;
+  parts.push(el('div', { class: 'tiles' },
+    tile('sec:inbox', inbox().length, 'Waiting on you', 'amber'),
+    tile('sec:running', running.length + activeJobs.filter(j => !j.run_id).length, 'Running now', 'live'),
+    tile('sec:decide', decideAllList.length, 'Needs a decision', 'amber', decideAllList.length || (da && da.running) ? el('span', { class: 'act' },
+      el('button', { class: 'sm', type: 'button', disabled: !!(da && da.running), onclick: e => { e.stopPropagation(); decideAll(); } }, da && da.running ? [el('span', { class: 'spin' }), `Deciding ${da.done + 1} of ${da.total}`] : 'Decide all')) : null),
+    tile('sec:done', doneToday.length, 'Done today', 'good')));
+  const st = todayStats(d, today);
+  parts.push(el('div', { class: 'statsline' }, el('span', {}, 'Today: '),
+    el('span', {}, 'agents spent ', el('b', {}, money(st.spend) || '$0.00')),
+    el('span', {}, 'your runs ', el('b', {}, st.runs ? duration(st.operator_s) : 'none')),
+    st.runs ? el('span', {}, 'runs ', el('b', {}, `${st.ok} ok`), st.failed ? [' / ', el('b', { class: 'err' }, `${st.failed} failed`)] : null) : null));
+  parts.push(sec('Waiting on you', items.length ? plural(items.length, 'item') : null));
+  parts[parts.length - 1].dataset.key = 'sec:inbox';
+  parts.push(el('div', { class: 'block' }, items.length ? items.map(renderInboxItem) : el('div', { class: 'quiet' }, inbox().length ? `Nothing matches "${S.q}".` : 'Nothing waiting on you.')));
+  parts.push(sec('Running now', runningRows.length ? String(runningRows.length) : null));
+  parts[parts.length - 1].dataset.key = 'sec:running';
+  parts.push(el('div', { class: 'block' }, runningRows.length ? runningRows : el('div', { class: 'quiet' }, 'Nothing running.')));
+  parts.push(sec('Needs a decision', decideAllList.length ? plural(decideAllList.length, 'task') : null, da && da.error ? el('span', { class: 'err' }, `Decide all stopped: ${da.error}`) : null));
+  parts[parts.length - 1].dataset.key = 'sec:decide';
+  parts.push(el('div', { class: 'block' }, decideRows.length ? decideRows.map(renderDecideRow) : el('div', { class: 'quiet' }, 'Nothing to decide.')));
+  parts.push(sec('Done today', doneToday.length ? plural(doneToday.length, 'task') : null));
+  parts[parts.length - 1].dataset.key = 'sec:done';
+  parts.push(el('div', { class: 'block' }, doneToday.length ? doneToday.map(renderDoneRow) : el('div', { class: 'quiet' }, 'Nothing settled today yet.')));
+  if (S.dev) {
+    const js = jobs().filter(j => match(j.task_id));
+    if (js.length) {
+      parts.push(sec('Jobs', `${js.filter(j => j.status !== 'done').length} active`));
+      parts.push(el('div', { class: 'block' }, js.map(renderJob)));
+    }
+    const runsToday = Object.values(d.runs || {}).filter(r => dayKey(r.started) === today && match(r.task_id))
+      .sort((a, b) => String(b.started || '').localeCompare(String(a.started || '')));
+    parts.push(sec('Today', runsToday.length ? plural(runsToday.length, 'run') : null));
+    parts.push(el('div', { class: 'block' }, runsToday.length ? runsToday.map(r => renderRunRow(r, false)) : el('div', { class: 'quiet' }, 'No run today.')));
+    parts.push(el('div', { class: 'faint small mono', style: 'margin-top:10px' }, d.home || ''));
+  }
   return el('div', {}, parts);
 }
+function renderRunRow(r, live) {
+  const t = task(r.task_id);
+  return el('div', { class: 'tr', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`,
+    onclick: e => { if (e.target.closest('a, button')) return; openLog(r.run_id, null); }, onkeydown: e => { if (e.key === 'Enter') openLog(r.run_id, null); } },
+    S.dev ? modeTag(r.mode) : null, pill(r.status), taskLink(r.task_id || '?'), !S.dev ? areaTag(t) : null, el('span', { class: 'purpose muted' }, (t || {}).purpose || ''),
+    live ? [el('span', { class: 'muted small' }, 'since '), when(r.started), btn('Watch', () => openLog(r.run_id, null), 'sm')] : [chipsRow(usageChips(r)), when(r.started)]);
+}
 function renderInboxItem(it) {
-  const id = it.task_id;
-  return el('div', { class: 'ib', 'data-key': 'i:' + id },
+  const id = it.task_id, t = task(id);
+  if (S.dev) return el('div', { class: 'ib', 'data-key': 'i:' + id },
     modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
     el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+  return el('div', { class: 'sr', 'data-key': 'i:' + id },
+    taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
+    el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}`, title: it.next === 'apply' ? 'the dry run passed; this changes production' : 'a read-only or dry run first; nothing changes' }, nextLabel(it.next)),
+    runButton(id, it.next));
+}
+function renderDecideRow(t) {
+  const s = t.suggestions || [], last = lastRunOf(t, S.data.runs), judge = lastJudgeFor(t.id);
+  const why = t.settled ? null : s.length ? truncate(s.map(x => x.text).join('; '), 140) : last && last.status !== 'ok' ? `last run ${last.status}${last.last_error ? ': ' + truncate(last.last_error, 100) : ''}` : '';
+  return el('div', { class: `sr ${isDeciding(t.id) ? 'busy' : ''}`, 'data-key': 'd:' + t.id },
+    tick(t), taskLink(t.id), areaTag(t), el('span', { class: 'purpose', title: t.purpose || '' }, t.purpose || ''),
+    t.settled ? null : decideButton(t.id),
+    t.settled && t.outcome ? el('span', { class: 'verdict good' }, `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`) : null,
+    !t.settled && why ? el('span', { class: 'verdict' }, why) : null,
+    judge || t.judged ? judgeLine(t.id) : null);
+}
+function renderDoneRow(t) {
+  return el('div', { class: 'sr', 'data-key': 'done:' + t.id },
+    tick(t), taskLink(t.id), areaTag(t), el('span', { class: 'purpose', title: t.purpose || '' }, t.outcome ? `${t.outcome.state || 'done'}: ${t.outcome.note || ''}` : t.purpose || ''),
+    chipsRow(agentChips(t.agents)), t.outcome ? when(t.outcome.closed) : null);
 }
 function renderJob(j) {
   const open = () => openJob(j.job_id);
@@ -732,14 +1024,18 @@ function renderThreads() {
 }
 function renderThread(th, taskIds) {
   const ids = (th.tasks || []).slice().sort();
+  const done = th.state === 'done', open = ids.filter(id => task(id) && !task(id).settled).length;
+  const summary = threadSummary(threadAgents(th, S.data.tasks || {}));
   const head = [
+    done ? el('span', { class: 'tick done', title: 'every task settled' }, TICK.done) : null,
     el('span', { class: 'title' }, th.title || th.id),
-    pill(th.state || 'open'),
-    (th.areas || []).length ? el('span', { class: 'muted small' }, th.areas.join(', ')) : null,
+    S.dev ? pill(th.state || 'open') : !done && open ? el('span', { class: 'next', title: 'tasks still open' }, `${open} to do`) : null,
+    S.dev && (th.areas || []).length ? el('span', { class: 'muted small' }, th.areas.join(', ')) : null,
     th.suggestions ? el('span', { class: 'suggn', title: plural(th.suggestions, 'suggestion') }, `${th.suggestions} !`) : null,
     el('span', { class: 'grow' }),
     el('span', { class: 'mini' }, flowSvg(ids, true)),
     when(th.updated),
+    summary ? el('span', { class: 'full muted small' }, summary) : null,
   ];
   return collapsible('t:' + th.id, head, () => renderThreadBody(th, taskIds, ids), 'thread/' + encodeURIComponent(th.id), th.explicit ? '' : 'inferred');
 }
@@ -747,15 +1043,27 @@ function renderThreadBody(th, taskIds, ids) {
   const parts = [];
   if (th.result) parts.push(el('div', { class: 'result' }, markdown(th.result)));
   parts.push(el('div', { class: 'flowwrap' }, flowSvg(ids, false)));
-  parts.push(el('div', { class: 'line small' },
-    (th.targets || []).length ? el('span', { class: 'line' }, el('span', { class: 'muted' }, 'targets'), th.targets.map(targetLink)) : null,
-    (th.links || []).length ? el('span', { class: 'line' }, el('span', { class: 'muted' }, 'links'), th.links.map(linkTag)) : null,
-    el('span', { class: 'muted' }, 'started ', when(th.started)), el('span', { class: 'id faint', title: 'thread id' }, th.id)));
-  const asks = asksForThread(S.data.asks, th);
-  if (asks.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'asks'), asks.map(renderAsk)));
+  if (S.dev) {
+    parts.push(el('div', { class: 'line small' },
+      (th.targets || []).length ? el('span', { class: 'line' }, el('span', { class: 'muted' }, 'targets'), th.targets.map(targetLink)) : null,
+      (th.links || []).length ? el('span', { class: 'line' }, el('span', { class: 'muted' }, 'links'), th.links.map(linkTag)) : null,
+      el('span', { class: 'muted' }, 'started ', when(th.started)), el('span', { class: 'id faint', title: 'thread id' }, th.id)));
+    const asks = asksForThread(S.data.asks, th);
+    if (asks.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'asks'), asks.map(renderAsk)));
+  } else if ((th.links || []).length) parts.push(el('div', { class: 'line small' }, th.links.map(linkTag)));
   const tasks = taskIds.map(task).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id));
-  parts.push(el('div', { class: 'trows' }, tasks.length ? tasks.map(renderTaskRow) : empty('No task in this thread matches.')));
+  parts.push(el('div', { class: 'trows' }, tasks.length ? tasks.map(S.dev ? renderTaskRow : renderTaskLine) : empty('No task in this thread matches.')));
   return parts;
+}
+function renderTaskLine(t) {
+  const sel = selectedTask() === t.id, words = statusWords(t, inboxItem(t.id), needsDecision(t, new Set(inbox().map(i => i.task_id)), S.data.runs));
+  const why = () => { S.pane = { kind: 'task', id: t.id }; S.details.delete(t.id); setHash('task/' + encodeURIComponent(t.id)); render(); };
+  return el('div', { class: `tl ${sel ? 'sel' : ''}`, 'data-key': 'k:' + t.id, role: 'button', tabindex: '0', title: t.purpose || '',
+    onclick: e => { if (e.target.closest('a, button')) return; selectTask(t.id); }, onkeydown: e => { if (e.key === 'Enter') selectTask(t.id); } },
+    tick(t), el('span', { class: 'name' }, shortName(t.id)), el('span', { class: 'purpose' }, t.purpose || ''),
+    el('span', { class: `small ${words.tone === 'good' ? 'muted' : words.tone === 'warn' ? 'sugg' : 'muted'}` }, words.text),
+    isDeciding(t.id) ? el('span', { class: 'spin' }) : null,
+    el('a', { class: 'why', href: '#task/' + encodeURIComponent(t.id), title: 'what happened and why', onclick: e => { e.preventDefault(); why(); } }, 'Why'));
 }
 function renderAsk(a) {
   const rounds = (a.rounds || []).length;
@@ -933,7 +1241,7 @@ function renderScripts() {
   return el('div', {}, shown.map(s => {
     const t = task(s.id);
     const head = [
-      el('span', { class: 'id title' }, s.id),
+      S.dev ? el('span', { class: 'id title' }, s.id) : [el('span', { class: 'title' }, scriptName(s.id)), areaTag({ id: s.id, area: scriptArea(s.id) })],
       t && (t.meta_errors || []).length ? el('span', { class: 'err small' }, t.meta_errors.join('; ')) : null,
       el('span', { class: 'purpose muted', title: s.purpose || '' }, s.purpose || 'no purpose'),
       el('span', { class: 'muted small' }, scriptStats(s.stats)),
@@ -987,7 +1295,7 @@ function renderPane() {
   if (p.kind === 'task') {
     const pb = $('#pb'), top = pb.scrollTop, t = task(p.id);
     if (!t) { paneShell([el('span', { class: 'id' }, p.id)], el('div', { class: 'muted' }, 'This task is no longer in the home.')); return; }
-    paneShell([el('span', { class: 'id' }, t.id), pill(t.status || 'draft')], renderTaskPane(t));
+    paneShell(S.dev ? [el('span', { class: 'id' }, t.id), pill(t.status || 'draft')] : [el('span', { class: 'muted small' }, 'Task '), areaTag(t)], renderTaskPane(t));
     pb.scrollTop = top;
   } else if (p.kind === 'job' && !p.built) { buildJobPane(p); }
   else if (p.kind === 'log' && !p.built) { buildLogPane(p); }
@@ -998,25 +1306,81 @@ function backTo(p) {
   return { label: p.back.kind === 'task' ? 'task' : p.back.kind === 'job' ? 'job' : 'back', go: () => { stopPane(); S.pane = p.back; if (p.back.kind === 'task') setHash('task/' + encodeURIComponent(p.back.id)); else if (p.back.kind === 'job') setHash('job/' + encodeURIComponent(p.back.id)); p.back.built = false; render(); } };
 }
 function renderTaskPane(t) {
-  const parts = [];
+  const parts = [], closable = t.kind !== 'general' && !t.archived;
+  const it = inboxItem(t.id), decide = needsDecision(t, new Set(inbox().map(i => i.task_id)), S.data.runs), words = statusWords(t, it, decide);
+  const threadLink = t.thread ? el('a', { class: 'small', href: '#thread/' + encodeURIComponent(t.thread), onclick: e => { e.preventDefault(); focusKey('threads', 't:' + t.thread, 'thread/' + encodeURIComponent(t.thread)); } }, 'thread') : null;
+  if (!S.dev) {
+    parts.push(el('div', { class: 'pane-name' }, tick(t), ' ', shortName(t.id)));
+    parts.push(el('div', { class: `status-words ${words.tone}` }, isDeciding(t.id) ? [el('span', { class: 'spin' }), 'Deciding…'] : words.text));
+    parts.push(el('div', {}, t.purpose || el('span', { class: 'faint' }, 'no purpose')));
+    parts.push(el('div', { class: 'line small', style: 'margin-top:4px' }, t.changes_prod ? tag('changes production', 'warn') : null, el('span', { class: 'muted' }, 'created ', when(t.created)), threadLink));
+    parts.push(el('h4', {}, 'What happened'));
+    parts.push(renderWhatHappened(t));
+    const chips = agentChips(t.agents); if (chips.length) parts.push(chipsRow(chips));
+    for (const s of t.suggestions || []) parts.push(el('div', { class: 'sugg small' }, s.text || ''));
+    if ((t.meta_errors || []).length) parts.push(el('div', { class: 'err small' }, 'The task record has a problem: ', t.meta_errors.join('; ')));
+    if (closable) {
+      const actions = [];
+      if (it) actions.push(el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}` }, nextLabel(it.next)), runButton(t.id, it.next));
+      else if (!t.settled && t.status !== 'draft') actions.push(runButton(t.id, nextMode(t)));
+      if (!t.settled && t.status !== 'draft') { const db = decideButton(t.id); if (db) actions.push(db); }
+      const open = S.details.has(t.id);
+      actions.push(btn(open ? 'Hide details' : 'Show details', () => { if (open) S.details.delete(t.id); else S.details.add(t.id); render(); }, 'sm'));
+      parts.push(el('div', { class: 'actions' }, actions));
+      if (!open) return el('div', {}, parts);
+    } else {
+      const open = S.details.has(t.id);
+      parts.push(el('div', { class: 'actions' }, btn(open ? 'Hide details' : 'Show details', () => { if (open) S.details.delete(t.id); else S.details.add(t.id); render(); }, 'sm')));
+      if (!open) return el('div', {}, parts);
+    }
+    parts.push(el('div', { class: 'details' }, renderTaskDetails(t, closable)));
+    return el('div', {}, parts);
+  }
   parts.push(el('div', {}, t.purpose || el('span', { class: 'faint' }, 'no purpose')));
   parts.push(el('div', { class: 'line small', style: 'margin-top:6px' }, t.kind && t.kind !== 'task' ? tag(t.kind, 'accent') : null, prodMarker(t), t.area ? tag(t.area) : null,
-    el('span', { class: 'muted' }, 'created ', when(t.created)), t.author ? el('span', { class: 'muted' }, `by ${t.author}`) : null,
-    t.thread ? el('a', { class: 'small', href: '#thread/' + encodeURIComponent(t.thread), onclick: e => { e.preventDefault(); focusKey('threads', 't:' + t.thread, 'thread/' + encodeURIComponent(t.thread)); } }, 'thread') : null));
+    t.settled ? el('span', { class: 'tick done', title: 'settled' }, TICK.done) : null,
+    el('span', { class: 'muted' }, 'created ', when(t.created)), t.author ? el('span', { class: 'muted' }, `by ${t.author}`) : null, threadLink));
   const chips = renderChips(t); if (chips) parts.push(chips);
-  parts.push(el('div', { class: 'muted small' }, statsText(t.stats, t.changes_prod)));
+  parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, statsText(t.stats, t.changes_prod)), chipsRow(agentChips(t.agents))));
   if ((t.meta_errors || []).length) parts.push(el('div', { class: 'err small' }, 'meta.json: ', t.meta_errors.join('; ')));
   for (const s of t.suggestions || []) parts.push(el('div', { class: 'sugg small' }, tag(s.kind || 'note', 'warn'), s.text || ''));
   if (t.outcome) parts.push(el('div', { class: `note small ${tone(t.outcome.state)}` }, `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`,
     el('span', { class: 'faint' }, ` (${t.outcome.closed_by || '?'}, `, when(t.outcome.closed), t.outcome.run ? `, run ${t.outcome.run})` : ')')));
   else if (t.abandoned_reason) parts.push(el('div', { class: 'note small' }, 'abandoned: ', t.abandoned_reason));
-  const closable = t.kind !== 'general' && !t.archived;
+  const jl = judgeLine(t.id); if (jl) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'judge'), jl));
+  parts.push(renderTaskDetails(t, closable));
+  return el('div', {}, parts);
+}
+function renderWhatHappened(t) {
+  const last = lastRunOf(t, S.data.runs), lines = [];
+  if (t.outcome) lines.push(el('div', {}, el('b', {}, t.outcome.state === 'abandoned' ? 'Abandoned' : t.outcome.state === 'partial' ? 'Partly done' : 'Done'), `: ${t.outcome.note || ''}`),
+    el('div', { class: 'faint small' }, `closed by ${t.outcome.closed_by || '?'}, `, when(t.outcome.closed)));
+  else if (t.abandoned_reason) lines.push(el('div', {}, el('b', {}, 'Abandoned'), `: ${t.abandoned_reason}`));
+  else if (t.superseded_by) lines.push(el('div', {}, 'Replaced by ', taskLink(t.superseded_by)));
+  if (last) {
+    const what = last.status === 'ok' ? 'went ok' : last.status === 'running' ? 'is running' : last.status;
+    lines.push(el('div', { class: t.outcome ? 'small muted' : '' }, `Last ${last.mode === 'apply' ? 'apply' : 'check'} ${what}, `, when(last.started),
+      ' ', btn('log', () => openLog(last.run_id, { kind: 'task', id: t.id }), 'sm')));
+    if (last.last_error) lines.push(el('div', { class: 'err' }, last.last_error));
+    if ((last.results || []).length) lines.push(el('ul', {}, last.results.map(x => el('li', {}, x))));
+    const uc = usageChips(last); if (uc.length) lines.push(chipsRow(uc));
+  } else if (!t.outcome) lines.push(el('div', { class: 'muted' }, t.status === 'draft' ? 'Still a draft: the agent has not finished preparing it.' : 'Not run yet.'));
+  const jl = judgeLine(t.id); if (jl) lines.push(el('div', { class: 'small' }, el('span', { class: 'muted' }, 'The judge: '), jl));
+  return el('div', { class: 'what' }, lines);
+}
+function renderTaskDetails(t, closable) {
+  const parts = [];
+  if (!S.dev) parts.push(el('div', { class: 'line small' }, el('span', { class: 'id' }, t.id), btn('copy', () => copyText(t.id), 'sm'), pill(t.status || 'draft'), t.kind && t.kind !== 'task' ? tag(t.kind, 'accent') : null,
+    t.author ? el('span', { class: 'muted' }, `by ${t.author}`) : null));
+  if (!S.dev) { const chips = renderChips(t); if (chips) parts.push(chips); parts.push(el('div', { class: 'muted small' }, statsText(t.stats, t.changes_prod))); }
   if (closable) {
     parts.push(el('h4', {}, 'Run it'));
     const modes = t.changes_prod ? ['dry', 'apply'] : ['read'];
-    parts.push(el('div', { class: 'cmds' }, modes.map(m => { const c = runCommand(t.id, m); return el('span', { class: 'cmd' }, el('span', {}, c), btn('copy', () => copyText(c), 'sm', { title: 'copy to clipboard' }), runButton(t.id, m)); })));
+    parts.push(el('div', { class: 'cmds' }, modes.map(m => { const c = runCommand(t.id, m); return el('span', { class: 'cmd' }, el('span', {}, c), btn('copy', () => copyText(c), 'sm', { title: 'copy to clipboard' }), S.dev ? runButton(t.id, m) : null); })));
     const js = jobs().filter(j => j.task_id === t.id);
     if (js.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'jobs'), js.map(j => btn(`${j.mode} ${jobLabel(j)}`, () => openJob(j.job_id), 'sm'))));
+    const judge = lastJudgeFor(t.id), text = judge && S.judgeText.get(judge.job_id);
+    if (text) parts.push(el('h4', {}, 'The judge’s reasoning'), el('pre', { class: 'reason small' }, text));
   }
   parts.push(el('h4', {}, 'Files'));
   const fb = fileButtons(t);
@@ -1027,14 +1391,14 @@ function renderTaskPane(t) {
   const runs = (t.runs || []).map(run).filter(Boolean).reverse();
   parts.push(el('h4', {}, `Runs (${runs.length})`));
   parts.push(runs.length ? el('div', { class: 'runs' }, runs.map(r => renderRun(r, t))) : el('div', { class: 'muted' }, 'Never run.'));
-  return el('div', {}, parts);
+  return parts;
 }
 function renderRun(r, t) {
   const targets = Object.entries(r.targets || {});
   const open = () => openLog(r.run_id, t ? { kind: 'task', id: t.id } : null);
   return el('div', { class: 'run', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`, onclick: e => { if (e.target.closest('a')) return; open(); },
     onkeydown: e => { if (e.key === 'Enter') open(); } },
-    modeTag(r.mode), pill(r.status || '?'), when(r.started), el('span', { class: 'muted' }, duration(r.duration_s)),
+    modeTag(r.mode), pill(r.status || '?'), when(r.started), chipsRow(usageChips(r)),
     r.plan_run ? el('span', { class: 'muted small' }, 'step of plan run ', el('span', { class: 'id' }, r.plan_run)) : null,
     r.steps ? el('span', { class: 'muted small' }, plural(r.steps.length, 'step')) : null,
     r.user ? el('span', { class: 'faint small' }, r.user) : null,
@@ -1234,6 +1598,11 @@ function connect() {
   };
 }
 function boot() {
+  S.dev = readDev();
+  document.documentElement.classList.toggle('dev', S.dev);
+  const devBtn = $('#devtoggle');
+  devBtn.setAttribute('aria-pressed', String(S.dev));
+  devBtn.addEventListener('click', () => setDev(!S.dev));
   const search = $('#search');
   let qTimer = null;
   search.addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.q = search.value.trim().toLowerCase(); render(); }, 120); });

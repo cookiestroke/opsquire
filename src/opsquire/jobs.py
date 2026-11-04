@@ -64,10 +64,14 @@ class Jobs:
         self.changed = threading.Event()
 
     def start(self, task_query: str, mode: str) -> Job:
+        """A run from the page (mode read, dry or apply), or `judge`: the agent that decides how the task ended."""
         task = resolve_task(task_query)
         if task.meta is None:
             raise OpsquireError(f"{task.id} has invalid meta.json: " + "; ".join(task.errors))
-        if mode not in MODES or mode not in task.meta.modes:
+        if mode == "judge":
+            if task.kind == "general":
+                raise OpsquireError("general scripts are not closed; judge the tasks that use them")
+        elif mode not in MODES or mode not in task.meta.modes:
             raise OpsquireError(f"{task.id} runs in {', '.join(task.meta.modes)} mode, not {mode}")
         with self.lock:
             if any(j.task_id == task.id and j.status != "done" for j in self.jobs.values()):
@@ -76,7 +80,10 @@ class Jobs:
                 raise OpsquireError("too many jobs running")
             job = Job(f"{now():%Y%m%dT%H%M%S%f}"[:-3] + "Z", task.id, mode, iso(now()))
             self.jobs[job.job_id] = job
-        argv = [sys.executable, "-m", "opsquire", "run", task.id] + (["--apply"] if mode == "apply" else [])
+        if mode == "judge":
+            argv = [sys.executable, "-m", "opsquire", "judge", task.id]
+        else:
+            argv = [sys.executable, "-m", "opsquire", "run", task.id] + (["--apply"] if mode == "apply" else [])
         master, slave = pty.openpty()
         env = {**os.environ, "OPSQUIRE_AUTHOR": os.environ.get("OPSQUIRE_AUTHOR", "opsquire ui"), "TERM": "dumb"}
         try:
@@ -150,7 +157,7 @@ class Jobs:
             except OSError:
                 pass
         runs = [r for r in runs_for(job.task_id) if str(r.get("started", "")) >= job.started]
-        job.run_id = str(runs[-1]["run_id"]) if runs else None
+        job.run_id = str(runs[-1]["run_id"]) if runs and job.mode != "judge" else None
         self.changed.set()
 
     def get(self, job_id: str) -> Job:

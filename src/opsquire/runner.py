@@ -48,6 +48,14 @@ def style(text: str, code: str, stream: IO[str]) -> str:
     return f"\033[{code}m{text}\033[0m" if stream.isatty() else text
 
 
+def child_usage() -> dict[str, float]:
+    """What the script and everything it spawned cost this machine: peak memory and CPU time (children so far)."""
+    import resource
+
+    ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return {"max_rss_mb": round(ru.ru_maxrss / 1024, 1), "cpu_s": round(ru.ru_utime + ru.ru_stime, 2)}
+
+
 def tty_prompt(question: str) -> str:
     try:
         with open("/dev/tty", "w") as out, open("/dev/tty") as inp:
@@ -92,6 +100,7 @@ class Run:
         self.locked: list[str] = []
         self.sync_w = -1
         self.tests = 0
+        self.usage: dict[str, float] | None = None
         self.bar = ProgressBar(sys.stdout)
 
     def event(self, event: str, msg: str = "", level: str = "info", src: str = "runner", **extra: Any) -> None:
@@ -225,6 +234,7 @@ class Run:
             "redactions": self.redact.count,
             "counts": self.counts,
             "results": self.results,
+            "usage": self.usage,
             "last_error": self.last_error,
             "paths": {
                 "dir": str(self.dir),
@@ -441,6 +451,7 @@ class Run:
                 else:
                     self.line(name, text, echo=sys.stdout if name == "out" else sys.stderr)
             code = proc.wait()
+            self.usage = child_usage()
         finally:
             self.bar.close()
             for s, h in previous.items():

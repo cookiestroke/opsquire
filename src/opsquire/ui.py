@@ -162,6 +162,9 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/run":
                 job = self.jobs.start(str(body.get("task", "")), str(body.get("mode", "")))
                 self.send_json({"job_id": job.job_id})
+            elif url.path == "/api/judge":
+                job = self.jobs.start(str(body.get("task", "")), "judge")
+                self.send_json({"job_id": job.job_id})
             elif url.path == "/api/answer":
                 self.jobs.answer(str(body.get("job", "")), str(body.get("text", "")))
                 self.send_json({"ok": True})

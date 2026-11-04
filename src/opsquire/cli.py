@@ -18,6 +18,7 @@ from .close import auto_close, close_task
 from .docs import write_docs
 from .homegit import commit_quietly
 from .integrate import integrate
+from .judge import judge
 from .lint import lint_task, save_lint
 from .model import (
     DATA_DIR,
@@ -470,6 +471,21 @@ def cmd_threads(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_judge(a: argparse.Namespace) -> int:
+    """An agent reads the task's record and closes it (done, partial, abandoned) or says what is missing."""
+    out = judge(resolve_task(a.task).id, a.agent)
+    if a.json:
+        emit(out, True)
+        return 0
+    if out["decision"] == "keep":
+        print(f"{out['id']}: kept open: {out['note']}")
+        return 1
+    print(f"{out['id']}: closed {out['decision']}: {out['note']}")
+    for note in out.get("notes") or []:
+        print(note, file=sys.stderr)
+    return 0
+
+
 def cmd_ui(a: argparse.Namespace) -> int:
     """Serve the home's picture (threads, tasks, runs, scripts, locks; closing is its one write) on localhost."""
 
@@ -656,6 +672,12 @@ def parser() -> argparse.ArgumentParser:
     pc.add_argument("--delete", action="store_true", help="drop: discard the piece and its branch, do not park it")
     pc.add_argument("--json", action="store_true")
     pc.set_defaults(fn=cmd_piece)
+
+    jg = sub.add_parser("judge", help="let an agent decide how a task ended from its record, and close it")
+    jg.add_argument("task")
+    jg.add_argument("--agent", help="agent from retinue.json (default from retinue.json)")
+    jg.add_argument("--json", action="store_true")
+    jg.set_defaults(fn=cmd_judge)
 
     th = sub.add_parser("threads", help="tasks grouped into the threads (stories) they belong to, with suggestions")
     th.add_argument("--json", action="store_true")
