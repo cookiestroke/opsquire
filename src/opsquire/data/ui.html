@@ -993,11 +993,12 @@ function renderRunRow(r, live) {
 }
 function renderInboxItem(it) {
   const id = it.task_id, t = task(id);
+  const changed = it.changed_since_lint ? el('span', { class: 'muted small', title: 'its files or a script it uses changed after its last lint; the run lints them again first' }, 'changed since lint') : null;
   if (S.dev) return el('div', { class: 'ib', 'data-key': 'i:' + id },
     modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
-    el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+    changed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
   return el('div', { class: 'sr', 'data-key': 'i:' + id },
-    taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
+    taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), changed,
     el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}`, title: it.next === 'apply' ? 'the dry run passed; this changes production' : 'a read-only or dry run first; nothing changes' }, nextLabel(it.next)),
     runButton(id, it.next));
 }
@@ -1589,18 +1590,21 @@ async function pollJob(d) {
   }
 }
 /* ---- data flow ---- */
-let refreshTimer = null, loading = false, loadAgain = false;
-function refresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(load, 150); }
+let refreshTimer = null, loading = false, loadAgain = false, retry = 2000;
+function refresh(delay = 150) { clearTimeout(refreshTimer); refreshTimer = setTimeout(load, delay); }
 async function load() {
   if (loading) { loadAgain = true; return; }
   loading = true;
   try {
     const data = await api('/api/state');
     if (data && typeof data === 'object') { S.data = data; S.error = null; }
+    retry = 2000;
     if (S.hash === null) applyHash(); else render();
   } catch (e) {
     S.error = `state: ${e.message}`;
-    if (S.data) render(); else $('#main').replaceChildren(empty(`Cannot load the home: ${e.message}`));
+    if (S.data) render(); else $('#main').replaceChildren(empty(`Cannot load the home: ${e.message}. Retrying.`));
+    if (!loadAgain) refresh(retry);
+    retry = Math.min(retry * 2, 30000);
   }
   loading = false;
   if (loadAgain) { loadAgain = false; refresh(); }
@@ -1636,6 +1640,8 @@ function boot() {
   let rTimer = null;
   window.addEventListener('resize', () => { if (S.view === 'map' && S.data) { clearTimeout(rTimer); rTimer = setTimeout(render, 150); } });
   setInterval(() => { if (S.data && !document.hidden) render(); }, 60000);
+  setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   connect();
   load();
 }

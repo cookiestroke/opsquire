@@ -13,6 +13,7 @@ from typing import Any
 
 from . import locks
 from .docs import final_mode, run_stats
+from .lint import last_lint
 from .model import Task, all_task_folders, home_dir, iso, load_task, now, parse_iso, read_json, var_dir
 from .query import all_runs, task_status
 
@@ -147,8 +148,24 @@ def days_since(stamp: str | None, at: dt.datetime) -> float:
 
 
 def has_result(folder: Path) -> bool:
-    design = folder / "design.md"
-    return design.is_file() and any(line.startswith("## Result") for line in design.read_text().splitlines())
+    try:
+        text = (folder / "design.md").read_text()
+    except OSError:
+        return False
+    return any(line.startswith("## Result") for line in text.splitlines())
+
+
+def read_or_none(path: Path) -> str | None:
+    try:
+        return path.read_text()
+    except OSError:
+        return None
+
+
+def changed_since_lint(task: Task, status: str) -> bool:
+    """A handed-over task (its lint passed once) whose files changed since, often a general script it uses edited
+    for another task. It stays in the inbox: the runner lints the exact files again before it runs anything."""
+    return status == "draft" and task.meta is not None and bool((last_lint(task) or {}).get("ok"))
 
 
 def suggestions(
@@ -375,7 +392,6 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
         stamps = [task_views[m]["created"] or "" for m in th["tasks"]]
         stamps += [str(r.get("ended") or r.get("started") or "") for m in th["tasks"] for r in by_task.get(m, [])]
         stamps += [str(task_views[m]["outcome"]["closed"]) for m in th["tasks"] if task_views[m]["outcome"]]
-        result = home / "threads" / f"{tid}.md"
         th.update(
             {
                 "title": thread_title(tid, members),
@@ -386,7 +402,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
                 "areas": sorted({task_views[m]["area"] for m in th["tasks"] if task_views[m]["area"]}),
                 "targets": sorted({x for m in th["tasks"] for x in task_views[m]["targets"]}),
                 "links": sorted({x for m in th["tasks"] for x in task_views[m]["links"]}),
-                "result": result.read_text() if result.is_file() else None,
+                "result": read_or_none(home / "threads" / f"{tid}.md"),
                 "suggestions": sum(len(task_views[m]["suggestions"]) for m in th["tasks"]),
             }
         )
@@ -418,7 +434,8 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
     inbox = []
     for t in sorted(tasks, key=lambda t: t.id, reverse=True):
         v = task_views[t.id]
-        nxt = next_mode(t, by_task.get(t.id, []), str(v["status"]))
+        relint = changed_since_lint(t, str(v["status"]))
+        nxt = next_mode(t, by_task.get(t.id, []), "ready" if relint else str(v["status"]))
         if nxt:
             inbox.append(
                 {
@@ -430,6 +447,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
                     "purpose": v["purpose"],
                     "changes_prod": v["changes_prod"],
                     "thread": v["thread"],
+                    "changed_since_lint": relint,
                 }
             )
     return {

@@ -1180,6 +1180,50 @@ class OpsTest(unittest.TestCase):
             proc.send_signal(signal.SIGINT)
             self.assertEqual(proc.wait(timeout=10), 0)
 
+    def test_ui_streams_every_change_that_moves_the_inbox_to_every_page(self) -> None:
+        import http.client
+
+        folder = self.new("handed", "print('v1')\n")
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn(f"http://127.0.0.1:{port}/", proc.stdout.readline() if proc.stdout else "")
+            streams = []
+            for _ in range(2):
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                conn.request("GET", "/api/stream")
+                resp = conn.getresponse()
+                self.assertIn(b"event: hello", resp.readline() + resp.readline())
+                streams.append((conn, resp))
+
+            def inbox() -> list[dict[str, Any]]:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                conn.request("GET", "/api/state")
+                items: list[dict[str, Any]] = json.loads(conn.getresponse().read())["inbox"]
+                conn.close()
+                return items
+
+            def every_page_hears_a_change() -> None:
+                for _, resp in streams:
+                    seen = b""
+                    while b"event: change" not in seen:
+                        line = resp.readline()
+                        self.assertTrue(line, "stream closed")
+                        seen += line
+
+            self.assertEqual(inbox(), [])
+            self.assertEqual(self.cli("lint", folder.name).returncode, 0)
+            every_page_hears_a_change()
+            self.assertEqual([(i["task_id"], i["changed_since_lint"]) for i in inbox()], [(folder.name, False)])
+            (folder / "main.py").write_text("print('v2')\n")
+            every_page_hears_a_change()
+            self.assertEqual([(i["task_id"], i["changed_since_lint"]) for i in inbox()], [(folder.name, True)])
+            for conn, _ in streams:
+                conn.close()
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=10), 0)
+
     def test_ok_apply_closes_the_task_itself_and_close_can_amend(self) -> None:
         body = "import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'restarted')\nsq.result('web1 on v2')\n"
         tid = self.new("auto", body, "--changes-prod", "--rollback", "none").name

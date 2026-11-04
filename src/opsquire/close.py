@@ -66,8 +66,10 @@ def unwritten(run: dict[str, Any]) -> bool:
     """A verify run that finished ok with every target `skipped`: the scaffolded check nobody wrote, which says
     nothing. A blocked or failed verify run is not this, even though its targets read skipped."""
     targets = run.get("targets") or {}
-    return run.get("status") == "ok" and bool(targets) and all(
-        (v.get("status") if isinstance(v, dict) else v) == "skipped" for v in targets.values()
+    return (
+        run.get("status") == "ok"
+        and bool(targets)
+        and all((v.get("status") if isinstance(v, dict) else v) == "skipped" for v in targets.values())
     )
 
 

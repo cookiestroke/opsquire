@@ -1,16 +1,18 @@
-"""`opsquire ui`: a local, read-mostly web view of the home on localhost. One page (data/ui.html) reads the state
-(threads, tasks, runs, asks, scripts, locks) from /api/state, follows changes over /api/stream (server-sent events:
-the server watches the home's meta.json, run.json and locks files), tails a run's output.log and shows a task's
-design.md or script. Its one write is closing a task, the same code as `opsquire close`. Nothing runs from here:
-run commands are shown to copy."""
+"""`opsquire ui`: the operator's console on localhost. One page (data/ui.html) reads the state (threads, tasks, runs,
+asks, scripts, locks) from /api/state and follows changes over /api/stream (server-sent events: one watcher thread
+looks at every file of the home's tasks, general scripts, runs, locks, asks and thread results), tails a run's
+output.log and shows a task's design.md or script. Its writes are closing a task (the same code as `opsquire close`)
+and runs started from the page (jobs.py)."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
+import sys
 import threading
-import time
+import traceback
 from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .close import close_task
 from .jobs import Jobs
-from .model import OpsquireError, home_dir, iso, now, runs_dir, task_folder, var_dir
+from .model import IGNORED_PARTS, OpsquireError, home_dir, iso, now, runs_dir, task_folder, var_dir
 from .state import state
 
 DEFAULT_PORT = 7771
@@ -35,29 +37,24 @@ def page() -> bytes:
 
 
 def fingerprint() -> str:
-    """Changes when any task meta, run record or lock changes: the cheapest signal that the picture moved."""
-    home = home_dir()
-    latest = 0.0
-    count = 0
-    for pattern, root in (("*/*/meta.json", home / "tasks"), ("*/meta.json", home / "general")):
-        for p in root.glob(pattern):
-            try:
-                latest = max(latest, p.stat().st_mtime)
-                count += 1
-            except OSError:
-                continue
-    runs = runs_dir()
-    if runs.is_dir():
-        for p in runs.glob("*/*/run.json"):
-            try:
-                latest = max(latest, p.stat().st_mtime)
-                count += 1
-            except OSError:
-                continue
-    lock_file = var_dir() / "locks" / "locks.json"
-    if lock_file.is_file():
-        latest = max(latest, lock_file.stat().st_mtime)
-    return f"{count}:{latest:.3f}"
+    """Changes when anything the page shows may have moved: any file of a task or general script (its lint stamp
+    and scripts included, since they decide draft or ready), run records, locks, asks and thread results."""
+    home, var = home_dir(), var_dir()
+    paths: list[str] = []
+    for root in (home / "tasks", home / "general", home / "threads", var / "asks", var / "locks"):
+        for folder, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in IGNORED_PARTS]
+            paths += (os.path.join(folder, f) for f in files)
+    for run in runs_dir().glob("*/*/run.json"):
+        paths.append(str(run))
+    h = hashlib.sha256()
+    for path in sorted(paths):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        h.update(f"{path}\0{st.st_mtime_ns}\0{st.st_size}\n".encode())
+    return h.hexdigest()
 
 
 def log_tail(run_id: str, offset: int | None, until: int | None = None) -> dict[str, Any]:
@@ -146,6 +143,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except Exception as e:
+            traceback.print_exc(file=sys.stderr)
+            self.send_json({"error": f"{type(e).__name__}: {e}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
@@ -199,26 +199,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         server: UIServer = self.server  # type: ignore[assignment]
-        seen = fingerprint()
-        last_ping = time.monotonic()
+        seen = server.generation
         self.wfile.write(f"event: hello\ndata: {json.dumps({'generated': iso(now())})}\n\n".encode())
         self.wfile.flush()
         while not server.stopping.is_set():
-            moved = server.jobs.changed.wait(WATCH_INTERVAL_S)
-            current = fingerprint()
-            if current != seen or moved:
-                server.jobs.changed.clear()
+            current = server.wait_change(seen, PING_INTERVAL_S)
+            if current != seen:
                 seen = current
                 self.wfile.write(f"event: change\ndata: {json.dumps({'generated': iso(now())})}\n\n".encode())
-                self.wfile.flush()
-                last_ping = time.monotonic()
-            elif time.monotonic() - last_ping > PING_INTERVAL_S:
+            else:
                 self.wfile.write(b"event: ping\ndata: {}\n\n")
-                self.wfile.flush()
-                last_ping = time.monotonic()
+            self.wfile.flush()
 
 
 class UIServer(ThreadingHTTPServer):
+    """Serves the page; one watcher thread notices when the home or a job moved and bumps `generation`, which every
+    open stream waits on, so no stream misses a change another one saw."""
+
     daemon_threads = True
     allow_reuse_address = True
 
@@ -226,6 +223,35 @@ class UIServer(ThreadingHTTPServer):
         super().__init__(address, Handler)
         self.stopping = threading.Event()
         self.jobs = Jobs()
+        self.generation = 0
+        self.moved = threading.Condition()
+        threading.Thread(target=self.watch, daemon=True).start()
+
+    def watch(self) -> None:
+        seen = fingerprint()
+        while not self.stopping.is_set():
+            job_moved = self.jobs.changed.wait(WATCH_INTERVAL_S)
+            self.jobs.changed.clear()
+            try:
+                current = fingerprint()
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+                continue
+            if job_moved or current != seen:
+                seen = current
+                with self.moved:
+                    self.generation += 1
+                    self.moved.notify_all()
+
+    def wait_change(self, after: int, timeout: float) -> int:
+        with self.moved:
+            self.moved.wait_for(lambda: self.generation != after or self.stopping.is_set(), timeout)
+            return self.generation
+
+    def stop(self) -> None:
+        self.stopping.set()
+        with self.moved:
+            self.moved.notify_all()
 
 
 def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1", on_ready: Callable[[], None] | None = None) -> None:
@@ -239,7 +265,7 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1", on_ready: Callable[
     try:
         server.serve_forever(poll_interval=0.2)
     finally:
-        server.stopping.set()
+        server.stop()
         server.jobs.stop_all()
         server.server_close()
 

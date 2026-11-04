@@ -8,6 +8,7 @@ import sys
 import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .model import (
     DATA_DIR,
@@ -158,14 +159,23 @@ def save_lint(task: Task, result: LintResult) -> None:
         pass
 
 
-def cached_lint_ok(task: Task) -> bool | None:
-    path = task.folder / LINT_FILE
-    if not path.is_file():
-        return None
+def last_lint(task: Task) -> dict[str, Any] | None:
+    """The task's last lint stamp, whatever files it was taken on."""
     try:
-        data = read_json(path)
+        data = read_json(task.folder / LINT_FILE)
     except (OSError, ValueError):
         return None
-    if data.get("content_hash") != task.content_hash():
+    return data if isinstance(data, dict) else None
+
+
+def cached_lint_ok(task: Task) -> bool | None:
+    data = last_lint(task)
+    if data is None:
+        return None
+    try:
+        current = task.content_hash()
+    except OSError:
+        return None
+    if data.get("content_hash") != current:
         return None
     return bool(data.get("ok"))
