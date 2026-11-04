@@ -923,6 +923,118 @@ class OpsTest(unittest.TestCase):
         self.env |= {"FAKE_SPLIT": json.dumps(list(pieces)), "FAKE_LOG": str(log)}
         return log
 
+    def piece_env(self, opened: subprocess.CompletedProcess[str]) -> dict[str, str]:
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        info = json.loads(opened.stdout)
+        self.assertTrue(info["worktree"].startswith(str(self.home / ".worktrees/")), info)
+        self.assertEqual(info["env"]["OPSQUIRE_VAR"], str(self.home / "var"))
+        self.assertIn(info["worktree"], info["brief"])
+        env: dict[str, str] = {**self.env, **info["env"]}
+        return env
+
+    def piece_task(self, env: dict[str, str], name: str, body: str) -> str:
+        r = subprocess.run(
+            [*CLI, "new", "web1", name, "--purpose", f"piece {name}"], env=env, capture_output=True, text=True
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        folder = Path(r.stdout.strip())
+        self.assertTrue(str(folder).startswith(env["OPSQUIRE_HOME"]), folder)
+        (folder / "main.py").write_text(body)
+        return folder.name
+
+    def test_piece_open_and_land_puts_a_subagents_task_into_the_home(self) -> None:
+        self.git_home()
+        self.env["OPSQUIRE_AUTHOR"] = "claude-code 26f643b0"
+        env = self.piece_env(self.cli("piece", "open", "alpha", "--json", "--request", "print alpha"))
+        self.assertEqual(json.loads(self.cli("piece", "ls", "--json").stdout)[0]["group"], "claude-code-26f643b0")
+        self.assertIn("print alpha", self.cli("piece", "ls").stdout)
+        tid = self.piece_task(env, "alpha", "print('alpha')\n")
+        self.assertEqual(list(self.home.glob(f"tasks/*/{tid}")), [])
+        r = self.cli("piece", "land", "alpha")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"{tid}: ready", r.stdout)
+        self.assertEqual(json.loads(self.cli("show", tid, "--json").stdout)["status"], "ready")
+        self.assertEqual(
+            json.loads(self.cli("show", tid, "--json").stdout)["meta"]["author"], "claude-code 26f643b0 piece alpha"
+        )
+        self.assertFalse((self.home / ".worktrees").exists())
+        self.assertEqual(self.git("branch", "--list", "piece/*"), "")
+        self.assertEqual(self.git("status", "--short"), "")
+        self.assertEqual(self.cli("piece", "ls").stdout.count("\n"), 1)
+        r = self.cli("run", tid)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.last(tid)["status"], "ok")
+
+    def test_piece_clash_is_reported_and_lands_after_the_markers_are_resolved(self) -> None:
+        self.git_home()
+        r = self.cli("new", "web1", "shared", "--general", "--purpose", "shared", "--lang", "py")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        shared = Path(r.stdout.strip()) / "main.py"
+        self.assertEqual(shared.parent, self.home / "general/web1_shared", r.stdout)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "shared")
+        one = self.piece_env(self.cli("piece", "open", "one", "--group", "g", "--json"))
+        two = self.piece_env(self.cli("piece", "open", "two", "--group", "g", "--json"))
+        (Path(one["OPSQUIRE_HOME"]) / "general/web1_shared/main.py").write_text('"""one."""\n')
+        (Path(two["OPSQUIRE_HOME"]) / "general/web1_shared/main.py").write_text('"""two."""\n')
+        self.assertEqual(self.cli("piece", "land", "g/one").returncode, 0)
+        r = self.cli("piece", "land", "two")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("conflicts in: general/web1_shared/main.py", r.stdout)
+        self.assertEqual(shared.read_text(), '"""one."""\n')
+        clashed = Path(two["OPSQUIRE_HOME"]) / "general/web1_shared/main.py"
+        self.assertIn("<<<<<<<", clashed.read_text())
+        r = self.cli("piece", "land", "two")
+        self.assertEqual(r.returncode, 1)
+        clashed.write_text('"""one and two."""\n')
+        r = self.cli("piece", "land", "two")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(shared.read_text(), '"""one and two."""\n')
+        self.assertFalse((self.home / ".worktrees").exists())
+        self.assertEqual(self.git("status", "--short"), "")
+
+    def test_piece_drop_parks_the_work_and_open_resumes_it(self) -> None:
+        self.git_home()
+        env = self.piece_env(self.cli("piece", "open", "slow", "--group", "g", "--json", "--request", "a slow piece"))
+        tid = self.piece_task(env, "slow", "print('slow')\n")
+        r = self.cli("piece", "drop", "slow")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("parked on piece/g/slow", r.stdout)
+        self.assertFalse((self.home / ".worktrees").exists())
+        self.assertIn("parked", self.cli("piece", "ls").stdout)
+        self.assertIn("is parked", self.cli("piece", "land", "slow").stderr)
+        env = self.piece_env(self.cli("piece", "open", "slow", "--group", "g", "--json"))
+        self.assertEqual(json.loads(self.cli("piece", "ls", "--json").stdout)[0]["request"], "a slow piece")
+        self.assertTrue((Path(env["OPSQUIRE_HOME"]) / f"tasks/{tid[:4]}-{tid[4:6]}/{tid}/main.py").is_file())
+        self.assertEqual(self.cli("piece", "land", "slow").returncode, 0)
+        self.assertEqual(json.loads(self.cli("show", tid, "--json").stdout)["status"], "ready")
+        env = self.piece_env(self.cli("piece", "open", "gone", "--group", "g", "--json"))
+        self.assertIn("discarded", self.cli("piece", "drop", "gone", "--delete").stdout)
+        self.assertEqual(self.git("branch", "--list", "piece/*"), "")
+
+    def test_pieces_do_not_nest(self) -> None:
+        self.git_home()
+        env = self.piece_env(self.cli("piece", "open", "outer", "--group", "g", "--json"))
+        r = subprocess.run([*CLI, "piece", "open", "inner"], env=env, capture_output=True, text=True)
+        self.assertIn("pieces do not nest", r.stderr)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("already open", self.cli("piece", "open", "outer", "--group", "g").stderr)
+
+    def test_unreadable_creds_file_blocks_only_tasks_that_declare_credentials(self) -> None:
+        self.creds.chmod(0o000)
+        self.new("no-creds", "import opsquire_helpers as sq\n\nsq.result('fine')\n")
+        r = self.cli("run", "no-creds")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rec = self.last("no-creds")
+        self.assertEqual(rec["status"], "ok")
+        self.assertEqual(rec["counts"]["warn"], 1)
+        self.assertIn("not readable", r.stdout + r.stderr)
+        self.new("with-creds", "print('x')\n", "--cred", "TOKEN=influx.prod.token")
+        r = self.cli("run", "with-creds")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(self.last("with-creds")["status"], "blocked")
+        self.assertIn("cannot read", self.last("with-creds")["last_error"])
+
     def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
         self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
         self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))

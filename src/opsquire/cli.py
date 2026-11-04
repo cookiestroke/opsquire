@@ -12,7 +12,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import locks, repos, runner
+from . import locks, piece, repos, runner
 from .ask import DEFAULT_BUDGET_USD, Budget, ask
 from .docs import write_docs
 from .homegit import commit_quietly
@@ -426,6 +426,46 @@ def cmd_repo(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_piece(a: argparse.Namespace) -> int:
+    """Fan-out for chat agents: open a piece (worktree + env for its subagent), land it, drop it, list them."""
+    if a.action == "open":
+        if not a.target:
+            raise OpsquireError('opsquire piece open <name> [--group <g>] [--request "..."]')
+        info = piece.open_piece(a.target, a.group, a.request)
+        if a.json:
+            emit({**info.to_json(), "brief": piece.brief(info)}, True)
+        else:
+            print(info.worktree)
+            print(f"branch: {info.branch}")
+            print("\nBrief for the subagent:\n" + piece.brief(info))
+        return 0
+    if a.action == "land":
+        if not a.target:
+            raise OpsquireError("opsquire piece land <name|group/name|path>")
+        landing = piece.land(a.target)
+        if a.json:
+            emit(landing.to_json(), True)
+        elif landing.merged:
+            extra = "" if landing.tasks else "; no task or general script changed"
+            print(f"piece {landing.piece}: landed in the home{extra}")
+            for tid, state in landing.tasks.items():
+                print(f"  {tid}: {state}")
+        else:
+            print(f"piece {landing.piece}: NOT landed, conflicts in: " + ", ".join(landing.conflicts))
+            print("  resolve the markers in the worktree keeping both intents, lint, then `opsquire piece land` again")
+        failed = any(not s.startswith(("ready", "deleted")) for s in landing.tasks.values())
+        return 0 if landing.merged and not failed else 1
+    if a.action == "drop":
+        if not a.target:
+            raise OpsquireError("opsquire piece drop <name|group/name|path> [--delete]")
+        print(piece.drop(a.target, a.delete))
+        return 0
+    home = piece.home_repo()
+    infos = piece.open_pieces(home)
+    emit([p.to_json() for p in infos], a.json, piece.describe(infos))
+    return 0
+
+
 def cmd_docs(a: argparse.Namespace) -> int:
     out = write_docs()
     print(f"wrote {out / 'CATALOG.md'} and one page per general script in {out}")
@@ -583,6 +623,17 @@ def parser() -> argparse.ArgumentParser:
     rp.add_argument("--base", help="checkout: branch to copy and open the PR against (default: the repo's base)")
     rp.add_argument("--json", action="store_true")
     rp.set_defaults(fn=cmd_repo)
+
+    pc = sub.add_parser(
+        "piece", help="fan-out for chat agents: open <name> (worktree for one subagent), land <name>, drop <name>, ls"
+    )
+    pc.add_argument("action", choices=["open", "land", "drop", "ls"])
+    pc.add_argument("target", nargs="?", help="piece name (open), or name, group/name or worktree path (land, drop)")
+    pc.add_argument("--request", default="", help="open: the piece's self-contained request, recorded on its branch")
+    pc.add_argument("--group", help="open: pieces of one request share a group (default: the OPSQUIRE_AUTHOR session)")
+    pc.add_argument("--delete", action="store_true", help="drop: discard the piece and its branch, do not park it")
+    pc.add_argument("--json", action="store_true")
+    pc.set_defaults(fn=cmd_piece)
 
     dc = sub.add_parser("docs", help="regenerate docs/: the catalog and an API page per general script")
     dc.set_defaults(fn=cmd_docs)

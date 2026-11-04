@@ -165,7 +165,8 @@ processes. The one thing that stays is the record of the interrupted run.
 ## Two ways in
 
 - **From a chat**: whenever the operator asks for anything script-shaped (see the local rules),
-  follow "Writing a task", hand over the command, then `opsquire wait`.
+  follow "Writing a task" (independent pieces in parallel, see "Parallel work"), hand over the command, then
+  `opsquire wait`.
 - **From the operator's terminal**: `opsquire ask "<request>"` starts a headless agent in the home that
   does the same and prints `RUN:` lines (or `NEED:` when blocked). `opsquire ask --task <id> "..."`
   resumes that task's conversation; `opsquire ask --resume <ask-id> ["answer"]` continues an interrupted
@@ -215,10 +216,19 @@ opsquire repo pr <copy> --title "..." --body-file <file>    GitHub-signed commit
   ask keeps them for `--resume`. Each ask (and each parallel piece) has its own copies; asks refresh every
   registered repo's origin before the agent starts.
 
-### Parallel asks: one request, several agents
+### Parallel work: one request, several agents
 
-When a request holds independent pieces (none needs another's result, no two would edit the same general script),
-the first agent answers only `SPLIT: <self-contained request>` lines, one per piece, and builds nothing itself.
+Independent pieces of a request are built at the same time, never one after another. Pieces are independent when
+none needs another's result and no two would edit the same general script. Each piece is self-contained: its request
+carries every detail it needs, and the small decisions (format, defaults, what to skip) are settled in it from the
+request and what was looked up; only a decision that truly needs the operator stays open. Whatever a piece decides
+goes into its design.md. Research fans out as well: reading records, the catalog, code or a host's state (through
+read tasks) can go to read-only helpers without any piece; only work that writes the home needs one.
+
+#### From `opsquire ask`
+
+When a request holds independent pieces, the first agent answers only `SPLIT: <self-contained request>` lines, one
+per piece, and builds nothing itself.
 `opsquire ask` then starts one agent per piece, each in its own git worktree of the home (`.worktrees/<ask-id>/<n>`,
 branch `ask/<ask-id>/<n>`), all at once (`--max-agents N` limits it; `--no-split` keeps one agent).
 
@@ -236,12 +246,41 @@ branch `ask/<ask-id>/<n>`), all at once (`--max-agents N` limits it; `--no-split
 - Spend: `--budget` (default 15 USD) covers the whole ask, all agents together. It is a reminder (one notice when
   passed); `--strict-budget` makes it a hard cap on each agent turn.
 
+#### From a chat: your own subagents
+
+An agent in a chat (Claude Code or any tool with a subagent tool) fans out itself, with the same pieces in the same
+worktrees. Without a subagent tool, build the pieces one after another in the home as usual. Pieces do not nest.
+
+```
+opsquire piece open <name> --request "..." [--group <g>]   worktree + branch piece/<group>/<name>; prints path, env, brief
+opsquire piece land <name|group/name|path>                 commit, merge into the home, lint what changed, remove it
+opsquire piece drop <name> [--delete]                      park an unfinished piece (open again resumes it) or discard it
+opsquire piece ls                                          open and parked pieces
+```
+
+- Open one piece per part (`--json` gives the brief as text), then start one subagent per piece with the brief:
+  the worktree path, the env it exports before every `opsquire` command (`OPSQUIRE_HOME` is the worktree,
+  `OPSQUIRE_VAR` the main home's records), the piece's request, and the whole request for context. The subagent
+  builds only its piece, under that path and env, and ends with `RUN:`/`PR:`/`NEED:` lines like any agent.
+- Pieces of one request share a group; the default is the session in `OPSQUIRE_AUTHOR`, so set it.
+- Subagents do not interview the operator. A piece that hits a truly open decision stops and reports `ASK:` and
+  `RECOMMEND:` lines to the agent that started it, who asks the operator one question at a time and resumes that
+  subagent with the answer.
+- When a subagent reports, land its piece. `land` lints every task and general script the piece changed, in the home,
+  and says so per id; a lint failure after the merge goes back to that subagent. A clash (another piece changed the
+  same file) is reported with the files, left with conflict markers in the piece's worktree: give that subagent one
+  turn to resolve them keeping both intents and lint, then land again; otherwise drop the piece and tell the operator.
+- With several landed tasks, bundle them: `opsquire new <area> <name> --plan --step <task> ...`, and hand over every
+  piece's RUN lines plus the plan's. A piece that cannot finish (a NEED, a crash) is dropped, which parks its work on
+  its branch; say so when handing over.
+- `piece` writes only the home (never `var/`), so an agent sandbox that can write the home can fan out.
+
 ### The home is a local git repository
 
 `opsquire integrate` installs the `opsquire` skill into Claude Code's user skills, so agents in any folder or
 worktree load this contract when they need tooling, and makes the home a local-only git repository (it refuses one
 with a remote). Opsquire commits in it by itself: when `opsquire lint` passes (the ready version), before every
-`opsquire run`, at the end of an ask, as a snapshot before a parallel ask, and when a piece merges. These commits
+`opsquire run`, at the end of an ask, as a snapshot before a parallel ask or a chat piece, and when a piece lands. These commits
 use the operator's name and email but are never signed (the repository cannot leave the machine, so a signature
 proves nothing and would ask for a passphrase before every run); a commit that cannot be made is skipped with a note
 and picked up by the next one.

@@ -11,10 +11,14 @@ The operator runs all tooling through Opsquire. Agents prepare; the operator run
 2. Search before writing: `opsquire find <keywords>`. Reuse a task or a general script; create a task with
    `opsquire new` only when nothing fits, and interview the operator first (one question at a time, each with a
    recommended answer) when something new must be built.
-3. `opsquire lint <task>` must pass (ruff, mypy --strict, shellcheck, and the task's unit tests).
-4. Never run `opsquire run` yourself for work that needs what agents must not reach (production, ssh,
+3. Independent pieces (none needs another's result, no shared general script) are built at the same time: open one
+   piece per part with `opsquire piece open <name> --request "..." --json`, start one subagent per piece with the
+   printed brief (it works under the piece's path and env and builds only its piece), then `opsquire piece land
+   <name>` each one as it reports. Read-only research can go to subagents without a piece.
+4. `opsquire lint <task>` must pass (ruff, mypy --strict, shellcheck, and the task's unit tests).
+5. Never run `opsquire run` yourself for work that needs what agents must not reach (production, ssh,
    credentials); hand the operator the exact command, one per step: `opsquire run <task>` first (dry or read),
    then `opsquire run <task> --apply`.
-5. Then run `opsquire wait <task> --json` and continue from the run record. Never ask the operator to paste output.
+6. Then run `opsquire wait <task> --json` and continue from the run record. Never ask the operator to paste output.
 
 Purely local work (editing code, tests, analysing local files) needs no Opsquire task.

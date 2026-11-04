@@ -322,10 +322,12 @@ class Run:
         )
         self.snapshot()
         try:
-            secrets = Secrets()
+            secrets = Secrets(required=bool(self.meta.credentials))
         except OpsquireError as e:
             return self.blocked(str(e))
         self.redact = secrets.redactor()
+        if secrets.note:
+            self.event("warn", secrets.note, level="warn")
         env_creds, missing = secrets.resolve(self.meta.credentials)
         if missing:
             return self.blocked("missing credential keys in ~/.creds: " + ", ".join(missing))

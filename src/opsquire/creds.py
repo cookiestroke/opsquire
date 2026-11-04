@@ -8,15 +8,20 @@ from .model import OpsquireError, creds_path
 MIN_SECRET_LEN = 6
 
 
-def _load() -> Any:
+def _load(required: bool) -> tuple[Any, str]:
+    """The credentials file and a note. A task that declares no credentials runs even where the file cannot be read
+    (an agent sandbox denies it): nothing is passed to it, only the redaction of known values is lost, and the note
+    goes into the run record."""
     path = creds_path()
     try:
         with path.open() as f:
-            return json.load(f)
+            return json.load(f), ""
     except FileNotFoundError:
-        return None
+        return None, ""
     except (OSError, json.JSONDecodeError) as e:
-        raise OpsquireError(f"cannot read {path}: {type(e).__name__}") from None
+        if required or isinstance(e, json.JSONDecodeError):
+            raise OpsquireError(f"cannot read {path}: {type(e).__name__}") from None
+        return None, f"{path} not readable ({type(e).__name__}); no credentials needed, output not redacted"
 
 
 def _leaves(node: Any, prefix: str = "") -> dict[str, str]:
@@ -33,8 +38,9 @@ def _leaves(node: Any, prefix: str = "") -> dict[str, str]:
 
 
 class Secrets:
-    def __init__(self) -> None:
-        self.leaves = _leaves(_load())
+    def __init__(self, required: bool = True) -> None:
+        data, self.note = _load(required)
+        self.leaves = _leaves(data)
 
     def resolve(self, wanted: dict[str, str]) -> tuple[dict[str, str], list[str]]:
         env: dict[str, str] = {}
