@@ -14,7 +14,7 @@ from typing import Any
 
 from . import locks, piece, repos, runner
 from .ask import DEFAULT_BUDGET_USD, Budget, ask
-from .close import close_task
+from .close import auto_close, close_task
 from .docs import write_docs
 from .homegit import commit_quietly
 from .integrate import integrate
@@ -156,11 +156,19 @@ def cmd_run(a: argparse.Namespace) -> int:
     note = commit_quietly(home_dir(), [home_dir() / "tasks", home_dir() / "general"], f"before running {task.id}")
     if note:
         print(f"opsquire: {note}", file=sys.stderr)
+    since = iso(now())
     if task.kind == "plan":
         if a.script_args:
             raise OpsquireError("plans take no arguments after --; put them on the steps in meta.json")
-        return run_plan(task, a.apply, a.break_lock)
-    return run_task(task, a.apply, a.script_args, a.break_lock)
+        code = run_plan(task, a.apply, a.break_lock)
+    else:
+        code = run_task(task, a.apply, a.script_args, a.break_lock)
+    if a.apply and code == 0:
+        steps = [str(s["task"]) for s in (task.meta.steps if task.meta else None) or []]
+        closed = [t for t in [task.id, *steps] if auto_close(t, since)]
+        if closed:
+            print(f"closed done: {', '.join(closed)} (auto, from the run record; `opsquire close` can amend it)")
+    return code
 
 
 def cmd_ls(a: argparse.Namespace) -> int:
@@ -328,6 +336,12 @@ def cmd_wait(a: argparse.Namespace) -> int:
     else:
         emit(None, False, run_table([rec]))
         print(f"\nrun dir: {rec['paths']['dir']}")
+    if rec.get("mode") == "apply" and rec.get("status") != "ok":
+        print(
+            f"opsquire: {task.id} is not closed: decide what happens next (fix and hand over again, or "
+            f"`opsquire close {task.id} --outcome partial|abandoned --note ...`)",
+            file=sys.stderr,
+        )
     return EXIT_CODES.get(str(rec.get("status")), 1)
 
 

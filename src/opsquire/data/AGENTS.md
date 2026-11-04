@@ -57,7 +57,8 @@ opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, late
 opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it
 opsquire threads [--json]            tasks grouped into threads (the stories they belong to), with suggestions
 opsquire locks
-opsquire ui [--port N] [--open]      the same picture in the browser (localhost), live; closing is its one write
+opsquire ui [--port N] [--open]      the operator's console in the browser (localhost): the inbox of handed-over
+                                     tasks, running them with their prompts, threads, targets, scripts, logs
 ```
 
 `<task>` may be the full id or any unique part of it. To answer "did it work", read `run.json`:
@@ -77,14 +78,19 @@ opsquire ui [--port N] [--open]      the same picture in the browser (localhost)
    failure. Write offline tests (no ssh, network or credentials) for any logic that decides what gets stopped,
    started or changed; a test file with no tests fails.
 5. Hand the operator exactly one command per step: `opsquire run <task-id>` (dry/read), then
-   `opsquire run <task-id> --apply`.
+   `opsquire run <task-id> --apply`. A ready task also appears in the UI's inbox with its next run, where the
+   operator can run it with its prompts; the records are the same.
 6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the
    operator to paste output.
-7. When a task ends differently from its last run (finished by hand, a later run landed it, given up), record it:
-   `opsquire close <task> --outcome done|partial|abandoned --note "what actually happened" [--run <run-id>]`.
-   It only annotates meta.json (`outcome`: state, note, closed_by, closed, run) and touches no host. Put what ended
-   up live in a `## Result` section of the task's design.md; `close` reminds you when it is missing.
-   A changing task is not finished by its ok apply run: it waits for `close`, and its thread stays open until then.
+7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,
+   and a `## Result` section in design.md (amend either when the generated text is not the truth). Every other end
+   is the agent's decision, right after `opsquire wait` returns: a failed, partial, aborted or interrupted apply
+   means either fix the task and hand it over again, or close it:
+   `opsquire close <task> --outcome done|partial|abandoned --note "what actually happened" [--run <run-id>]`
+   (done when the host ended up right despite the record, partial when some of it did, abandoned when it will not
+   happen). `close` only annotates meta.json and touches no host. A changing task is not settled until it is closed,
+   and its thread stays open; the operator never has to close anything, only what agents leave behind shows up as a
+   suggestion in the UI.
 
 ### Threads: the story a task belongs to
 

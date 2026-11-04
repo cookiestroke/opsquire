@@ -7,12 +7,13 @@
 <style>
 :root {
   color-scheme: light;
-  --bg: #f6f7f9; --panel: #ffffff; --panel2: #f0f2f5; --line: #d9dde3; --line2: #e9ecf0;
+  --bg: #f4f5f7; --panel: #ffffff; --panel2: #eef0f3; --line: #d6dae0; --line2: #e7eaee;
   --fg: #1c2127; --muted: #5f6b7a; --faint: #8b95a3;
   --accent: #2563a8; --accent-bg: #e3edf9; --accent-fg: #1a4b86;
-  --good: #1f7a3f; --good-bg: #e1f3e7; --bad: #b42323; --bad-bg: #fbe4e4;
-  --warn: #8a5a00; --warn-bg: #fdf0d2; --grey: #5a6472; --grey-bg: #e8ebef;
+  --good: #1f7a3f; --good-bg: #dff2e6; --bad: #b42323; --bad-bg: #fbe4e4;
+  --warn: #8a5a00; --warn-bg: #fdefcf; --grey: #5a6472; --grey-bg: #e6e9ed;
   --code-bg: #eef1f4; --shadow: 0 8px 24px rgba(20, 30, 40, .18);
+  --top: 44px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -28,40 +29,74 @@
 * { box-sizing: border-box; }
 html { font-size: 13.5px; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px); }
-.mono, code, pre, kbd, .id, .cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .93em; }
+.mono, code, pre, kbd, .id, .cmd, .prompt { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .93em; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-button { font: inherit; color: var(--fg); background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 3px 9px; cursor: pointer; }
+button { font: inherit; color: var(--fg); background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 3px 9px; cursor: pointer; white-space: nowrap; }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+button.sm { padding: 1px 7px; font-size: .9em; }
 button:disabled { opacity: .5; cursor: default; }
+button.runbtn.apply { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); font-weight: 600; }
+button.runbtn.apply.armed { background: var(--warn); color: #fff; }
 input, select, textarea { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
-input:focus, select:focus, textarea:focus, button:focus-visible, .head:focus-visible, .run:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+input:focus, select:focus, textarea:focus, button:focus-visible, .head:focus-visible, .run:focus-visible, .trow:focus-visible, .ib:focus-visible, .job:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 6px 16px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
 .brand { font-weight: 650; font-size: 1.1rem; letter-spacing: .01em; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; border-radius: 0; background: transparent; padding: 4px 12px; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+.seg .n { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 5px; border-radius: 8px; font-size: .8em; background: var(--warn); color: #fff; line-height: 1.5; }
 #search { flex: 1 1 180px; min-width: 120px; max-width: 420px; }
 #conn { color: var(--muted); font-size: .9em; white-space: nowrap; }
 #conn::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--grey); margin-right: 5px; }
 #conn.live::before { background: var(--good); }
 #conn.down::before { background: var(--bad); }
-.wrap { padding: 12px 16px 48px; max-width: 1280px; margin: 0 auto; }
-#strip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; font-size: .95em; }
-#strip .lbl { color: var(--muted); margin-right: 4px; }
-#strip .home { color: var(--muted); margin-left: auto; word-break: break-all; }
-.strip-item { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.row { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; scroll-margin-top: 70px; }
-.row .row { border-color: var(--line2); margin: 6px 0; }
-.row .row .row { background: var(--panel2); }
-.head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 10px; cursor: pointer; border-radius: 8px; }
+.app { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
+main#main { padding: 12px 16px 48px; min-width: 0; }
+#pane { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+#pane .ph { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); flex: none; }
+#pane .ph .title { overflow-wrap: anywhere; }
+#pane .pb { flex: 1 1 auto; overflow: auto; padding: 10px 14px; min-height: 0; }
+#pane .pb.log { background: var(--code-bg); }
+#pane .pb pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; line-height: 1.4; }
+#pane .pf { border-top: 1px solid var(--line); padding: 8px 14px; display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; flex: none; background: var(--panel); }
+#pane .placeholder { color: var(--faint); padding: 24px 14px; }
+@media (min-width: 1100px) {
+  .app { grid-template-columns: minmax(0, 1fr) 40%; }
+  header.top { flex-wrap: nowrap; height: var(--top); padding-block: 0; }
+  #pane { position: sticky; top: calc(var(--top) + env(safe-area-inset-top, 0px)); height: calc(100vh - var(--top) - env(safe-area-inset-top, 0px)); }
+}
+@media (max-width: 1099px) {
+  #pane { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100%); box-shadow: var(--shadow); z-index: 10; padding-top: env(safe-area-inset-top, 0px); }
+  #pane:not(.open) { display: none; }
+}
+#liveline { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; padding: 4px 10px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); font-size: .95em; }
+#liveline:empty { display: none; }
+.live-item { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+h3.sec { margin: 14px 0 6px; font-size: .85em; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; display: flex; gap: 10px; align-items: baseline; }
+h3.sec:first-child { margin-top: 2px; }
+h3.sec .n { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); }
+.block { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.quiet { color: var(--muted); padding: 10px 12px; }
+.ib, .job, .tr { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 6px 10px; border-top: 1px solid var(--line2); }
+.ib:first-child, .job:first-child, .tr:first-child { border-top: 0; }
+.ib:hover, .job:hover, .tr:hover { background: var(--panel2); }
+.ib .purpose, .job .purpose, .tr .purpose, .trow .purpose { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib .who, .tr .who { color: var(--muted); white-space: nowrap; }
+.job { cursor: pointer; }
+.job .prompt { flex-basis: 100%; color: var(--warn); white-space: pre-wrap; }
+.job .answers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mode { display: inline-block; min-width: 44px; text-align: center; padding: 0 6px; border-radius: 4px; font-size: .82em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--grey-bg); color: var(--grey); white-space: nowrap; }
+.mode.apply { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+.row { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; scroll-margin-top: 70px; }
+.row.inferred { border-left: 2px dotted var(--faint); }
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 7px 10px; cursor: pointer; border-radius: 8px; }
 .head:hover { background: var(--panel2); }
-.row .row .head:hover { background: var(--bg); }
 .chev { display: inline-block; width: 0; height: 0; border: 5px solid transparent; border-left: 6px solid var(--faint); margin-right: 2px; transition: transform .12s; flex: none; }
 .row.open > .head .chev { transform: rotate(90deg); }
-.body { padding: 2px 10px 10px 24px; border-top: 1px solid var(--line2); }
+.body { padding: 4px 10px 10px 22px; border-top: 1px solid var(--line2); }
 .title { font-weight: 600; }
 .grow { flex: 1 1 auto; }
 .muted { color: var(--muted); }
@@ -83,6 +118,7 @@ header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; b
 .count { color: var(--muted); font-size: .9em; }
 .sugg { color: var(--warn); }
 .sugg .tag { margin-right: 4px; }
+.suggn { color: var(--warn); font-weight: 600; font-size: .85em; }
 .err { color: var(--bad); }
 .note { background: var(--panel2); border-left: 3px solid var(--line); padding: 4px 8px; margin: 4px 0; border-radius: 0 4px 4px 0; white-space: pre-wrap; }
 .note.good { border-color: var(--good); }
@@ -94,12 +130,12 @@ header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; b
 .cmd button { padding: 1px 7px; font-size: .9em; }
 .runs { margin: 4px 0; }
 .run { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; padding: 5px 8px; border-top: 1px solid var(--line2); cursor: pointer; border-radius: 4px; }
-.run:hover { background: var(--bg); }
+.run:hover { background: var(--panel2); }
 .run:first-child { border-top: 0; }
 .run .id { color: var(--faint); font-size: .85em; }
 .run ul { margin: 0; padding-left: 18px; flex-basis: 100%; }
-h4 { margin: 10px 0 4px; font-size: .85em; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-.form { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 6px 0; display: grid; gap: 6px; max-width: 640px; }
+h4 { margin: 12px 0 4px; font-size: .85em; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.form { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 6px 0; display: grid; gap: 6px; }
 .form textarea { width: 100%; min-height: 70px; resize: vertical; }
 .form label { margin-right: 10px; }
 .empty { color: var(--muted); padding: 14px 4px; }
@@ -107,15 +143,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: .95em; }
 .tbl th, .tbl td { text-align: left; padding: 4px 8px 4px 0; vertical-align: top; border-top: 1px solid var(--line2); }
 .tbl th { color: var(--muted); font-weight: 600; border-top: 0; font-size: .9em; }
 .tbl tr.click { cursor: pointer; }
-.tbl tr.click:hover td { background: var(--bg); }
+.tbl tr.click:hover td { background: var(--panel2); }
 .scroll { overflow-x: auto; }
-#drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100%); background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow); z-index: 10; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); }
-#drawer .dh { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-#drawer .dh .title { overflow-wrap: anywhere; }
-#drawer .db { flex: 1; overflow: auto; padding: 10px 14px; }
-#drawer pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; line-height: 1.4; }
-#drawer .db.log { background: var(--code-bg); }
-.md h3, .md h4, .md h5, .md h6 { margin: 10px 0 4px; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 1em; }
+.trow { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 4px 8px; border-top: 1px solid var(--line2); cursor: pointer; border-radius: 4px; }
+.trow:hover { background: var(--panel2); }
+.trow.sel { background: var(--accent-bg); }
+.trow.open .chev { transform: rotate(90deg); }
+.trows { margin-top: 6px; }
+.tdetail { padding: 2px 8px 6px 30px; border-top: 1px solid var(--line2); }
+.md h3, .md h4, .md h5, .md h6 { margin: 10px 0 4px; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 1em; display: block; }
 .md h3 { font-size: 1.15em; }
 .md h4 { font-size: 1.05em; }
 .md p { margin: 4px 0; }
@@ -127,34 +163,90 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: .95em; }
 .result { background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
 #toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 14px; border-radius: 6px; z-index: 20; font-size: .95em; opacity: 0; transition: opacity .15s; pointer-events: none; }
 #toast.show { opacity: 1; }
+/* diagrams */
+svg.flow, svg.map { display: block; overflow: visible; }
+.flow .box { fill: var(--panel2); stroke: var(--line); stroke-width: 1; cursor: pointer; }
+.flow .box.st-good { fill: var(--good-bg); stroke: var(--good); }
+.flow .box.st-bad { fill: var(--bad-bg); stroke: var(--bad); }
+.flow .box.st-warn { fill: var(--warn-bg); stroke: var(--warn); }
+.flow .box.st-live { fill: var(--accent-bg); stroke: var(--accent); }
+.flow .box.st-grey { fill: var(--grey-bg); stroke: var(--faint); stroke-dasharray: 2 2; }
+.flow .box.st-neutral { fill: var(--panel); stroke: var(--muted); }
+.flow .box:hover, .flow .box.sel { stroke: var(--accent); stroke-width: 2; }
+.flow text { font-size: 10.5px; fill: var(--fg); pointer-events: none; }
+.flow text.st-grey { fill: var(--muted); }
+.flow .edge { fill: none; stroke: var(--faint); stroke-width: 1; }
+.flow .edge.superseded { stroke-dasharray: 3 2; }
+.flow .edge.step { stroke: var(--accent); }
+.flow marker path { fill: var(--faint); }
+.flow .dot.good, .map .dot.good { fill: var(--good); }
+.flow .dot.bad, .map .dot.bad { fill: var(--bad); }
+.flow .dot.warn, .map .dot.warn { fill: var(--warn); }
+.flow .dot.live, .map .dot.live { fill: var(--accent); }
+.flow .dot.grey, .flow .dot.neutral, .map .dot.grey, .map .dot.neutral { fill: var(--faint); }
+.flowwrap { overflow-x: auto; padding: 8px 0 4px; }
+.mini { flex: none; }
+.map .lane { fill: var(--panel); }
+.map .lane.alt { fill: var(--panel2); }
+.map .grid { stroke: var(--line2); stroke-width: 1; }
+.map .today { fill: var(--accent-bg); opacity: .55; }
+.map .wk { fill: var(--grey-bg); opacity: .45; }
+.map text { font-size: 11px; fill: var(--fg); }
+.map text.lbl { fill: var(--muted); font-size: 11px; }
+.map text.ax { fill: var(--muted); font-size: 10.5px; }
+.map text.blk { font-size: 10.5px; pointer-events: none; }
+.map text.blk.st-grey { fill: var(--muted); }
+.map .tline { fill: none; stroke: var(--accent); stroke-width: 1.2; opacity: .5; }
+.map .box { cursor: pointer; }
+.map .box.st-good { fill: var(--good-bg); stroke: var(--good); }
+.map .box.st-bad { fill: var(--bad-bg); stroke: var(--bad); }
+.map .box.st-warn { fill: var(--warn-bg); stroke: var(--warn); }
+.map .box.st-live { fill: var(--accent-bg); stroke: var(--accent); }
+.map .box.st-grey { fill: var(--grey-bg); stroke: var(--faint); stroke-dasharray: 2 2; }
+.map .box.st-neutral { fill: var(--panel); stroke: var(--muted); }
+.map .box:hover, .map .box.sel { stroke: var(--accent); stroke-width: 2; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; color: var(--muted); font-size: .9em; margin: 6px 0; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid; }
+.legend i.good { background: var(--good-bg); border-color: var(--good); }
+.legend i.bad { background: var(--bad-bg); border-color: var(--bad); }
+.legend i.warn { background: var(--warn-bg); border-color: var(--warn); }
+.legend i.live { background: var(--accent-bg); border-color: var(--accent); }
+.legend i.neutral { background: var(--panel); border-color: var(--muted); }
+.legend i.grey { background: var(--grey-bg); border-color: var(--faint); border-style: dashed; }
+.legend i.dot { border-radius: 50%; width: 8px; height: 8px; }
+.legend i.dot.good { background: var(--good); } .legend i.dot.bad { background: var(--bad); } .legend i.dot.warn { background: var(--warn); } .legend i.dot.grey { background: var(--faint); }
 @media (max-width: 700px) {
   .body { padding-left: 12px; }
-  #strip .home { margin-left: 0; flex-basis: 100%; }
+  .tdetail { padding-left: 12px; }
 }
 </style>
 </head>
 <body>
 <header class="top">
-  <span class="brand">Opsquire</span>
+  <span class="brand" id="brand">Opsquire</span>
   <div class="seg" role="tablist" id="seg"></div>
   <input id="search" type="search" placeholder="Search id, purpose, area, target  ( / )" aria-label="Search">
   <span id="conn" title="Connection to the local server">connecting</span>
 </header>
-<div class="wrap">
-  <div id="strip"></div>
+<div class="app" id="app">
   <main id="main"><div class="empty">Loading the home.</div></main>
+  <aside id="pane" aria-label="Details">
+    <div class="ph" id="ph"></div>
+    <div class="pb" id="pb"><div class="placeholder">Select a task, a job or a run.</div></div>
+    <div class="pf" id="pf" hidden></div>
+  </aside>
 </div>
-<aside id="drawer" hidden aria-label="Details"></aside>
 <div id="toast" role="status"></div>
 <script>
 'use strict';
 /* ---- pure helpers (no DOM) ---- */
-const VIEWS = [['threads', 'Threads'], ['targets', 'Targets'], ['scripts', 'Scripts']];
+const VIEWS = [['inbox', 'Inbox'], ['threads', 'Threads'], ['map', 'Map'], ['targets', 'Targets'], ['scripts', 'Scripts']];
 const TONE = {
   ok: 'good', done: 'good', failed: 'bad', blocked: 'bad', partial: 'warn', running: 'live', open: 'live',
   ready: 'neutral', draft: 'grey', abandoned: 'grey', superseded: 'grey', archived: 'grey', skipped: 'grey',
   unchanged: 'grey', interrupted: 'grey', aborted: 'grey', merged: 'good', waiting: 'warn', alive: 'good', dead: 'grey',
 };
+const TASK_ID_RE = /\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b/g;
 function tone(status) { return TONE[status] || 'neutral'; }
 function parseTime(iso) { const t = iso ? Date.parse(iso) : NaN; return Number.isNaN(t) ? null : t; }
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -237,6 +329,100 @@ function parseHash(h) {
   try { id = decodeURIComponent(id); } catch (e) { /* keep raw */ }
   return { kind, id };
 }
+/* terminal output: strip ANSI escapes (CSI and OSC), fold carriage-return rewrites per line */
+function stripAnsi(text) { return String(text || '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b[@-Z\\-_]/g, ''); }
+function crFold(text) {
+  return String(text || '').replace(/\r\n/g, '\n').split('\n').map(line => { const i = line.lastIndexOf('\r'); return i < 0 ? line : line.slice(i + 1); }).join('\n');
+}
+/* what a runner prompt wants: y/n, the word BREAK, or free text */
+function classifyPrompt(prompt) {
+  const p = String(prompt || '').trim();
+  if (!p) return 'none';
+  if (/type\s+BREAK/i.test(p)) return 'break';
+  if (/\[\s*y\s*\/\s*n\s*\]|\(\s*y\s*\/\s*n\s*\)|\byes\s*\/\s*no\b/i.test(p)) return 'yn';
+  return 'text';
+}
+function jobTone(job) {
+  if (!job) return 'grey';
+  if (job.status === 'waiting') return 'warn';
+  if (job.status === 'running') return 'live';
+  return job.exit_code === 0 ? 'good' : 'bad';
+}
+function jobLabel(job) {
+  if (!job) return '?';
+  if (job.status !== 'done') return job.status;
+  return job.exit_code === 0 ? 'ok' : `exit ${job.exit_code === null || job.exit_code === undefined ? '?' : job.exit_code}`;
+}
+/* relations between tasks, derived from what the records say about each other */
+function deriveEdges(tasks, ids) {
+  const set = new Set(ids), seen = new Set(), edges = [];
+  const add = (a, b, kind) => {
+    if (a === b || !set.has(a) || !set.has(b)) return;
+    const k = a + '>' + b; if (seen.has(k)) return;
+    seen.add(k); edges.push({ from: a, to: b, kind });
+  };
+  for (const id of ids) {
+    const t = tasks[id]; if (!t) continue;
+    for (const s of t.steps || []) if (s) add(id, s, 'step');
+    if (t.superseded_by) add(id, t.superseded_by, 'superseded');
+    const text = [t.purpose, t.outcome && t.outcome.note, t.abandoned_reason].filter(Boolean).join('\n');
+    for (const m of text.match(TASK_ID_RE) || []) add(id, m, 'mention');
+  }
+  return edges;
+}
+function shortName(id) { const m = /^\d{8}-\d{4}_[^_]+_(.+)$/.exec(String(id || '')); return (m ? m[1] : String(id || '')).replace(/-/g, ' '); }
+function wrapLines(text, maxChars, maxLines) {
+  const words = String(text || '').split(/\s+/).filter(Boolean), lines = [];
+  let i = 0;
+  while (i < words.length && lines.length < maxLines) {
+    let cur = words[i++];
+    while (i < words.length && (cur + ' ' + words[i]).length <= maxChars) cur += ' ' + words[i++];
+    lines.push(cur);
+  }
+  if (i < words.length && lines.length) lines[lines.length - 1] = truncate(lines[lines.length - 1] + ' ' + words.slice(i).join(' '), maxChars);
+  return lines.map(l => (l.length > maxChars ? truncate(l, maxChars) : l));
+}
+function flowLayout(ids, edges, g) {
+  const idx = new Map(ids.map((id, i) => [id, i]));
+  const pitch = g.bw + g.gap;
+  const boxes = ids.map((id, i) => ({ id, x: g.pad + i * pitch, y: g.top }));
+  const arcs = [];
+  for (const e of edges) {
+    const a = idx.get(e.from), b = idx.get(e.to);
+    if (a === undefined || b === undefined) continue;
+    const d = Math.abs(a - b);
+    arcs.push({ from: e.from, to: e.to, kind: e.kind, a, b, lift: d === 1 ? 0 : Math.min(g.top - 2, g.lift + d * g.liftStep) });
+  }
+  return { w: g.pad * 2 + ids.length * pitch - g.gap, h: g.top + g.bh + g.dots, boxes, arcs, pitch };
+}
+/* map: day columns (UTC) and task buckets per area lane */
+function dayKey(iso) { const t = parseTime(iso); if (t === null) return null; const d = new Date(t); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; }
+function dayColumns(nowMs, days) {
+  const out = [], start = Math.floor(nowMs / 86400000) * 86400000 - (days - 1) * 86400000;
+  for (let i = 0; i < days; i++) out.push(dayKey(new Date(start + i * 86400000).toISOString()));
+  return out;
+}
+function mapBuckets(tasks, columns) {
+  const colIdx = new Map(columns.map((c, i) => [c, i]));
+  const lanes = new Map(); let outside = 0;
+  for (const t of tasks) {
+    const k = dayKey(t.created);
+    if (k === null || !colIdx.has(k)) { outside++; continue; }
+    const area = t.area || '(no area)';
+    if (!lanes.has(area)) lanes.set(area, new Map());
+    const m = lanes.get(area), c = colIdx.get(k);
+    if (!m.has(c)) m.set(c, []);
+    m.get(c).push(t.id);
+  }
+  const out = [...lanes.keys()].sort().map(area => {
+    const cells = [...lanes.get(area).entries()].map(([col, ids]) => ({ col, ids: ids.slice().sort() })).sort((a, b) => a.col - b.col);
+    return { area, cells, depth: Math.max(...cells.map(c => c.ids.length)) };
+  });
+  return { lanes: out, outside };
+}
+const LEGEND = { good: 'done', neutral: 'ready', grey: 'draft / retired', bad: 'failed', warn: 'partial' };
+function nextMode(t) { return t.changes_prod ? 'dry' : 'read'; }
+function runCommand(id, mode) { return `opsquire run ${id}${mode === 'apply' ? ' --apply' : ''}`; }
 /* minimal markdown: headings, paragraphs, lists, fenced code, rules, inline code, links, bold. Only text nodes, never HTML. */
 function inlineMd(text) {
   const out = []; const re = /(`[^`]+`)|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*/g;
@@ -280,6 +466,7 @@ function markdown(text) {
   return root;
 }
 /* ---- DOM helpers ---- */
+const NS = 'http://www.w3.org/2000/svg';
 function el(tag, attrs, ...children) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -291,24 +478,36 @@ function el(tag, attrs, ...children) {
   append(n, children);
   return n;
 }
+function svg(tag, attrs, ...children) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? '' : v);
+  }
+  append(n, children);
+  return n;
+}
 function append(n, c) {
   if (c === null || c === undefined || c === false) return;
   if (Array.isArray(c)) { for (const x of c) append(n, x); return; }
   n.append(c instanceof Node ? c : String(c));
 }
+function fill(n, ...children) { n.replaceChildren(); append(n, children); return n; }
 const $ = sel => document.querySelector(sel);
 function pill(status) { return el('span', { class: `pill ${tone(status)}` }, status || '?'); }
 function when(iso) { return el('span', { class: 'muted', title: utc(iso) }, relTime(iso)); }
 function tag(text, cls) { return el('span', { class: `tag ${cls || ''}` }, text); }
-function modeTag(mode) { return tag(mode || '?', 'mono' + (mode === 'apply' ? ' accent' : '')); }
+function modeTag(mode) { return el('span', { class: `mode ${mode || ''}` }, mode || '?'); }
 function linkTag(url) {
   const href = safeHref(url);
   return href ? el('a', { class: 'tag accent', href, target: '_blank', rel: 'noopener', title: url }, linkLabel(url)) : tag(linkLabel(url));
 }
+function btn(label, onclick, cls, attrs) { return el('button', Object.assign({ class: cls || '', onclick, type: 'button' }, attrs || {}), label); }
 let toastTimer = null;
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1400);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1600);
 }
 function copyText(text) {
   const done = () => toast('copied'), fail = () => toast('copy failed');
@@ -328,13 +527,20 @@ async function api(path, opts) {
   if (!r.ok) throw new Error((body && body.error) || `${r.status} ${r.statusText}`);
   return body;
 }
+function post(path, body) { return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
 /* ---- state ---- */
-const S = { data: null, view: 'threads', q: '', open: new Set(), hash: null, scrollTo: null, drawer: null, closeForm: null, error: null };
+const S = { data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, mapDays: 14 };
 const task = id => (S.data && S.data.tasks && S.data.tasks[id]) || null;
 const run = id => (S.data && S.data.runs && S.data.runs[id]) || null;
+const inbox = () => (S.data && S.data.inbox) || [];
+const jobs = () => (S.data && S.data.jobs) || [];
+const jobById = id => jobs().find(j => j.job_id === id) || null;
+const activeJobFor = taskId => jobs().find(j => j.task_id === taskId && j.status !== 'done') || null;
+const selectedTask = () => (S.pane && S.pane.kind === 'task' ? S.pane.id : null);
 function setHash(h) { S.hash = h; if (location.hash.slice(1) !== h) history.replaceState(null, '', '#' + h); }
 function applyHash() {
   const h = location.hash.slice(1); if (h === S.hash) return;
+  const first = S.hash === null;
   S.hash = h;
   const { kind, id } = parseHash(h);
   const focus = (view, key) => { S.view = view; S.open.add(key); S.scrollTo = key; };
@@ -342,9 +548,13 @@ function applyHash() {
   else if (kind === 'thread') focus('threads', 't:' + id);
   else if (kind === 'target') focus('targets', 'g:' + id);
   else if (kind === 'script') focus('scripts', 's:' + id);
-  else if (kind === 'task') { const t = task(id); if (t && t.thread) S.open.add('t:' + t.thread); focus('threads', 'k:' + id); }
+  else if (kind === 'task') {
+    const t = task(id);
+    if (first && t) { if (t.thread) focus('threads', 't:' + t.thread); }
+    S.pane = { kind: 'task', id };
+  } else if (kind === 'run') openLog(id, undefined, true);
+  else if (kind === 'job') openJob(id, true);
   render();
-  if (kind === 'run') openLog(id);
 }
 function toggle(key, hash) {
   if (S.open.has(key)) S.open.delete(key); else { S.open.add(key); if (hash) setHash(hash); }
@@ -355,20 +565,30 @@ function focusKey(view, key, hash) { S.view = view; S.open.add(key); S.scrollTo 
 function goToTask(id) {
   const t = task(id); if (!t) { toast(`no task ${id}`); return; }
   if (t.thread) S.open.add('t:' + t.thread);
+  S.pane = { kind: 'task', id };
   focusKey('threads', 'k:' + id, 'task/' + encodeURIComponent(id));
+}
+function selectTask(id) {
+  if (!task(id)) { toast(`no task ${id}`); return; }
+  stopPane();
+  S.pane = { kind: 'task', id };
+  setHash('task/' + encodeURIComponent(id));
+  render();
 }
 /* ---- rendering ---- */
 function render() {
   if (!S.data) return;
   const y = window.scrollY;
-  renderSeg(); renderStrip();
+  renderSeg();
   const main = $('#main');
   const active = document.activeElement;
-  const keep = active && main.contains(active) && active.id ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
-  main.replaceChildren(S.view === 'targets' ? renderTargets() : S.view === 'scripts' ? renderScripts() : renderThreads());
+  const keep = active && active.id && (main.contains(active) || $('#pane').contains(active)) ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
+  const views = { inbox: renderInbox, threads: renderThreads, map: renderMap, targets: renderTargets, scripts: renderScripts };
+  main.replaceChildren(renderLive(), (views[S.view] || renderInbox)());
+  renderPane();
   if (keep) {
     const n = document.getElementById(keep.id);
-    if (n) { n.focus({ preventScroll: true }); if (typeof keep.start === 'number') n.setSelectionRange(keep.start, keep.end); }
+    if (n) { n.focus({ preventScroll: true }); if (typeof keep.start === 'number' && n.setSelectionRange) { try { n.setSelectionRange(keep.start, keep.end); } catch (e) { /* not a text field */ } } }
   }
   if (S.scrollTo) {
     const node = main.querySelector(`[data-key="${CSS.escape(S.scrollTo)}"]`);
@@ -378,30 +598,27 @@ function render() {
   window.scrollTo(0, y);
 }
 function renderSeg() {
-  $('#seg').replaceChildren(...VIEWS.map(([id, label]) => el('button', { role: 'tab', 'aria-pressed': String(S.view === id), onclick: () => switchView(id) }, label)));
+  const n = inbox().length;
+  $('#seg').replaceChildren(...VIEWS.map(([id, label]) => el('button', { role: 'tab', 'aria-pressed': String(S.view === id), onclick: () => switchView(id) }, label,
+    id === 'inbox' && n ? el('span', { class: 'n', title: `${n} waiting on you` }, String(n)) : null)));
+  $('#brand').title = `home ${S.data.home || ''}`;
 }
-function renderStrip() {
+function renderLive() {
   const d = S.data, items = [];
   const running = (d.running || []).map(run).filter(Boolean);
-  items.push(el('span', { class: 'strip-item' }, el('span', { class: 'lbl' }, 'running'),
-    running.length ? running.map(r => el('span', { class: 'strip-item' },
-      pill('running'), taskLink(r.task_id || '?'), modeTag(r.mode), when(r.started),
-      el('button', { onclick: () => openLog(r.run_id) }, 'tail'))) : el('span', { class: 'muted' }, 'nothing')));
-  const locks = d.locks || [];
-  items.push(el('span', { class: 'strip-item' }, el('span', { class: 'lbl' }, 'locks'),
-    locks.length ? locks.map(l => el('span', { class: 'strip-item', title: `run ${l.run_id || '?'}` },
-      tag(l.target || '?'), taskLink(l.task_id || '?'), modeTag(l.mode), el('span', { class: 'muted' }, 'since'), when(l.since),
-      pill(l.alive ? 'alive' : 'dead'))) : el('span', { class: 'muted' }, 'none held')));
-  items.push(el('span', { class: 'home mono', title: 'home' }, d.home || ''));
-  if (S.error) items.push(el('span', { class: 'err full' }, S.error));
-  $('#strip').replaceChildren(...items);
+  for (const r of running) items.push(el('span', { class: 'live-item' }, pill('running'), taskLink(r.task_id || '?'), modeTag(r.mode), when(r.started),
+    btn('tail', () => openLog(r.run_id, null), 'sm')));
+  for (const l of d.locks || []) items.push(el('span', { class: 'live-item', title: `run ${l.run_id || '?'}` }, el('span', { class: 'muted' }, 'lock'), tag(l.target || '?'),
+    taskLink(l.task_id || '?'), modeTag(l.mode), el('span', { class: 'muted' }, 'since'), when(l.since), pill(l.alive ? 'alive' : 'dead')));
+  if (S.error) items.push(el('span', { class: 'err' }, S.error));
+  return el('div', { id: 'liveline' }, items);
 }
 function collapsible(key, headParts, bodyFn, hash, cls) {
   const open = S.open.has(key);
   const node = el('div', { class: `row ${cls || ''} ${open ? 'open' : ''}`, 'data-key': key });
   const head = el('div', {
     class: 'head', role: 'button', tabindex: '0', 'aria-expanded': String(open),
-    onclick: e => { if (e.target.closest('a, button, input, select, textarea, label, .run')) return; toggle(key, hash); },
+    onclick: e => { if (e.target.closest('a, button, input, select, textarea, label, .run, svg')) return; toggle(key, hash); },
     onkeydown: e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === head) { e.preventDefault(); toggle(key, hash); } },
   }, el('span', { class: 'chev' }), headParts);
   node.append(head);
@@ -412,8 +629,95 @@ function empty(text) { return el('div', { class: 'empty' }, text); }
 function noMatch() { return empty(`Nothing matches "${S.q}".`); }
 function targetLink(name) { return el('a', { class: 'tag', href: '#target/' + encodeURIComponent(name), onclick: e => { e.preventDefault(); focusKey('targets', 'g:' + name, 'target/' + encodeURIComponent(name)); } }, name); }
 function scriptLink(id) { return el('a', { class: 'tag mono', href: '#script/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); focusKey('scripts', 's:' + id, 'script/' + encodeURIComponent(id)); } }, id); }
-function taskLink(id) { return el('a', { class: 'id', href: '#task/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); goToTask(id); } }, id); }
+function taskLink(id) { return el('a', { class: 'id', href: '#task/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); selectTask(id); } }, id); }
 function prodMarker(t) { return t.changes_prod ? tag('changes production', 'warn') : tag('read-only'); }
+function sec(title, extra) { return el('h3', { class: 'sec' }, title, extra ? el('span', { class: 'n' }, extra) : null); }
+/* run buttons: apply needs a second click within 5 s */
+function arm(key) {
+  S.confirm = key; clearTimeout(S.confirmTimer);
+  S.confirmTimer = setTimeout(() => { S.confirm = null; render(); }, 5000);
+  render();
+}
+function disarm() { S.confirm = null; clearTimeout(S.confirmTimer); }
+function runButton(taskId, mode) {
+  const active = activeJobFor(taskId);
+  if (active) return btn(active.status, () => openJob(active.job_id), 'sm', { title: 'a job for this task is still running; open it' });
+  if (mode !== 'apply') return btn(`Run ${mode}`, () => startRun(taskId, mode), 'runbtn');
+  const key = taskId + ':apply', armed = S.confirm === key;
+  return btn(armed ? 'Confirm apply' : 'Run apply', () => { if (armed) { disarm(); startRun(taskId, 'apply'); } else arm(key); },
+    'runbtn apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : 'asks for a second click' });
+}
+async function startRun(taskId, mode) {
+  try {
+    const r = await post('/api/run', { task: taskId, mode });
+    toast(`started ${mode} run`);
+    refresh();
+    if (r && r.job_id) openJob(r.job_id);
+  } catch (e) { toast(`run failed: ${e.message}`); }
+}
+async function answer(jobId, text) {
+  try { await post('/api/answer', { job: jobId, text }); toast(text ? `sent ${text}` : 'sent'); refresh(); } catch (e) { toast(`answer failed: ${e.message}`); }
+}
+async function interrupt(jobId) {
+  try { await post('/api/interrupt', { job: jobId }); toast('interrupt sent'); refresh(); } catch (e) { toast(`interrupt failed: ${e.message}`); }
+}
+function promptControls(jobId, status, prompt, idSuffix) {
+  const parts = [];
+  if (status === 'waiting' && prompt) {
+    const kind = classifyPrompt(prompt);
+    parts.push(el('span', { class: 'prompt' }, String(prompt).trim()));
+    const answers = el('span', { class: 'answers' });
+    if (kind === 'yn') answers.append(btn('Yes', () => answer(jobId, 'y'), 'primary'), btn('No', () => answer(jobId, 'n')));
+    else if (kind === 'break') answers.append(btn('BREAK', () => answer(jobId, 'BREAK'), 'runbtn apply'), btn('Cancel', () => answer(jobId, '')));
+    else {
+      const input = el('input', { id: `ans-${idSuffix || ''}-${jobId}`, placeholder: 'answer', 'aria-label': 'answer' });
+      const send = () => { answer(jobId, input.value); input.value = ''; };
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+      answers.append(input, btn('Send', send, 'primary'));
+    }
+    parts.push(answers);
+  }
+  if (status !== 'done') parts.push(btn('Interrupt', () => interrupt(jobId), 'sm', { title: 'Ctrl-C the job' }));
+  return parts;
+}
+/* inbox */
+function renderInbox() {
+  const q = S.q, parts = [];
+  const items = inbox().filter(it => !q || taskMatches(task(it.task_id) || { id: it.task_id, purpose: it.purpose, author: it.author }, q, it.thread));
+  parts.push(sec('Inbox', items.length ? plural(items.length, 'item') : null));
+  parts.push(el('div', { class: 'block' }, items.length ? items.map(renderInboxItem) : el('div', { class: 'quiet' }, inbox().length ? `Nothing matches "${S.q}".` : 'Nothing waiting on you')));
+  const js = jobs().filter(j => !q || taskMatches(task(j.task_id) || { id: j.task_id }, q));
+  if (js.length) {
+    parts.push(sec('Jobs', `${js.filter(j => j.status !== 'done').length} active`));
+    parts.push(el('div', { class: 'block' }, js.map(renderJob)));
+  }
+  const today = dayKey(new Date().toISOString());
+  const runsToday = Object.values(S.data.runs || {}).filter(r => dayKey(r.started) === today && (!q || taskMatches(task(r.task_id) || { id: r.task_id }, q)))
+    .sort((a, b) => String(b.started || '').localeCompare(String(a.started || '')));
+  parts.push(sec('Today', runsToday.length ? plural(runsToday.length, 'run') : null));
+  parts.push(el('div', { class: 'block' }, runsToday.length ? runsToday.map(r => el('div', { class: 'tr', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`,
+    onclick: e => { if (e.target.closest('a')) return; openLog(r.run_id, null); }, onkeydown: e => { if (e.key === 'Enter') openLog(r.run_id, null); } },
+    modeTag(r.mode), pill(r.status), taskLink(r.task_id || '?'), el('span', { class: 'purpose muted' }, (task(r.task_id) || {}).purpose || ''),
+    el('span', { class: 'muted small' }, duration(r.duration_s)), when(r.started))) : el('div', { class: 'quiet' }, 'No run today.')));
+  parts.push(el('div', { class: 'faint small mono', style: 'margin-top:10px' }, S.data.home || ''));
+  return el('div', {}, parts);
+}
+function renderInboxItem(it) {
+  const id = it.task_id;
+  return el('div', { class: 'ib', 'data-key': 'i:' + id },
+    modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
+    el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+}
+function renderJob(j) {
+  const open = () => openJob(j.job_id);
+  return el('div', { class: 'job', role: 'button', tabindex: '0', 'data-key': 'j:' + j.job_id,
+    onclick: e => { if (e.target.closest('a, button, input')) return; open(); }, onkeydown: e => { if (e.key === 'Enter' && e.target.tagName !== 'INPUT') open(); } },
+    el('span', { class: `pill ${jobTone(j)}` }, jobLabel(j)), taskLink(j.task_id || '?'), modeTag(j.mode),
+    el('span', { class: 'muted' }, 'started ', when(j.started)), j.ended ? el('span', { class: 'muted' }, 'ended ', when(j.ended)) : null,
+    el('span', { class: 'grow' }), j.run_id ? btn('run log', () => openLog(j.run_id, null), 'sm') : null,
+    j.status === 'waiting' ? el('span', { class: 'prompt' }, String(j.prompt || '').trim()) : null,
+    el('span', { class: 'answers' }, j.status === 'waiting' ? promptControls(j.job_id, j.status, j.prompt, 'list').slice(1) : j.status !== 'done' ? promptControls(j.job_id, j.status, '', 'list') : null));
+}
 /* threads */
 function renderThreads() {
   const threads = sortByUpdated(S.data.threads || []);
@@ -427,31 +731,30 @@ function renderThreads() {
   return shown.length ? el('div', {}, shown) : noMatch();
 }
 function renderThread(th, taskIds) {
-  const n = (th.tasks || []).length;
+  const ids = (th.tasks || []).slice().sort();
   const head = [
     el('span', { class: 'title' }, th.title || th.id),
     pill(th.state || 'open'),
-    th.explicit ? null : tag('inferred'),
-    (th.areas || []).map(a => tag(a)),
-    el('span', { class: 'count' }, plural(n, 'task')),
-    th.suggestions ? tag(plural(th.suggestions, 'suggestion'), 'warn') : null,
+    (th.areas || []).length ? el('span', { class: 'muted small' }, th.areas.join(', ')) : null,
+    th.suggestions ? el('span', { class: 'suggn', title: plural(th.suggestions, 'suggestion') }, `${th.suggestions} !`) : null,
     el('span', { class: 'grow' }),
-    el('span', { class: 'id faint small', title: 'thread id' }, th.id),
+    el('span', { class: 'mini' }, flowSvg(ids, true)),
     when(th.updated),
   ];
-  return collapsible('t:' + th.id, head, () => renderThreadBody(th, taskIds), 'thread/' + encodeURIComponent(th.id));
+  return collapsible('t:' + th.id, head, () => renderThreadBody(th, taskIds, ids), 'thread/' + encodeURIComponent(th.id), th.explicit ? '' : 'inferred');
 }
-function renderThreadBody(th, taskIds) {
+function renderThreadBody(th, taskIds, ids) {
   const parts = [];
   if (th.result) parts.push(el('div', { class: 'result' }, markdown(th.result)));
+  parts.push(el('div', { class: 'flowwrap' }, flowSvg(ids, false)));
   parts.push(el('div', { class: 'line small' },
     (th.targets || []).length ? el('span', { class: 'line' }, el('span', { class: 'muted' }, 'targets'), th.targets.map(targetLink)) : null,
     (th.links || []).length ? el('span', { class: 'line' }, el('span', { class: 'muted' }, 'links'), th.links.map(linkTag)) : null,
-    el('span', { class: 'muted' }, 'started ', when(th.started))));
+    el('span', { class: 'muted' }, 'started ', when(th.started)), el('span', { class: 'id faint', title: 'thread id' }, th.id)));
   const asks = asksForThread(S.data.asks, th);
   if (asks.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'asks'), asks.map(renderAsk)));
-  const tasks = taskIds.map(task).filter(Boolean);
-  parts.push(el('div', {}, tasks.length ? tasks.map(renderTask) : empty('No task in this thread matches.')));
+  const tasks = taskIds.map(task).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id));
+  parts.push(el('div', { class: 'trows' }, tasks.length ? tasks.map(renderTaskRow) : empty('No task in this thread matches.')));
   return parts;
 }
 function renderAsk(a) {
@@ -463,106 +766,133 @@ function renderAsk(a) {
     a.waiting_on ? el('span', { class: 'sugg' }, `waiting on ${a.waiting_on}`) : null,
     (a.pieces || []).map(p => tag(`${p.name || '?'} ${p.status || ''}`)), when(a.started));
 }
-function renderTask(t) {
-  const head = [
-    el('span', { class: 'id title' }, t.id),
-    pill(t.status || 'draft'),
+function renderTaskRow(t) {
+  const key = 'k:' + t.id, open = S.open.has(key), sel = selectedTask() === t.id;
+  const n = (t.suggestions || []).length;
+  const row = el('div', { class: `trow ${sel ? 'sel' : ''} ${open ? 'open' : ''}`, 'data-key': key, role: 'button', tabindex: '0', title: t.purpose || '',
+    onclick: e => { if (e.target.closest('a, button')) return; if (e.target.closest('.chev')) { toggle(key); return; } selectTask(t.id); },
+    onkeydown: e => { if (e.key === 'Enter') selectTask(t.id); } },
+    el('span', { class: 'chev', title: open ? 'hide details' : 'show details' }), el('span', { class: 'id' }, t.id), pill(t.status || 'draft'),
     t.kind && t.kind !== 'task' ? tag(t.kind, 'accent') : null,
-    prodMarker(t),
-    t.area ? tag(t.area) : null,
-    el('span', { class: 'grow' }),
-    el('span', { class: 'muted small' }, statsText(t.stats, t.changes_prod)),
-    when(t.created),
-    el('span', { class: 'full' }, t.purpose || el('span', { class: 'faint' }, 'no purpose')),
+    el('span', { class: 'purpose muted' }, t.purpose || ''),
+    n ? el('span', { class: 'suggn', title: t.suggestions.map(s => s.text).join('\n') }, `${n} !`) : null,
+    (t.meta_errors || []).length ? el('span', { class: 'err small', title: t.meta_errors.join('; ') }, 'meta') : null,
+    when(t.created));
+  if (!open) return row;
+  return el('div', { class: open ? 'row open' : 'row', style: 'border:0;margin:0' }, row, el('div', { class: 'tdetail small' },
     renderChips(t),
-    (t.meta_errors || []).length ? el('span', { class: 'full err small' }, 'meta.json: ', t.meta_errors.join('; ')) : null,
-    (t.suggestions || []).map(s => el('span', { class: 'full sugg small' }, tag(s.kind || 'note', 'warn'), s.text || '')),
-    t.outcome ? el('span', { class: `full note small ${tone(t.outcome.state)}` }, `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`,
-      el('span', { class: 'faint' }, ` (${t.outcome.closed_by || '?'}, `, when(t.outcome.closed), t.outcome.run ? `, run ${t.outcome.run})` : ')')) : null,
-    !t.outcome && t.abandoned_reason ? el('span', { class: 'full note small' }, 'abandoned: ', t.abandoned_reason) : null,
-    t.superseded_by ? el('span', { class: 'full small muted' }, 'superseded by ', taskLink(t.superseded_by)) : null,
-  ];
-  return collapsible('k:' + t.id, head, () => renderTaskBody(t), 'task/' + encodeURIComponent(t.id));
+    (t.suggestions || []).map(s => el('div', { class: 'sugg' }, tag(s.kind || 'note', 'warn'), s.text || '')),
+    t.outcome ? el('div', { class: `note ${tone(t.outcome.state)}` }, `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`) : null,
+    !t.outcome && t.abandoned_reason ? el('div', { class: 'note' }, 'abandoned: ', t.abandoned_reason) : null,
+    el('div', { class: 'line muted' }, statsText(t.stats, t.changes_prod), t.author ? `by ${t.author}` : null)));
 }
 function renderChips(t) {
   const chips = [];
   if ((t.targets || []).length) chips.push(el('span', { class: 'muted small' }, 'targets'), t.targets.map(targetLink));
   if ((t.uses || []).length) chips.push(el('span', { class: 'muted small' }, 'uses'), t.uses.map(scriptLink));
   if ((t.steps || []).length) chips.push(el('span', { class: 'muted small' }, 'steps'), t.steps.map(s => (s ? taskLink(s) : null)));
+  if (t.superseded_by) chips.push(el('span', { class: 'muted small' }, 'superseded by'), taskLink(t.superseded_by));
   if ((t.links || []).length) chips.push(t.links.map(linkTag));
-  return chips.length ? el('span', { class: 'full line' }, chips) : null;
+  return chips.length ? el('div', { class: 'line' }, chips) : null;
 }
-function fileButtons(t) {
-  const b = [];
-  if (t.has_design) b.push(el('button', { onclick: () => openFile(t, 'design.md') }, t.has_result ? 'design.md (has result)' : 'design.md'));
-  if (t.entry) b.push(el('button', { onclick: () => openScript(t) }, t.entry));
-  b.push(el('button', { onclick: () => openFile(t, 'meta.json') }, 'meta.json'));
-  if (t.kind !== 'plan') b.push(el('button', { onclick: () => openFile(t, 'test_main.py') }, 'tests'));
-  return b;
+/* flow diagram of a thread's tasks */
+function runDots(t, max) {
+  const rs = (t.runs || []).map(run).filter(Boolean);
+  return rs.slice(Math.max(0, rs.length - max)).map(r => ({ tone: tone(r.status), title: `${r.run_id} ${r.mode} ${r.status || '?'}` }));
 }
-function renderTaskBody(t) {
-  const parts = [];
-  const closable = t.kind !== 'general' && !t.archived;
-  if (closable) {
-    parts.push(el('h4', {}, 'Run it'));
-    const cmds = [`opsquire run ${t.id}`]; if (t.changes_prod) cmds.push(`opsquire run ${t.id} --apply`);
-    parts.push(el('div', { class: 'cmds' }, cmds.map(c => el('span', { class: 'cmd' }, el('span', {}, c), el('button', { onclick: () => copyText(c), title: 'copy to clipboard' }, 'copy')))));
+function flowSvg(ids, mini) {
+  const g = mini ? { bw: 22, bh: 10, gap: 8, pad: 2, top: 12, dots: 7, lift: 5, liftStep: 2 } : { bw: 124, bh: 36, gap: 22, pad: 4, top: 26, dots: 12, lift: 10, liftStep: 4 };
+  const edges = deriveEdges(S.data.tasks || {}, ids);
+  const L = flowLayout(ids, edges, g);
+  const root = svg('svg', { class: 'flow', width: L.w, height: L.h, viewBox: `0 0 ${L.w} ${L.h}`, role: 'img', 'aria-label': `${plural(ids.length, 'task')} with ${plural(edges.length, 'link')}` });
+  const mid = mini ? 'arr-m' : 'arr-f';
+  root.append(svg('defs', {}, svg('marker', { id: mid, markerWidth: 6, markerHeight: 6, refX: 5.5, refY: 3, orient: 'auto', markerUnits: 'userSpaceOnUse' }, svg('path', { d: 'M0,0 L6,3 L0,6 z' }))));
+  const pos = new Map(L.boxes.map(b => [b.id, b]));
+  for (const a of L.arcs) {
+    const from = pos.get(a.from), to = pos.get(a.to);
+    let d;
+    if (a.lift === 0) {
+      const cy = g.top + g.bh / 2;
+      const x1 = from.x < to.x ? from.x + g.bw : from.x, x2 = from.x < to.x ? to.x : to.x + g.bw;
+      d = `M${x1},${cy} L${x2},${cy}`;
+    } else {
+      const x1 = from.x + g.bw / 2, x2 = to.x + g.bw / 2;
+      d = `M${x1},${g.top} Q${(x1 + x2) / 2},${g.top - a.lift * 2} ${x2},${g.top}`;
+    }
+    root.append(svg('path', { class: `edge ${a.kind}`, d, 'marker-end': `url(#${mid})` }, svg('title', {}, `${a.kind}: ${shortName(a.from)} -> ${shortName(a.to)}`)));
   }
-  const btns = fileButtons(t);
-  if (closable) btns.push(el('button', { onclick: () => { S.closeForm = S.closeForm && S.closeForm.task === t.id ? null : { task: t.id, outcome: 'done', note: '', run: '', busy: false, error: null, result: null }; render(); } }, 'Close...'));
-  if (t.author) btns.push(el('span', { class: 'muted small' }, 'by ', t.author));
-  if (t.path) btns.push(el('span', { class: 'faint small mono', title: 'folder' }, t.path));
-  parts.push(el('div', { class: 'line' }, btns));
-  if (S.closeForm && S.closeForm.task === t.id) parts.push(renderCloseForm(t));
-  const runs = (t.runs || []).map(run).filter(Boolean).reverse();
-  parts.push(el('h4', {}, `Runs (${runs.length})`));
-  parts.push(runs.length ? el('div', { class: 'runs' }, runs.map(renderRun)) : el('div', { class: 'muted' }, 'Never run.'));
-  return parts;
-}
-function renderRun(r) {
-  const targets = Object.entries(r.targets || {});
-  return el('div', { class: 'run', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`, onclick: () => openLog(r.run_id),
-    onkeydown: e => { if (e.key === 'Enter') openLog(r.run_id); } },
-    modeTag(r.mode), pill(r.status || '?'), when(r.started), el('span', { class: 'muted' }, duration(r.duration_s)),
-    r.plan_run ? el('span', { class: 'muted small' }, 'step of plan run ', el('span', { class: 'id' }, r.plan_run)) : null,
-    r.steps ? el('span', { class: 'muted small' }, plural(r.steps.length, 'step')) : null,
-    r.user ? el('span', { class: 'faint small' }, r.user) : null,
-    el('span', { class: 'grow' }), el('span', { class: 'id' }, r.run_id),
-    targets.length ? el('span', { class: 'full line' }, targets.map(([n, st]) => el('span', { class: `pill ${tone(st)} mono` }, `${n} ${st || '?'}`))) : null,
-    r.last_error ? el('span', { class: 'full err small' }, r.last_error) : null,
-    (r.results || []).length ? el('ul', { class: 'small' }, r.results.map(x => el('li', {}, x))) : null,
-    (r.warnings || []).length ? el('ul', { class: 'small sugg' }, r.warnings.map(x => el('li', {}, x))) : null);
-}
-function renderCloseForm(t) {
-  const f = S.closeForm;
-  if (f.result) {
-    return el('div', { class: 'form' }, el('div', { class: 'note good' }, `closed ${(f.result.outcome && f.result.outcome.state) || f.outcome}: ${t.id}`),
-      (f.result.notes || []).map(n => el('div', { class: 'note warn small' }, n)),
-      el('div', {}, el('button', { onclick: () => { S.closeForm = null; render(); } }, 'dismiss')));
+  const sel = selectedTask();
+  for (const b of L.boxes) {
+    const t = task(b.id) || { id: b.id, status: '?' };
+    const st = tone(t.status);
+    const box = svg('rect', { class: `box st-${st} ${sel === b.id ? 'sel' : ''}`, x: b.x, y: b.y, width: g.bw, height: g.bh, rx: mini ? 2 : 4, tabindex: '0', role: 'button',
+      onclick: () => selectTask(b.id), onkeydown: e => { if (e.key === 'Enter') selectTask(b.id); } },
+      svg('title', {}, `${b.id}\n${t.status || '?'}${t.purpose ? '\n' + truncate(t.purpose, 140) : ''}`));
+    root.append(box);
+    if (!mini) {
+      const lines = wrapLines(shortName(b.id), 19, 2);
+      lines.forEach((ln, i) => root.append(svg('text', { class: `st-${st}`, x: b.x + g.bw / 2, y: b.y + (lines.length === 1 ? 22 : 15 + i * 12), 'text-anchor': 'middle' }, ln)));
+    }
+    const dots = runDots(t, mini ? 5 : 14), r = mini ? 1.6 : 3, pitch = mini ? 4.2 : 8;
+    const x0 = b.x + g.bw / 2 - ((dots.length - 1) * pitch) / 2;
+    dots.forEach((dt, i) => root.append(svg('circle', { class: `dot ${dt.tone}`, cx: x0 + i * pitch, cy: b.y + g.bh + (mini ? 4 : 7), r }, svg('title', {}, dt.title))));
   }
-  const runs = (t.runs || []).slice().reverse();
-  const outcomes = ['done', 'partial', 'abandoned'].map(o => el('label', {}, el('input', { type: 'radio', name: 'outcome', value: o, checked: f.outcome === o, onchange: () => { f.outcome = o; } }), ' ', o));
-  const sel = el('select', { onchange: e => { f.run = e.target.value; } }, el('option', { value: '' }, 'no run'),
-    runs.map(id => el('option', { value: id, selected: f.run === id }, `${id}${run(id) ? ' ' + run(id).status : ''}`)));
-  const note = el('textarea', { id: 'close-note', placeholder: 'What actually happened (required)', oninput: e => { f.note = e.target.value; } }, f.note);
-  return el('form', { class: 'form', onsubmit: e => { e.preventDefault(); submitClose(t); } },
-    el('div', {}, el('span', { class: 'muted' }, 'outcome '), outcomes),
-    note,
-    el('div', { class: 'line' }, el('span', { class: 'muted' }, 'run '), sel),
-    f.error ? el('div', { class: 'err' }, f.error) : null,
-    el('div', { class: 'line' }, el('button', { class: 'primary', type: 'submit', disabled: f.busy }, f.busy ? 'closing...' : 'Close task'),
-      el('button', { type: 'button', onclick: () => { S.closeForm = null; render(); } }, 'Cancel')));
+  return root;
 }
-async function submitClose(t) {
-  const f = S.closeForm; if (!f || f.busy) return;
-  if (!f.note.trim()) { f.error = 'The note is required: say what actually happened.'; render(); return; }
-  f.busy = true; f.error = null; render();
-  try {
-    const body = { task: t.id, outcome: f.outcome, note: f.note.trim() }; if (f.run) body.run = f.run;
-    f.result = await api('/api/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    toast('task closed'); refresh();
-  } catch (e) { f.error = e.message; }
-  f.busy = false; render();
+/* map: areas x days */
+function renderMap() {
+  const q = S.q;
+  const all = Object.values(S.data.tasks || {}).filter(t => t.kind !== 'general' && (!q || taskMatches(t, q)));
+  const now = Date.now(), cols = dayColumns(now, S.mapDays), B = mapBuckets(all, cols);
+  const ctl = el('div', { class: 'line', style: 'margin-bottom:6px' },
+    el('span', { class: 'muted' }, 'last'),
+    el('select', { 'aria-label': 'days shown', onchange: e => { S.mapDays = Number(e.target.value); render(); } },
+      [14, 30, 60, 90].map(d => el('option', { value: d, selected: S.mapDays === d }, `${d} days`))),
+    B.outside ? el('span', { class: 'muted small' }, `${plural(B.outside, 'task')} outside this range`) : null,
+    el('span', { class: 'grow' }),
+    el('span', { class: 'legend' }, Object.entries(LEGEND).map(([k, label]) => el('span', {}, el('i', { class: k }), label)),
+      el('span', {}, el('i', { class: 'dot good' }), el('i', { class: 'dot bad' }), el('i', { class: 'dot warn' }), el('i', { class: 'dot grey' }), 'runs')));
+  if (!B.lanes.length) return el('div', {}, ctl, empty(all.length ? 'No task created in this range.' : q ? `Nothing matches "${S.q}".` : 'No tasks yet.'));
+  const main = $('#main'), avail = Math.max(320, (main ? main.clientWidth : 900) - 32);
+  const lblW = 112, colW = Math.max(92, Math.floor((avail - lblW) / cols.length)), axH = 22, pitch = 42, boxH = 24, boxW = colW - 10;
+  let y = axH;
+  const lanesY = B.lanes.map(l => { const top = y; y += Math.max(1, l.depth) * pitch + 8; return top; });
+  const H = y, W = lblW + colW * cols.length;
+  const root = svg('svg', { class: 'map', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'tasks by area and day' });
+  const today = dayKey(new Date(now).toISOString());
+  B.lanes.forEach((l, i) => root.append(svg('rect', { class: `lane ${i % 2 ? 'alt' : ''}`, x: 0, y: lanesY[i], width: W, height: (i + 1 < lanesY.length ? lanesY[i + 1] : H) - lanesY[i] })));
+  cols.forEach((c, i) => {
+    const x = lblW + i * colW, wd = new Date(Date.parse(c + 'T00:00:00Z')).getUTCDay();
+    if (c === today) root.append(svg('rect', { class: 'today', x, y: 0, width: colW, height: H }));
+    else if (wd === 0 || wd === 6) root.append(svg('rect', { class: 'wk', x, y: axH, width: colW, height: H - axH }));
+    root.append(svg('line', { class: 'grid', x1: x, y1: 0, x2: x, y2: H }));
+    root.append(svg('text', { class: 'ax', x: x + colW / 2, y: 14, 'text-anchor': 'middle' }, c.slice(5) + (c === today ? ' today' : '')));
+  });
+  B.lanes.forEach((l, i) => root.append(svg('line', { class: 'grid', x1: 0, y1: lanesY[i], x2: W, y2: lanesY[i] }),
+    svg('text', { class: 'lbl', x: 8, y: lanesY[i] + 16 }, truncate(l.area, 16), svg('title', {}, l.area))));
+  const center = new Map();
+  B.lanes.forEach((l, i) => l.cells.forEach(cell => cell.ids.forEach((id, k) => {
+    center.set(id, { x: lblW + cell.col * colW + 5, y: lanesY[i] + 6 + k * pitch });
+  })));
+  const byThread = new Map();
+  for (const t of all) { if (t.thread && center.has(t.id)) { if (!byThread.has(t.thread)) byThread.set(t.thread, []); byThread.get(t.thread).push(t.id); } }
+  for (const [th, ids] of byThread) {
+    if (ids.length < 2) continue;
+    ids.sort();
+    const pts = ids.map(id => { const p = center.get(id); return `${p.x + boxW / 2},${p.y + boxH / 2}`; }).join(' ');
+    root.append(svg('polyline', { class: 'tline', points: pts }, svg('title', {}, `thread ${th}`)));
+  }
+  const sel = selectedTask(), maxChars = Math.max(6, Math.floor((boxW - 8) / 6.1));
+  for (const [id, p] of center) {
+    const t = task(id), st = tone(t.status);
+    root.append(svg('rect', { class: `box st-${st} ${sel === id ? 'sel' : ''}`, x: p.x, y: p.y, width: boxW, height: boxH, rx: 4, tabindex: '0', role: 'button',
+      onclick: () => selectTask(id), onkeydown: e => { if (e.key === 'Enter') selectTask(id); } },
+      svg('title', {}, `${id}\n${t.status || '?'}${t.purpose ? '\n' + truncate(t.purpose, 140) : ''}`)));
+    root.append(svg('text', { class: `blk st-${st}`, x: p.x + 5, y: p.y + 16 }, truncate(shortName(id), maxChars)));
+    const dots = runDots(t, Math.floor(boxW / 8));
+    dots.forEach((dt, k) => root.append(svg('circle', { class: `dot ${dt.tone}`, cx: p.x + 5 + k * 8, cy: p.y + boxH + 6, r: 3 }, svg('title', {}, dt.title))));
+  }
+  return el('div', {}, ctl, el('div', { class: 'block scroll', style: 'padding:0' }, root));
 }
 /* targets */
 function renderTargets() {
@@ -585,7 +915,7 @@ function renderTargetBody(g) {
   const silent = g.declared.filter(id => !g.entries.some(e => e.run.task_id === id));
   if (silent.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'declared but never run here'), silent.map(taskLink)));
   if (!g.entries.length) { parts.push(el('div', { class: 'muted' }, 'No run has touched this target.')); return parts; }
-  const rows = g.entries.map(e => el('tr', { class: 'click', title: `open the log of ${e.run.run_id}`, onclick: () => openLog(e.run.run_id) },
+  const rows = g.entries.map(e => el('tr', { class: 'click', title: `open the log of ${e.run.run_id}`, onclick: ev => { if (ev.target.closest('a')) return; openLog(e.run.run_id, null); } },
     el('td', {}, when(e.time)), el('td', {}, taskLink(e.run.task_id || '?')), el('td', {}, modeTag(e.run.mode)),
     el('td', {}, pill(e.run.status)), el('td', {}, pill(e.tstatus)),
     el('td', { class: 'small' }, e.run.last_error ? el('span', { class: 'err' }, e.run.last_error) : (e.run.results || [])[0] || '')));
@@ -603,11 +933,11 @@ function renderScripts() {
   return el('div', {}, shown.map(s => {
     const t = task(s.id);
     const head = [
-      el('span', { class: 'id title' }, s.id), tag('general', 'accent'),
+      el('span', { class: 'id title' }, s.id),
       t && (t.meta_errors || []).length ? el('span', { class: 'err small' }, t.meta_errors.join('; ')) : null,
-      el('span', { class: 'grow' }), el('span', { class: 'muted small' }, scriptStats(s.stats)),
+      el('span', { class: 'purpose muted', title: s.purpose || '' }, s.purpose || 'no purpose'),
+      el('span', { class: 'muted small' }, scriptStats(s.stats)),
       el('span', { class: 'count' }, plural((s.used_by || []).length, 'task')),
-      el('span', { class: 'full' }, s.purpose || el('span', { class: 'faint' }, 'no purpose')),
     ];
     return collapsible('s:' + s.id, head, () => renderScriptBody(s, t), 'script/' + encodeURIComponent(s.id));
   }));
@@ -620,42 +950,156 @@ function renderScriptBody(s, t) {
   parts.push(users.length ? users.map(u => el('div', { class: 'line' }, taskLink(u.id), pill(u.status), prodMarker(u), u.area ? tag(u.area) : null,
     el('span', { class: 'muted small' }, statsText(u.stats, u.changes_prod)),
     u.thread ? el('a', { class: 'small', href: '#task/' + encodeURIComponent(u.id), onclick: e => { e.preventDefault(); goToTask(u.id); } }, 'open in thread') : null,
-    el('span', { class: 'full small' }, u.purpose || ''))) : el('div', { class: 'muted' }, 'No task uses this script yet.'));
+    el('span', { class: 'full small muted' }, u.purpose || ''))) : el('div', { class: 'muted' }, 'No task uses this script yet.'));
   return parts;
 }
-/* ---- drawer ---- */
-function stopDrawer() { if (S.drawer && S.drawer.timer) clearTimeout(S.drawer.timer); if (S.hash && S.hash.startsWith('run/')) setHash(S.view); }
-function closeDrawer() {
-  stopDrawer(); S.drawer = null;
-  const d = $('#drawer'); d.hidden = true; d.replaceChildren();
+function fileButtons(t) {
+  const b = [];
+  if (t.has_design) b.push(btn(t.has_result ? 'design.md (has result)' : 'design.md', () => openFile(t, 'design.md'), 'sm'));
+  if (t.entry) b.push(btn(t.entry, () => openFile(t, t.entry), 'sm'));
+  b.push(btn('meta.json', () => openFile(t, 'meta.json'), 'sm'));
+  if (t.kind !== 'plan') b.push(btn('tests', () => openFile(t, 'test_main.py'), 'sm'));
+  return b;
 }
-function drawerShell(titleParts, bodyNode, cls) {
-  const d = $('#drawer');
-  d.replaceChildren(
-    el('div', { class: 'dh' }, el('span', { class: 'title' }, titleParts), el('span', { class: 'grow' }), el('button', { onclick: closeDrawer, title: 'close (Esc)' }, 'close')),
-    el('div', { class: `db ${cls || ''}` }, bodyNode));
-  d.hidden = false;
-  return d;
+/* ---- right pane ---- */
+function stopPane() { if (S.pane && S.pane.timer) clearTimeout(S.pane.timer); }
+function closePane() {
+  stopPane(); S.pane = null;
+  if (S.hash && /^(run|job|task)\//.test(S.hash)) setHash(S.view);
+  render();
 }
-function openLog(runId) {
-  stopDrawer();
+function paneShell(titleParts, body, cls, foot, back) {
+  const p = $('#pane');
+  fill($('#ph'), back ? btn('← ' + back.label, back.go, 'sm') : null, el('span', { class: 'title' }, titleParts), el('span', { class: 'grow' }), btn('close', closePane, 'sm', { title: 'close (Esc)' }));
+  const pb = $('#pb'); pb.className = `pb ${cls || ''}`; fill(pb, body);
+  const pf = $('#pf'); fill(pf, foot); pf.hidden = !foot;
+  p.classList.add('open'); $('#app').classList.add('has-pane');
+}
+function renderPane() {
+  const p = S.pane, aside = $('#pane');
+  if (!p) {
+    aside.classList.remove('open'); $('#app').classList.remove('has-pane');
+    fill($('#ph'), el('span', { class: 'muted small' }, 'Details'));
+    const pb = $('#pb'); pb.className = 'pb'; fill(pb, el('div', { class: 'placeholder' }, 'Select a task, a job or a run.'));
+    $('#pf').hidden = true;
+    return;
+  }
+  if (p.kind === 'task') {
+    const pb = $('#pb'), top = pb.scrollTop, t = task(p.id);
+    if (!t) { paneShell([el('span', { class: 'id' }, p.id)], el('div', { class: 'muted' }, 'This task is no longer in the home.')); return; }
+    paneShell([el('span', { class: 'id' }, t.id), pill(t.status || 'draft')], renderTaskPane(t));
+    pb.scrollTop = top;
+  } else if (p.kind === 'job' && !p.built) { buildJobPane(p); }
+  else if (p.kind === 'log' && !p.built) { buildLogPane(p); }
+  else aside.classList.add('open');
+}
+function backTo(p) {
+  if (!p.back) return null;
+  return { label: p.back.kind === 'task' ? 'task' : p.back.kind === 'job' ? 'job' : 'back', go: () => { stopPane(); S.pane = p.back; if (p.back.kind === 'task') setHash('task/' + encodeURIComponent(p.back.id)); else if (p.back.kind === 'job') setHash('job/' + encodeURIComponent(p.back.id)); p.back.built = false; render(); } };
+}
+function renderTaskPane(t) {
+  const parts = [];
+  parts.push(el('div', {}, t.purpose || el('span', { class: 'faint' }, 'no purpose')));
+  parts.push(el('div', { class: 'line small', style: 'margin-top:6px' }, t.kind && t.kind !== 'task' ? tag(t.kind, 'accent') : null, prodMarker(t), t.area ? tag(t.area) : null,
+    el('span', { class: 'muted' }, 'created ', when(t.created)), t.author ? el('span', { class: 'muted' }, `by ${t.author}`) : null,
+    t.thread ? el('a', { class: 'small', href: '#thread/' + encodeURIComponent(t.thread), onclick: e => { e.preventDefault(); focusKey('threads', 't:' + t.thread, 'thread/' + encodeURIComponent(t.thread)); } }, 'thread') : null));
+  const chips = renderChips(t); if (chips) parts.push(chips);
+  parts.push(el('div', { class: 'muted small' }, statsText(t.stats, t.changes_prod)));
+  if ((t.meta_errors || []).length) parts.push(el('div', { class: 'err small' }, 'meta.json: ', t.meta_errors.join('; ')));
+  for (const s of t.suggestions || []) parts.push(el('div', { class: 'sugg small' }, tag(s.kind || 'note', 'warn'), s.text || ''));
+  if (t.outcome) parts.push(el('div', { class: `note small ${tone(t.outcome.state)}` }, `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`,
+    el('span', { class: 'faint' }, ` (${t.outcome.closed_by || '?'}, `, when(t.outcome.closed), t.outcome.run ? `, run ${t.outcome.run})` : ')')));
+  else if (t.abandoned_reason) parts.push(el('div', { class: 'note small' }, 'abandoned: ', t.abandoned_reason));
+  const closable = t.kind !== 'general' && !t.archived;
+  if (closable) {
+    parts.push(el('h4', {}, 'Run it'));
+    const modes = t.changes_prod ? ['dry', 'apply'] : ['read'];
+    parts.push(el('div', { class: 'cmds' }, modes.map(m => { const c = runCommand(t.id, m); return el('span', { class: 'cmd' }, el('span', {}, c), btn('copy', () => copyText(c), 'sm', { title: 'copy to clipboard' }), runButton(t.id, m)); })));
+    const js = jobs().filter(j => j.task_id === t.id);
+    if (js.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'jobs'), js.map(j => btn(`${j.mode} ${jobLabel(j)}`, () => openJob(j.job_id), 'sm'))));
+  }
+  parts.push(el('h4', {}, 'Files'));
+  const fb = fileButtons(t);
+  if (closable) fb.push(btn('Close...', () => { S.closeForm = S.closeForm && S.closeForm.task === t.id ? null : { task: t.id, outcome: 'done', note: '', run: '', busy: false, error: null, result: null }; render(); }, 'sm'));
+  parts.push(el('div', { class: 'line' }, fb));
+  if (t.path) parts.push(el('div', { class: 'faint small mono', title: 'folder' }, t.path));
+  if (S.closeForm && S.closeForm.task === t.id) parts.push(renderCloseForm(t));
+  const runs = (t.runs || []).map(run).filter(Boolean).reverse();
+  parts.push(el('h4', {}, `Runs (${runs.length})`));
+  parts.push(runs.length ? el('div', { class: 'runs' }, runs.map(r => renderRun(r, t))) : el('div', { class: 'muted' }, 'Never run.'));
+  return el('div', {}, parts);
+}
+function renderRun(r, t) {
+  const targets = Object.entries(r.targets || {});
+  const open = () => openLog(r.run_id, t ? { kind: 'task', id: t.id } : null);
+  return el('div', { class: 'run', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`, onclick: e => { if (e.target.closest('a')) return; open(); },
+    onkeydown: e => { if (e.key === 'Enter') open(); } },
+    modeTag(r.mode), pill(r.status || '?'), when(r.started), el('span', { class: 'muted' }, duration(r.duration_s)),
+    r.plan_run ? el('span', { class: 'muted small' }, 'step of plan run ', el('span', { class: 'id' }, r.plan_run)) : null,
+    r.steps ? el('span', { class: 'muted small' }, plural(r.steps.length, 'step')) : null,
+    r.user ? el('span', { class: 'faint small' }, r.user) : null,
+    el('span', { class: 'grow' }), el('span', { class: 'id' }, r.run_id),
+    targets.length ? el('span', { class: 'full line' }, targets.map(([n, st]) => el('span', { class: `pill ${tone(st)} mono` }, `${n} ${st || '?'}`))) : null,
+    r.last_error ? el('span', { class: 'full err small' }, r.last_error) : null,
+    (r.results || []).length ? el('ul', { class: 'small' }, r.results.map(x => el('li', {}, x))) : null,
+    (r.warnings || []).length ? el('ul', { class: 'small sugg' }, r.warnings.map(x => el('li', {}, x))) : null);
+}
+function renderCloseForm(t) {
+  const f = S.closeForm;
+  if (f.result) {
+    return el('div', { class: 'form' }, el('div', { class: 'note good' }, `closed ${(f.result.outcome && f.result.outcome.state) || f.outcome}: ${t.id}`),
+      (f.result.notes || []).map(n => el('div', { class: 'note warn small' }, n)),
+      el('div', {}, btn('dismiss', () => { S.closeForm = null; render(); })));
+  }
+  const runs = (t.runs || []).slice().reverse();
+  const outcomes = ['done', 'partial', 'abandoned'].map(o => el('label', {}, el('input', { type: 'radio', name: 'outcome', value: o, checked: f.outcome === o, onchange: () => { f.outcome = o; } }), ' ', o));
+  const sel = el('select', { onchange: e => { f.run = e.target.value; } }, el('option', { value: '' }, 'no run'),
+    runs.map(id => el('option', { value: id, selected: f.run === id }, `${id}${run(id) ? ' ' + run(id).status : ''}`)));
+  const note = el('textarea', { id: 'close-note', placeholder: 'What actually happened (required)', oninput: e => { f.note = e.target.value; } }, f.note);
+  return el('form', { class: 'form', onsubmit: e => { e.preventDefault(); submitClose(t); } },
+    el('div', {}, el('span', { class: 'muted' }, 'outcome '), outcomes),
+    note,
+    el('div', { class: 'line' }, el('span', { class: 'muted' }, 'run '), sel),
+    f.error ? el('div', { class: 'err' }, f.error) : null,
+    el('div', { class: 'line' }, el('button', { class: 'primary', type: 'submit', disabled: f.busy }, f.busy ? 'closing...' : 'Close task'),
+      btn('Cancel', () => { S.closeForm = null; render(); })));
+}
+async function submitClose(t) {
+  const f = S.closeForm; if (!f || f.busy) return;
+  if (!f.note.trim()) { f.error = 'The note is required: say what actually happened.'; render(); return; }
+  f.busy = true; f.error = null; render();
+  try {
+    const body = { task: t.id, outcome: f.outcome, note: f.note.trim() }; if (f.run) body.run = f.run;
+    f.result = await post('/api/close', body);
+    toast('task closed'); refresh();
+  } catch (e) { f.error = e.message; }
+  f.busy = false; render();
+}
+/* run log in the pane */
+function openLog(runId, back, quiet) {
+  if (S.pane && S.pane.kind === 'log' && S.pane.run === runId) { if (!quiet) render(); return; }
+  stopPane();
   const r = run(runId);
-  const d = { kind: 'log', run: runId, start: null, offset: 0, pre: el('pre', {}), status: el('span', {}), timer: null, first: true, loading: false };
-  d.earlier = el('button', { class: 'small', hidden: true, onclick: () => loadEarlier(d) }, 'load earlier');
-  S.drawer = d;
-  setHash('run/' + runId);
-  drawerShell([el('span', { class: 'id' }, runId), ' ', r ? [modeTag(r.mode), ' ', taskLink(r.task_id || '')] : null, ' ', d.status],
-    el('div', {}, el('div', { class: 'line' }, d.earlier), d.pre), 'log');
+  S.pane = { kind: 'log', run: runId, back: back === undefined ? (r && r.task_id ? { kind: 'task', id: r.task_id } : null) : back, built: false };
+  setHash('run/' + encodeURIComponent(runId));
+  if (!quiet) render();
+}
+function buildLogPane(d) {
+  const r = run(d.run);
+  d.built = true; d.start = null; d.offset = 0; d.first = true; d.loading = false; d.timer = null;
+  d.pre = el('pre', {}); d.status = el('span', {});
+  d.earlier = btn('load earlier', () => loadEarlier(d), 'sm', { hidden: true });
+  paneShell([el('span', { class: 'id' }, d.run), ' ', r ? [modeTag(r.mode), ' ', taskLink(r.task_id || '')] : null, ' ', d.status],
+    el('div', {}, el('div', { class: 'line' }, d.earlier), d.pre), 'log', null, backTo(d));
   pollLog(d);
 }
-function logBox(d) { return d.pre.parentElement.parentElement; }
 function showEarlier(d) { d.earlier.hidden = !(d.start > 0); d.earlier.disabled = d.loading; }
 async function pollLog(d) {
-  if (S.drawer !== d) return;
+  if (S.pane !== d) return;
   try {
     const r = await api(`/api/log?run=${encodeURIComponent(d.run)}${d.start !== null && d.offset > 0 ? '&offset=' + d.offset : ''}`);
-    if (S.drawer !== d) return;
-    const box = logBox(d);
+    if (S.pane !== d) return;
+    const box = $('#pb');
     const atBottom = d.first || box.scrollTop + box.clientHeight >= box.scrollHeight - 12;
     if (d.start === null) { d.start = r.start || 0; showEarlier(d); }
     if (r.text) { if (d.pre.firstChild && d.pre.firstChild.nodeType !== Node.TEXT_NODE) d.pre.replaceChildren(r.text); else d.pre.append(r.text); }
@@ -666,19 +1110,19 @@ async function pollLog(d) {
     d.first = false;
     if (r.status === 'running') d.timer = setTimeout(() => pollLog(d), 1500);
   } catch (e) {
-    if (S.drawer !== d) return;
+    if (S.pane !== d) return;
     d.status.replaceChildren(el('span', { class: 'err' }, e.message));
     d.timer = setTimeout(() => pollLog(d), 4000);
   }
 }
 async function loadEarlier(d) {
-  if (S.drawer !== d || d.loading || !(d.start > 0)) return;
+  if (S.pane !== d || d.loading || !(d.start > 0)) return;
   d.loading = true; showEarlier(d);
   const from = Math.max(0, d.start - 512 * 1024);
   try {
     const r = await api(`/api/log?run=${encodeURIComponent(d.run)}&offset=${from}&until=${d.start}`);
-    if (S.drawer !== d) return;
-    const box = logBox(d), before = box.scrollHeight;
+    if (S.pane !== d) return;
+    const box = $('#pb'), before = box.scrollHeight;
     if (d.pre.firstChild && d.pre.firstChild.nodeType !== Node.TEXT_NODE) d.pre.replaceChildren();
     d.pre.prepend(r.text || '');
     box.scrollTop += box.scrollHeight - before;
@@ -686,19 +1130,79 @@ async function loadEarlier(d) {
   } catch (e) { toast(`load earlier failed: ${e.message}`); }
   d.loading = false; showEarlier(d);
 }
+/* a file in the pane */
 async function openFile(t, name) {
-  stopDrawer();
+  stopPane();
   const body = el('div', { class: 'muted' }, 'loading...');
-  S.drawer = { kind: 'file', task: t.id, name };
-  drawerShell([el('span', { class: 'id' }, t.id), ' / ', name], body);
+  const p = { kind: 'file', task: t.id, name, back: { kind: 'task', id: t.id }, built: true };
+  S.pane = p;
+  paneShell([el('span', { class: 'id' }, t.id), ' / ', name], body, '', null, backTo(p));
   try {
     const r = await api(`/api/file?task=${encodeURIComponent(t.id)}&name=${encodeURIComponent(name)}`);
-    if (!S.drawer || S.drawer.task !== t.id || S.drawer.name !== name) return;
+    if (S.pane !== p) return;
     if (r.text === null || r.text === undefined) body.replaceWith(el('div', { class: 'muted' }, `No ${name} in this task.`));
     else body.replaceWith(name.endsWith('.md') ? markdown(r.text) : el('pre', {}, r.text));
   } catch (e) { body.replaceWith(el('div', { class: 'err' }, e.message)); }
 }
-function openScript(t) { openFile(t, t.entry || 'main.py'); }
+/* a job (a run started from this page) in the pane: live terminal output, prompt answers */
+function openJob(jobId, quiet) {
+  if (S.pane && S.pane.kind === 'job' && S.pane.id === jobId) { if (!quiet) render(); return; }
+  stopPane();
+  S.pane = { kind: 'job', id: jobId, built: false };
+  setHash('job/' + encodeURIComponent(jobId));
+  if (!quiet) render();
+}
+function buildJobPane(d) {
+  const j = jobById(d.id);
+  d.built = true; d.offset = 0; d.buf = ''; d.first = true; d.timer = null; d.status = null; d.prompt = ''; d.exit = null; d.run_id = (j && j.run_id) || null;
+  d.doneNode = document.createTextNode(''); d.tailNode = document.createTextNode('');
+  d.pre = el('pre', {}, d.doneNode, d.tailNode);
+  d.pill = el('span', {}, el('span', { class: 'pill grey' }, 'connecting'));
+  d.foot = el('div', { class: 'line', style: 'margin:0;width:100%' });
+  paneShell([el('span', { class: 'muted small' }, 'job '), j ? [taskLink(j.task_id || '?'), ' ', modeTag(j.mode), ' '] : [el('span', { class: 'id' }, d.id), ' '], d.pill],
+    d.pre, 'log', d.foot);
+  pollJob(d);
+}
+function feedJob(d, chunk) {
+  d.buf += stripAnsi(chunk);
+  const i = d.buf.lastIndexOf('\n');
+  if (i >= 0) { d.doneNode.appendData(crFold(d.buf.slice(0, i + 1))); d.buf = d.buf.slice(i + 1); }
+  d.tailNode.data = crFold(d.buf);
+}
+function jobFoot(d) {
+  const parts = promptControls(d.id, d.status, d.prompt, 'pane');
+  if (d.status === 'done') {
+    parts.push(el('span', { class: 'muted small' }, 'finished', d.exit === null || d.exit === undefined ? '' : `, exit ${d.exit}`));
+    if (d.run_id) parts.push(btn('open run record', () => openLog(d.run_id, { kind: 'job', id: d.id }), 'sm'));
+  }
+  fill(d.foot, parts);
+  $('#pf').hidden = !parts.length;
+}
+async function pollJob(d) {
+  if (S.pane !== d) return;
+  try {
+    const r = await api(`/api/job?id=${encodeURIComponent(d.id)}&offset=${d.offset}`);
+    if (S.pane !== d) return;
+    const box = $('#pb');
+    const atBottom = d.first || box.scrollTop + box.clientHeight >= box.scrollHeight - 12;
+    if (r.text) feedJob(d, r.text);
+    if (typeof r.offset === 'number') d.offset = Math.max(d.offset, r.offset);
+    const changed = d.status !== r.status || d.prompt !== (r.prompt || '') || d.exit !== r.exit_code || d.run_id !== (r.run_id || null);
+    d.status = r.status || 'running'; d.prompt = r.prompt || ''; d.exit = r.exit_code; d.run_id = r.run_id || d.run_id;
+    if (changed || d.first) {
+      d.pill.replaceChildren(el('span', { class: `pill ${jobTone({ status: d.status, exit_code: d.exit })}` }, jobLabel({ status: d.status, exit_code: d.exit })));
+      jobFoot(d);
+    }
+    if (!d.doneNode.data && !d.tailNode.data && d.status === 'done') d.tailNode.data = '(no output)';
+    if (atBottom) box.scrollTop = box.scrollHeight;
+    d.first = false;
+    if (d.status !== 'done') d.timer = setTimeout(() => pollJob(d), 1000);
+  } catch (e) {
+    if (S.pane !== d) return;
+    d.pill.replaceChildren(el('span', { class: 'err small' }, e.message));
+    d.timer = setTimeout(() => pollJob(d), 3000);
+  }
+}
 /* ---- data flow ---- */
 let refreshTimer = null, loading = false, loadAgain = false;
 function refresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(load, 150); }
@@ -711,7 +1215,7 @@ async function load() {
     if (S.hash === null) applyHash(); else render();
   } catch (e) {
     S.error = `state: ${e.message}`;
-    if (S.data) renderStrip(); else $('#main').replaceChildren(empty(`Cannot load the home: ${e.message}`));
+    if (S.data) render(); else $('#main').replaceChildren(empty(`Cannot load the home: ${e.message}`));
   }
   loading = false;
   if (loadAgain) { loadAgain = false; refresh(); }
@@ -735,10 +1239,12 @@ function boot() {
   search.addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.q = search.value.trim().toLowerCase(); render(); }, 120); });
   document.addEventListener('keydown', e => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
-    if (e.key === 'Escape') { if (S.drawer) closeDrawer(); else if (typing) e.target.blur(); }
+    if (e.key === 'Escape') { if (typing) e.target.blur(); else if (S.pane) closePane(); }
     else if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); search.focus(); search.select(); }
   });
   window.addEventListener('hashchange', () => { if (S.data) applyHash(); });
+  let rTimer = null;
+  window.addEventListener('resize', () => { if (S.view === 'map' && S.data) { clearTimeout(rTimer); rTimer = setTimeout(render, 150); } });
   setInterval(() => { if (S.data && !document.hidden) render(); }, 60000);
   connect();
   load();

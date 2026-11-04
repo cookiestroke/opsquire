@@ -1084,7 +1084,16 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 0)
         state = json.loads(self.cli("threads", "--json").stdout)
         kinds = [s["kind"] for s in state["tasks"][tid]["suggestions"]]
-        self.assertEqual(kinds, ["awaiting-close", "rerun-heavy"], state["tasks"][tid]["suggestions"])
+        self.assertEqual(kinds, ["rerun-heavy"], state["tasks"][tid]["suggestions"])
+        self.assertEqual(state["threads"][0]["state"], "done")
+        meta_path = self.home / f"tasks/{tid[:4]}-{tid[4:6]}/{tid}/meta.json"
+        meta = json.loads(meta_path.read_text())
+        del meta["outcome"]
+        meta_path.write_text(json.dumps(meta))
+        (meta_path.parent / "design.md").unlink()
+        state = json.loads(self.cli("threads", "--json").stdout)
+        kinds = [s["kind"] for s in state["tasks"][tid]["suggestions"]]
+        self.assertEqual(kinds, ["awaiting-close", "rerun-heavy"])
         self.assertEqual(state["threads"][0]["state"], "open")
         self.assertEqual(self.cli("close", tid, "--outcome", "done", "--note", "landed by hand").returncode, 0)
         state = json.loads(self.cli("threads", "--json").stdout)
@@ -1170,6 +1179,98 @@ class OpsTest(unittest.TestCase):
         finally:
             proc.send_signal(signal.SIGINT)
             self.assertEqual(proc.wait(timeout=10), 0)
+
+    def test_ok_apply_closes_the_task_itself_and_close_can_amend(self) -> None:
+        body = "import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'restarted')\nsq.result('web1 on v2')\n"
+        tid = self.new("auto", body, "--changes-prod", "--rollback", "none").name
+        self.assertEqual(self.cli("run", tid).returncode, 0)
+        meta_path = self.home / f"tasks/{tid[:4]}-{tid[4:6]}/{tid}/meta.json"
+        self.assertIsNone(json.loads(meta_path.read_text())["outcome"])
+        r = self.cli("run", tid, "--apply", answers=[("", "y")])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("closed done", r.stdout)
+        outcome = json.loads(meta_path.read_text())["outcome"]
+        self.assertEqual((outcome["state"], outcome["closed_by"]), ("done", "opsquire run (auto)"))
+        self.assertIn("ok on web1", outcome["note"])
+        self.assertIn("web1 on v2", outcome["note"])
+        self.assertEqual(outcome["run"], self.last(tid)["run_id"])
+        design = (meta_path.parent / "design.md").read_text()
+        self.assertIn("## Result", design)
+        self.assertIn("- web1 on v2", design)
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual(state["tasks"][tid]["suggestions"], [])
+        self.assertEqual(state["threads"][0]["state"], "done")
+        self.assertEqual(
+            self.cli("close", tid, "--outcome", "partial", "--note", "web1 rolled back later").returncode, 0
+        )
+        self.assertEqual(json.loads(meta_path.read_text())["outcome"]["state"], "partial")
+
+    def test_ui_inbox_and_jobs_run_tasks_with_prompts(self) -> None:
+        import http.client
+
+        body = (
+            "import opsquire_helpers as sq\n\nif sq.APPLY:\n    sq.confirm('Really change web1?')\n"
+            "sq.target('web1', 'ok')\nsq.result('changed' if sq.APPLY else 'would change')\n"
+        )
+        tid = self.new("job", body, "--changes-prod", "--rollback", "none").name
+        self.assertEqual(self.cli("lint", tid).returncode, 0)
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
+                conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                return resp.status, json.loads(resp.read())
+
+            def wait_job(job: str, status: str) -> dict[str, Any]:
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    _, j = call("GET", f"/api/job?id={job}&offset=0")
+                    if j["status"] == status:
+                        return j
+                    time.sleep(0.2)
+                self.fail(f"job {job} never reached {status}: {j}")
+
+            _, state = call("GET", "/api/state")
+            self.assertEqual([(i["task_id"], i["next"]) for i in state["inbox"]], [(tid, "dry")])
+            self.assertEqual(state["jobs"], [])
+            status, started = call("POST", "/api/run", {"task": tid, "mode": "apply"})
+            self.assertEqual(status, 200, started)
+            j = wait_job(started["job_id"], "waiting")
+            self.assertIn("Really change web1? [y/N]", j["prompt"])
+            self.assertIn("Really change web1?", j["text"])
+            self.assertEqual(call("POST", "/api/run", {"task": tid, "mode": "apply"})[0], 409)
+            self.assertEqual(call("POST", "/api/answer", {"job": started["job_id"], "text": "n"})[0], 200)
+            j = wait_job(started["job_id"], "done")
+            self.assertEqual(j["exit_code"], 3)
+            self.assertEqual(self.last(tid)["status"], "aborted")
+            self.assertEqual(j["run_id"], self.last(tid)["run_id"])
+            _, state = call("GET", "/api/state")
+            self.assertEqual([(i["task_id"], i["next"]) for i in state["inbox"]], [(tid, "dry")])
+            status, started = call("POST", "/api/run", {"task": tid, "mode": "dry"})
+            j = wait_job(started["job_id"], "done")
+            self.assertEqual((j["exit_code"], self.last(tid)["status"]), (0, "ok"))
+            _, state = call("GET", "/api/state")
+            self.assertEqual([(i["task_id"], i["next"]) for i in state["inbox"]], [(tid, "apply")])
+            status, started = call("POST", "/api/run", {"task": tid, "mode": "apply"})
+            j = wait_job(started["job_id"], "waiting")
+            self.assertEqual(call("POST", "/api/answer", {"job": started["job_id"], "text": "y"})[0], 200)
+            j = wait_job(started["job_id"], "done")
+            self.assertEqual(j["exit_code"], 0, j["text"])
+            self.assertIn("closed done", j["text"])
+            _, state = call("GET", "/api/state")
+            self.assertEqual(state["inbox"], [])
+            self.assertEqual(state["tasks"][tid]["status"], "done")
+            self.assertEqual(state["tasks"][tid]["outcome"]["closed_by"], "opsquire run (auto)")
+            self.assertEqual(len(state["jobs"]), 3)
+            self.assertEqual(call("POST", "/api/run", {"task": tid, "mode": "read"})[0], 400)
+            conn.close()
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
 
     def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
         self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}

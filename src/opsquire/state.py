@@ -225,6 +225,23 @@ def is_settled(view: dict[str, Any]) -> bool:
     return bool(view["outcome"]) or not view["changes_prod"] or status in ("superseded", "archived")
 
 
+def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None:
+    """The run the operator owes a task: its first read or dry run when it is ready and never ran, the apply after
+    a dry run that ended ok, or a fresh dry run after anything else (a failed or aborted apply, a failed dry). None
+    when nothing waits: read-only tasks that ran, and tasks that are closed."""
+    m = task.meta
+    if m is None or task.kind == "general" or status in CLOSED or status == "draft":
+        return None
+    if not runs:
+        return "dry" if m.changes_prod else "read"
+    if not m.changes_prod:
+        return None
+    last = runs[-1]
+    if last.get("mode") == "dry" and last.get("status") == "ok":
+        return "apply"
+    return "dry"
+
+
 def run_view(r: dict[str, Any]) -> dict[str, Any]:
     targets = r.get("targets") or {}
     return {
@@ -359,9 +376,27 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
                     "alive": h.alive(),
                 }
             )
+    inbox = []
+    for t in sorted(tasks, key=lambda t: t.id, reverse=True):
+        v = task_views[t.id]
+        nxt = next_mode(t, by_task.get(t.id, []), str(v["status"]))
+        if nxt:
+            inbox.append(
+                {
+                    "task_id": t.id,
+                    "next": nxt,
+                    "command": f"opsquire run {t.id}" + (" --apply" if nxt == "apply" else ""),
+                    "created": v["created"],
+                    "author": v["author"],
+                    "purpose": v["purpose"],
+                    "changes_prod": v["changes_prod"],
+                    "thread": v["thread"],
+                }
+            )
     return {
         "generated": iso(at),
         "home": str(home),
+        "inbox": inbox,
         "threads": sorted(threads.values(), key=lambda th: str(th["updated"] or ""), reverse=True),
         "tasks": task_views,
         "runs": {str(r.get("run_id")): run_view(r) for r in runs},

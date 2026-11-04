@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .close import close_task
+from .jobs import Jobs
 from .model import OpsquireError, home_dir, iso, now, runs_dir, task_folder, var_dir
 from .state import state
 
@@ -127,7 +128,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
             elif url.path == "/api/state":
-                self.send_json(state())
+                self.send_json({**state(), "jobs": self.jobs.views()})
+            elif url.path == "/api/job":
+                self.send_json(self.jobs.read(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/log":
                 offset, until = q.get("offset") or None, q.get("until") or None
                 self.send_json(
@@ -156,7 +159,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "body must be a JSON object"}, HTTPStatus.BAD_REQUEST)
             return
         try:
-            if url.path == "/api/close":
+            if url.path == "/api/run":
+                job = self.jobs.start(str(body.get("task", "")), str(body.get("mode", "")))
+                self.send_json({"job_id": job.job_id})
+            elif url.path == "/api/answer":
+                self.jobs.answer(str(body.get("job", "")), str(body.get("text", "")))
+                self.send_json({"ok": True})
+            elif url.path == "/api/interrupt":
+                self.jobs.interrupt(str(body.get("job", "")))
+                self.send_json({"ok": True})
+            elif url.path == "/api/close":
                 run = body.get("run")
                 closed = close_task(
                     str(body.get("task", "")),
@@ -168,7 +180,13 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except OpsquireError as e:
-            self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+            busy = "already has a job" in str(e)
+            self.send_json({"error": str(e)}, HTTPStatus.CONFLICT if busy else HTTPStatus.BAD_REQUEST)
+
+    @property
+    def jobs(self) -> Jobs:
+        server: UIServer = self.server  # type: ignore[assignment]
+        return server.jobs
 
     def stream(self) -> None:
         """Server-sent events: `change` when the home moved, `ping` to keep the connection alive."""
@@ -183,9 +201,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(f"event: hello\ndata: {json.dumps({'generated': iso(now())})}\n\n".encode())
         self.wfile.flush()
         while not server.stopping.is_set():
-            time.sleep(WATCH_INTERVAL_S)
+            moved = server.jobs.changed.wait(WATCH_INTERVAL_S)
             current = fingerprint()
-            if current != seen:
+            if current != seen or moved:
+                server.jobs.changed.clear()
                 seen = current
                 self.wfile.write(f"event: change\ndata: {json.dumps({'generated': iso(now())})}\n\n".encode())
                 self.wfile.flush()
@@ -203,6 +222,7 @@ class UIServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int]) -> None:
         super().__init__(address, Handler)
         self.stopping = threading.Event()
+        self.jobs = Jobs()
 
 
 def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1", on_ready: Callable[[], None] | None = None) -> None:
@@ -217,6 +237,7 @@ def serve(port: int = DEFAULT_PORT, host: str = "127.0.0.1", on_ready: Callable[
         server.serve_forever(poll_interval=0.2)
     finally:
         server.stopping.set()
+        server.jobs.stop_all()
         server.server_close()
 
 
