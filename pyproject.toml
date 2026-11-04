@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opsquire"
-version = "0.1.0"
+version = "0.2.0"
 description = "Agents prepare the scripts, you run them, and every run is recorded for the next agent."
 readme = "README.md"
 requires-python = ">=3.10"
