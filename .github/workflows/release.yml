@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: how big the release is (the version part to bump)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: tag, build, publish
+    needs: checks
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Next version
+        id: version
+        run: echo "version=$(python scripts/release.py next "${{ inputs.bump }}")" >> "$GITHUB_OUTPUT"
+
+      - name: Bump pyproject.toml with a GitHub-signed commit
+        id: bump
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python scripts/release.py set-version "$VERSION"
+          git add pyproject.toml
+          echo "oid=$(python scripts/signed_commit.py --branch main -m "release: v$VERSION")" >> "$GITHUB_OUTPUT"
+
+      - name: Tag the release commit
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          OID: ${{ steps.bump.outputs.oid }}
+        run: |
+          gh api -X POST "repos/${{ github.repository }}/git/refs" -f "ref=refs/tags/v$VERSION" -f "sha=$OID" > /dev/null
+          git fetch -q origin "refs/tags/v$VERSION:refs/tags/v$VERSION"
+          git checkout -q "v$VERSION"
+
+      - name: Build from the tagged commit
+        run: |
+          python -m pip install --quiet --upgrade pip build twine
+          python -m build
+          twine check dist/*
+
+      - name: Publish the GitHub release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python scripts/release.py notes "v$VERSION" --repo "${{ github.repository }}" > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" dist/* --repo "${{ github.repository }}" --verify-tag \
+            --title "opsquire $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          echo "::notice title=Released::opsquire $VERSION: https://github.com/${{ github.repository }}/releases/tag/v$VERSION"

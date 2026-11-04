@@ -12,7 +12,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import locks, piece, repos, runner
+from . import __version__, locks, piece, repos, runner
 from .ask import DEFAULT_BUDGET_USD, Budget, ask
 from .close import auto_close, close_task
 from .docs import write_docs
@@ -553,6 +553,7 @@ def parser() -> argparse.ArgumentParser:
         prog="opsquire",
         description="Agents write the scripts, you run them, everything is recorded for the next agent.",
     )
+    p.add_argument("--version", action="version", version=f"opsquire {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     n = sub.add_parser("new", help="scaffold a task (or --general script)")

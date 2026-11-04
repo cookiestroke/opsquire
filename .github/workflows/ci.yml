@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: ruff, mypy, shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --quiet --upgrade pip && pip install --quiet -e ".[lint]"
+      - run: ruff check . && ruff format --check .
+      - run: mypy src tests scripts
+      - run: cd src/opsquire/data/helpers && mypy --config-file ../mypy.ini opsquire_helpers.py
+      - run: cd src/opsquire/data/templates && MYPYPATH=../helpers mypy --config-file ../mypy.ini main.py verify.py
+      - run: shellcheck -x -P src/opsquire/data/helpers src/opsquire/data/helpers/opsquire.sh src/opsquire/data/templates/*.sh
+
+  test:
+    name: tests (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    env:
+      GIT_AUTHOR_NAME: ci
+      GIT_AUTHOR_EMAIL: ci@example.invalid
+      GIT_COMMITTER_NAME: ci
+      GIT_COMMITTER_EMAIL: ci@example.invalid
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --quiet --upgrade pip && pip install --quiet -e ".[lint]"
+      - run: python tests/test_opsquire.py
+
+  package:
+    name: wheel installs clean
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --quiet --upgrade pip build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - name: Install the wheel in an empty venv and use it
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet dist/*.whl
+          "$RUNNER_TEMP/venv/bin/opsquire" --version
+          "$RUNNER_TEMP/venv/bin/python" - <<'PY'
+          from importlib import resources
+          data = resources.files("opsquire").joinpath("data")
+          missing = [f for f in ("ui.html", "AGENTS.md", "retinue.json", "helpers/opsquire.sh", "templates/main.py",
+                                 "templates/verify.sh", "skills/opsquire/SKILL.md") if not data.joinpath(f).is_file()]
+          assert not missing, f"wheel is missing package data: {missing}"
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error

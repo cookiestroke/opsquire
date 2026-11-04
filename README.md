@@ -1,5 +1,7 @@
 # Opsquire
 
+[![CI](https://github.com/cookiestroke/opsquire/actions/workflows/ci.yml/badge.svg)](https://github.com/cookiestroke/opsquire/actions/workflows/ci.yml)
+
 Agents prepare the scripts, you run them, and every run is recorded for the next agent.
 
 A squire prepares the arms; the knight acts. Opsquire lets AI coding agents do the preparation
@@ -9,9 +11,19 @@ Every run leaves a structured, agent-readable record that agents cannot forge.
 
 ## Install
 
+From the latest release (a wheel attached to the GitHub release; the repo is private, so `gh` fetches it):
+
 ```
-pip install -e .            # from a checkout; needs ruff, mypy, shellcheck on PATH for the lint gate
-opsquire home ~/ops-home    # where tasks and run records live
+gh release download --repo cookiestroke/opsquire --pattern '*.whl' --dir /tmp/opsquire
+pip install /tmp/opsquire/*.whl          # or: uv tool install /tmp/opsquire/*.whl
+opsquire --version
+opsquire home ~/ops-home                 # where tasks and run records live
+```
+
+From a checkout, for development:
+
+```
+pip install -e .            # needs ruff, mypy, shellcheck on PATH for the lint gate
 ```
 
 ## Daily use
@@ -44,10 +56,36 @@ The full contract agents follow is in [src/opsquire/data/AGENTS.md](src/opsquire
 ```
 python3 tests/test_opsquire.py -v
 ruff check . && ruff format --check .
-mypy src tests
+mypy src tests scripts
 (cd src/opsquire/data/helpers && mypy --config-file ../mypy.ini opsquire_helpers.py)
-(cd src/opsquire/data/templates && MYPYPATH=../helpers mypy --config-file ../mypy.ini main.py)
-shellcheck -x -P src/opsquire/data/helpers src/opsquire/data/helpers/opsquire.sh src/opsquire/data/templates/main.sh
+(cd src/opsquire/data/templates && MYPYPATH=../helpers mypy --config-file ../mypy.ini main.py verify.py)
+shellcheck -x -P src/opsquire/data/helpers src/opsquire/data/helpers/opsquire.sh src/opsquire/data/templates/*.sh
 ```
 
-Standard library only, Python 3.10+.
+Standard library only, Python 3.10+. [CI](.github/workflows/ci.yml) runs the same checks on every push and
+pull request, plus the test suite on the oldest and newest supported Python, and builds the wheel, installs it
+into an empty venv and checks that every data file ships.
+
+Commits reach `main` as commits GitHub signs itself, never through `git push`:
+
+```
+git add <files>
+python3 scripts/signed_commit.py -m "area: what changed" [-m "why, in a paragraph"]
+```
+
+It sends the staged files with `createCommitOnBranch`, refuses when the checkout is behind `origin/main`, and
+moves the local branch onto the new commit. Subjects are `area: summary` (`ui:`, `repo:`, `close:` ...); the
+body says why. Release notes are built from them.
+
+## Releases
+
+One command, from anywhere:
+
+```
+gh workflow run release.yml --repo cookiestroke/opsquire -f bump=patch     # or minor, major
+```
+
+The [release workflow](.github/workflows/release.yml) runs the full CI on `main`, bumps the version in
+`pyproject.toml` with a signed `release: vX.Y.Z` commit, tags it, builds the sdist and wheel from the tag, and
+publishes a GitHub release whose notes list the commits since the previous release grouped by area, with the
+wheel attached. `opsquire --version` shows the installed version. Nothing is published outside GitHub.
