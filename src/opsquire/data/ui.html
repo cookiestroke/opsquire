@@ -814,13 +814,29 @@ function arm(key) {
   render();
 }
 function disarm() { S.confirm = null; clearTimeout(S.confirmTimer); }
-function runButton(taskId, mode) {
+function runButton(taskId, mode, label, primary) {
   const active = activeJobFor(taskId);
   if (active) return btn(active.status, () => openJob(active.job_id), 'sm', { title: 'a job for this task is still running; open it' });
-  if (mode !== 'apply') return btn(S.dev ? `Run ${mode}` : 'Run', () => startRun(taskId, mode), 'runbtn', { title: S.dev ? null : `${mode === 'read' ? 'read-only' : mode === 'verify' ? 'read-only check that the change is live' : 'dry'} run: nothing changes` });
+  const cls = 'runbtn' + (primary ? ' primary' : '');
+  if (mode !== 'apply') return btn(label || (S.dev ? `Run ${mode}` : 'Run'), () => startRun(taskId, mode), cls, { title: S.dev ? null : `${mode === 'read' ? 'read-only' : mode === 'verify' ? 'read-only check that the change is live' : 'dry'} run: nothing changes` });
   const key = taskId + ':apply', armed = S.confirm === key;
-  return btn(armed ? 'Confirm apply' : S.dev ? 'Run apply' : 'Run', () => { if (armed) { disarm(); startRun(taskId, 'apply'); } else arm(key); },
-    'runbtn apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : 'changes production; asks for a second click' });
+  return btn(armed ? 'Confirm apply' : label || (S.dev ? 'Run apply' : 'Run'), () => { if (armed) { disarm(); startRun(taskId, 'apply'); } else arm(key); },
+    cls + ' apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : 'changes production; asks for a second click' });
+}
+/* every run a task supports, the inbox's next step first and primary; one status button while a job runs */
+function runModes(t) {
+  if (!t || t.kind === 'general' || t.archived || (t.meta_errors || []).length) return [];
+  const modes = t.changes_prod ? ['dry', 'apply'] : ['read'];
+  if (t.verify) modes.push('verify');
+  return modes;
+}
+function runActions(t) {
+  const modes = runModes(t); if (!modes.length) return [];
+  if (activeJobFor(t.id)) return [runButton(t.id, modes[0])];
+  const it = inboxItem(t.id), next = it && modes.includes(it.next) ? it.next : null;
+  const ranIn = m => (t.runs || []).some(id => run(id) && run(id).mode === m);
+  const order = next ? [next, ...modes.filter(m => m !== next)] : modes;
+  return order.map(m => runButton(t.id, m, S.dev ? `Run ${m}` : m === next ? 'Run' : `${ranIn(m) ? 'Run again' : 'Run'} (${m})`, m === next));
 }
 /* the judge: an agent reads the task's record and closes it, or keeps it open and says why */
 async function awaitJob(jobId) {
@@ -999,7 +1015,8 @@ function renderDecideRow(t) {
 function renderDoneRow(t) {
   return el('div', { class: 'sr', 'data-key': 'done:' + t.id },
     tick(t), taskLink(t.id), areaTag(t), el('span', { class: 'purpose', title: t.purpose || '' }, t.outcome ? `${t.outcome.state || 'done'}: ${t.outcome.note || ''}` : t.purpose || ''),
-    chipsRow(agentChips(t.agents)), t.outcome ? when(t.outcome.closed) : null);
+    chipsRow(agentChips(t.agents)), t.outcome ? when(t.outcome.closed) : null,
+    runModes(t).length && !activeJobFor(t.id) ? btn('Run', () => selectTask(t.id), 'sm', { title: 'open the task to run it' }) : null);
 }
 function renderJob(j) {
   const open = () => openJob(j.job_id);
@@ -1064,7 +1081,8 @@ function renderTaskLine(t) {
     tick(t), el('span', { class: 'name' }, shortName(t.id)), el('span', { class: 'purpose' }, t.purpose || ''),
     el('span', { class: `small ${words.tone === 'good' ? 'muted' : words.tone === 'warn' ? 'sugg' : 'muted'}` }, words.text),
     isDeciding(t.id) ? el('span', { class: 'spin' }) : null,
-    el('a', { class: 'why', href: '#task/' + encodeURIComponent(t.id), title: 'what happened and why', onclick: e => { e.preventDefault(); why(); } }, 'Why'));
+    el('a', { class: 'why', href: '#task/' + encodeURIComponent(t.id), title: 'what happened and why', onclick: e => { e.preventDefault(); why(); } }, 'Why'),
+    runModes(t).length && !activeJobFor(t.id) ? btn('Run', () => selectTask(t.id), 'sm', { title: 'open the task to run it' }) : null);
 }
 function renderAsk(a) {
   const rounds = (a.rounds || []).length;
@@ -1323,8 +1341,8 @@ function renderTaskPane(t) {
     if ((t.meta_errors || []).length) parts.push(el('div', { class: 'err small' }, 'The task record has a problem: ', t.meta_errors.join('; ')));
     if (closable) {
       const actions = [];
-      if (it) actions.push(el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}` }, nextLabel(it.next)), runButton(t.id, it.next));
-      else if (!t.settled && t.status !== 'draft') actions.push(runButton(t.id, nextMode(t)));
+      if (it) actions.push(el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}` }, nextLabel(it.next)));
+      actions.push(runActions(t));
       if (!t.settled && t.status !== 'draft' && !(it && it.next === 'verify')) { const db = decideButton(t.id); if (db) actions.push(db); }
       const open = S.details.has(t.id);
       actions.push(btn(open ? 'Hide details' : 'Show details', () => { if (open) S.details.delete(t.id); else S.details.add(t.id); render(); }, 'sm'));
@@ -1378,7 +1396,8 @@ function renderTaskDetails(t, closable) {
   if (closable) {
     parts.push(el('h4', {}, 'Run it'));
     const modes = t.changes_prod ? ['dry', 'apply'] : ['read']; if (t.verify) modes.push('verify');
-    parts.push(el('div', { class: 'cmds' }, modes.map(m => { const c = runCommand(t.id, m); return el('span', { class: 'cmd' }, el('span', {}, c), btn('copy', () => copyText(c), 'sm', { title: 'copy to clipboard' }), S.dev ? runButton(t.id, m) : null); })));
+    if (S.dev) parts.push(el('div', { class: 'actions' }, runActions(t)));
+    parts.push(el('div', { class: 'cmds' }, modes.map(m => { const c = runCommand(t.id, m); return el('span', { class: 'cmd' }, el('span', {}, c), btn('copy', () => copyText(c), 'sm', { title: 'copy to clipboard' })); })));
     const js = jobs().filter(j => j.task_id === t.id);
     if (js.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'jobs'), js.map(j => btn(`${j.mode} ${jobLabel(j)}`, () => openJob(j.job_id), 'sm'))));
     const judge = lastJudgeFor(t.id), text = judge && S.judgeText.get(judge.job_id);
