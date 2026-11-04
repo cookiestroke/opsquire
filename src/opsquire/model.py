@@ -190,6 +190,7 @@ class Meta:
     steps: list[dict[str, Any]] | None = None
     outcome: dict[str, Any] | None = None
     thread: str | None = None
+    verify: str | None = None
 
     def command(self, entry: Path) -> list[str]:
         if self.interpreter and entry.suffix == ".py":
@@ -198,7 +199,9 @@ class Meta:
 
     @property
     def modes(self) -> list[str]:
-        return ["dry", "apply"] if self.changes_prod else ["read"]
+        if not self.changes_prod:
+            return ["read"]
+        return ["dry", "apply", "verify"] if self.verify else ["dry", "apply"]
 
     def to_json(self) -> dict[str, Any]:
         return {"schema": SCHEMA, **self.__dict__}
@@ -243,7 +246,14 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
         steps=raw.get("steps"),
         outcome=raw.get("outcome"),
         thread=raw.get("thread"),
+        verify=raw.get("verify"),
     )
+    if meta.verify is not None:
+        check = folder / str(meta.verify)
+        if not isinstance(meta.verify, str) or not meta.changes_prod:
+            errors.append("verify names the check script of a changing task")
+        elif not check.is_file() or check.suffix not in INTERPRETERS:
+            errors.append(f"verify {meta.verify!r} not found or not .py/.sh")
     if meta.thread is not None and not (isinstance(meta.thread, str) and THREAD_RE.match(meta.thread)):
         errors.append("thread must be a lowercase kebab-case name of at most 40 characters")
     if meta.outcome is not None:
@@ -412,14 +422,32 @@ class Task:
         return out
 
     def file_hashes(self) -> dict[str, str]:
+        """Content hashes of every file that runs. meta.json is hashed without its annotations (`outcome`,
+        `judged`): closing or judging a task does not change what it does, so it must not make it draft."""
         home = home_dir()
-        return {str(p.relative_to(home)): hashlib.sha256(p.read_bytes()).hexdigest() for p in self.files()}
+        return {str(p.relative_to(home)): hashlib.sha256(content_for_hash(p)).hexdigest() for p in self.files()}
 
     def content_hash(self) -> str:
         h = hashlib.sha256()
         for name, digest in self.file_hashes().items():
             h.update(f"{name}\0{digest}\n".encode())
         return h.hexdigest()
+
+
+ANNOTATIONS = ("outcome", "judged")
+
+
+def content_for_hash(path: Path) -> bytes:
+    data = path.read_bytes()
+    if path.name != "meta.json":
+        return data
+    try:
+        raw = json.loads(data)
+    except ValueError:
+        return data
+    if not isinstance(raw, dict):
+        return data
+    return json.dumps({k: v for k, v in raw.items() if k not in ANNOTATIONS}, sort_keys=True).encode()
 
 
 def load_task(folder: Path) -> Task:

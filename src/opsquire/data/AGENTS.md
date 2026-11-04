@@ -91,8 +91,15 @@ opsquire ui [--port N] [--open]      the operator's console in the browser (loca
    (done when the host ended up right despite the record, partial when some of it did, abandoned when it will not
    happen). `close` only annotates meta.json and touches no host. A changing task is not settled until it is closed,
    and its thread stays open; the operator never has to close anything. What agents leave behind shows up in the UI
-   as "needs a decision", where `opsquire judge` (an agent reading purpose, design, runs and the last output, under a
-   small budget) decides and closes it, marked as the judge's; the operator can amend any close.
+   as "needs a decision", where `opsquire judge` (an agent reading purpose, design, runs, the last output and the
+   state of linked PRs on GitHub, under a small budget) decides and closes it, marked as the judge's, or asks for
+   the verify check; the operator can amend any close.
+8. The verify check. Every changing task is scaffolded with `verify.py` (or `.sh`, `meta.json` `verify`): a
+   read-only script that establishes whether the task's intended end state is live, reporting every target `ok`
+   or `failed` with what it found. Write it with the task: it is how a task that did not close itself gets settled
+   without anyone guessing. `opsquire run <task> --verify` runs it (shared lock, mode `verify`); all targets ok
+   closes the task; a failure goes to the judge. After an apply that did not close the task, the inbox asks for the
+   verify run next. `--no-verify` is for tasks where no check is possible; say why in design.md.
 
 ### Threads: the story a task belongs to
 
@@ -144,12 +151,14 @@ like any task: `opsquire run <plan>` (every step in its dry/read mode), then `op
 | `links` | chat threads, PRs, incident links |
 | `superseded_by`, `abandoned_reason` | set by hand to retire a task |
 | `thread` | optional: the thread (story) this task belongs to, kebab-case; inferred when absent |
+| `verify` | changing tasks: the read-only check script (`verify.py` or `verify.sh`) that says whether the intended state is live |
+| `judged` | written by `opsquire judge` when it keeps a task open or asks for the check: decision, note, by, when |
 | `steps` | plans only: `[{"task": id, "args": [...], "verify": bool, "on_failure": id}]`; a plan has `entry: ""` and no credentials, uses or interpreter |
 | `archived` | `{"note": ..., "history": [{when, by, command, source, outcome}]}` for scripts that ran before opsquire; kept byte-for-byte, never linted or runnable |
 
 ### What a script gets
 
-Environment: `OPSQUIRE_MODE` (`read`, `dry` or `apply`), `OPSQUIRE_RUN_ID`, `OPSQUIRE_TASK_ID`,
+Environment: `OPSQUIRE_MODE` (`read`, `dry`, `apply` or `verify`), `OPSQUIRE_RUN_ID`, `OPSQUIRE_TASK_ID`,
 `OPSQUIRE_TARGETS` (space-separated), `OPSQUIRE_GENERAL`, `OPSQUIRE_HELPERS`, plus the declared
 credentials. Arguments after `--` in `opsquire run <task> -- ...` are passed through. A dry run must
 not change anything.

@@ -486,12 +486,12 @@ function mapBuckets(tasks, columns) {
 }
 const LEGEND = { good: 'done', neutral: 'ready', grey: 'draft / retired', bad: 'failed', warn: 'partial' };
 function nextMode(t) { return t.changes_prod ? 'dry' : 'read'; }
-function runCommand(id, mode) { return `opsquire run ${id}${mode === 'apply' ? ' --apply' : ''}`; }
+function runCommand(id, mode) { return `opsquire run ${id}${mode === 'apply' ? ' --apply' : mode === 'verify' ? ' --verify' : ''}`; }
 /* simple mode: plain words for what the operator sees */
 function areaOf(id) { const m = /^\d{8}-\d{4}_([^_]+)_/.exec(String(id || '')); return m ? m[1] : ''; }
 function scriptArea(id) { const m = /^([a-z0-9-]+)_[a-z0-9-]+$/.exec(String(id || '')); return m ? m[1] : ''; }
 function scriptName(id) { const m = /^[a-z0-9-]+_([a-z0-9-]+)$/.exec(String(id || '')); return (m ? m[1] : String(id || '')).replace(/-/g, ' '); }
-function nextLabel(mode) { return mode === 'apply' ? 'Apply' : 'Check first'; }
+function nextLabel(mode) { return mode === 'apply' ? 'Apply' : mode === 'verify' ? 'Check it landed' : 'Check first'; }
 function lastRunOf(t, runs) { const ids = (t && t.runs) || []; for (let i = ids.length - 1; i >= 0; i--) { const r = runs && runs[ids[i]]; if (r) return r; } return null; }
 function needsDecision(t, inboxIds, runs) {
   if (!t || t.settled || t.kind === 'general' || t.archived || inboxIds.has(t.id)) return false;
@@ -523,7 +523,7 @@ function statusWords(t, inboxItem, decide) {
   if (st === 'abandoned' || (t.outcome && t.outcome.state === 'abandoned')) return { text: 'Abandoned', tone: 'grey' };
   if (t.settled) return { text: t.outcome && t.outcome.state === 'partial' ? 'Partly done' : 'Done', tone: 'good' };
   if (st === 'running') return { text: 'Running', tone: 'live' };
-  if (inboxItem) return { text: inboxItem.next === 'apply' ? 'Waiting for apply' : 'Waiting for your check', tone: 'warn' };
+  if (inboxItem) return { text: inboxItem.next === 'apply' ? 'Waiting for apply' : inboxItem.next === 'verify' ? 'Waiting for you to check it landed' : 'Waiting for your check', tone: 'warn' };
   if (decide) return { text: 'Needs a decision', tone: 'warn' };
   if (st === 'draft') return { text: 'Draft', tone: 'grey' };
   if (st === 'done') return { text: 'Ran ok, not closed', tone: 'warn' };
@@ -817,7 +817,7 @@ function disarm() { S.confirm = null; clearTimeout(S.confirmTimer); }
 function runButton(taskId, mode) {
   const active = activeJobFor(taskId);
   if (active) return btn(active.status, () => openJob(active.job_id), 'sm', { title: 'a job for this task is still running; open it' });
-  if (mode !== 'apply') return btn(S.dev ? `Run ${mode}` : 'Run', () => startRun(taskId, mode), 'runbtn', { title: S.dev ? null : `${mode === 'read' ? 'read-only' : 'dry'} run: nothing changes` });
+  if (mode !== 'apply') return btn(S.dev ? `Run ${mode}` : 'Run', () => startRun(taskId, mode), 'runbtn', { title: S.dev ? null : `${mode === 'read' ? 'read-only' : mode === 'verify' ? 'read-only check that the change is live' : 'dry'} run: nothing changes` });
   const key = taskId + ':apply', armed = S.confirm === key;
   return btn(armed ? 'Confirm apply' : S.dev ? 'Run apply' : 'Run', () => { if (armed) { disarm(); startRun(taskId, 'apply'); } else arm(key); },
     'runbtn apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : 'changes production; asks for a second click' });
@@ -864,7 +864,7 @@ function ensureJudgeText(job) {
 }
 function judgedLine(t) {
   const jd = t && t.judged; if (!jd || !jd.note) return null;
-  return el('span', { class: 'verdict', title: `${jd.by || 'the judge'}, ${relTime(jd.when)}` }, `Kept open: ${jd.note}`);
+  return el('span', { class: 'verdict', title: `${jd.by || 'the judge'}, ${relTime(jd.when)}` }, `${jd.decision === 'verify' ? 'Needs the check' : 'Kept open'}: ${jd.note}`);
 }
 function judgeLine(taskId) {
   const j = lastJudgeFor(taskId); if (!j) return judgedLine(task(taskId));
@@ -923,7 +923,7 @@ function renderInbox() {
   const runningRows = [...activeJobs.filter(j => match(j.task_id)).map(renderJob),
     ...running.filter(r => !activeJobs.some(j => j.run_id === r.run_id) && match(r.task_id)).map(r => renderRunRow(r, true))];
   const decideAllList = decisionList(d);
-  const judged = jobs().filter(j => j.mode === 'judge').map(j => j.task_id);
+  const judged = [...jobs().filter(j => j.mode === 'judge').map(j => j.task_id), ...Object.values(d.tasks || {}).filter(t => t.judged && !t.settled).map(t => t.id)];
   const decideRows = [...new Set([...decideAllList.map(t => t.id), ...judged])].map(task).filter(t => t && match(t.id)).sort((a, b) => b.id.localeCompare(a.id));
   const today = dayKey(new Date().toISOString());
   const doneToday = Object.values(d.tasks || {}).filter(t => t.kind !== 'general' && settledDay(t, d.runs) === today && match(t.id)).sort((a, b) => b.id.localeCompare(a.id));
@@ -986,11 +986,12 @@ function renderInboxItem(it) {
     runButton(id, it.next));
 }
 function renderDecideRow(t) {
-  const s = t.suggestions || [], last = lastRunOf(t, S.data.runs), judge = lastJudgeFor(t.id);
+  const s = t.suggestions || [], last = lastRunOf(t, S.data.runs), judge = lastJudgeFor(t.id), it = inboxItem(t.id);
+  const queued = it && it.next === 'verify';
   const why = t.settled ? null : s.length ? truncate(s.map(x => x.text).join('; '), 140) : last && last.status !== 'ok' ? `last run ${last.status}${last.last_error ? ': ' + truncate(last.last_error, 100) : ''}` : '';
   return el('div', { class: `sr ${isDeciding(t.id) ? 'busy' : ''}`, 'data-key': 'd:' + t.id },
     tick(t), taskLink(t.id), areaTag(t), el('span', { class: 'purpose', title: t.purpose || '' }, t.purpose || ''),
-    t.settled ? null : decideButton(t.id),
+    queued ? el('a', { class: 'next', href: '#inbox', title: 'run the check from the inbox', onclick: e => { e.preventDefault(); scrollToKey('i:' + t.id); } }, 'check queued in your inbox') : t.settled ? null : decideButton(t.id),
     t.settled && t.outcome ? el('span', { class: 'verdict good' }, `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`) : null,
     !t.settled && why ? el('span', { class: 'verdict' }, why) : null,
     judge || t.judged ? judgeLine(t.id) : null);
@@ -1265,6 +1266,7 @@ function fileButtons(t) {
   const b = [];
   if (t.has_design) b.push(btn(t.has_result ? 'design.md (has result)' : 'design.md', () => openFile(t, 'design.md'), 'sm'));
   if (t.entry) b.push(btn(t.entry, () => openFile(t, t.entry), 'sm'));
+  if (t.verify) b.push(btn(t.verify, () => openFile(t, t.verify), 'sm', { title: 'the read-only check that the change is live' }));
   b.push(btn('meta.json', () => openFile(t, 'meta.json'), 'sm'));
   if (t.kind !== 'plan') b.push(btn('tests', () => openFile(t, 'test_main.py'), 'sm'));
   return b;
@@ -1323,7 +1325,7 @@ function renderTaskPane(t) {
       const actions = [];
       if (it) actions.push(el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}` }, nextLabel(it.next)), runButton(t.id, it.next));
       else if (!t.settled && t.status !== 'draft') actions.push(runButton(t.id, nextMode(t)));
-      if (!t.settled && t.status !== 'draft') { const db = decideButton(t.id); if (db) actions.push(db); }
+      if (!t.settled && t.status !== 'draft' && !(it && it.next === 'verify')) { const db = decideButton(t.id); if (db) actions.push(db); }
       const open = S.details.has(t.id);
       actions.push(btn(open ? 'Hide details' : 'Show details', () => { if (open) S.details.delete(t.id); else S.details.add(t.id); render(); }, 'sm'));
       parts.push(el('div', { class: 'actions' }, actions));
@@ -1375,7 +1377,7 @@ function renderTaskDetails(t, closable) {
   if (!S.dev) { const chips = renderChips(t); if (chips) parts.push(chips); parts.push(el('div', { class: 'muted small' }, statsText(t.stats, t.changes_prod))); }
   if (closable) {
     parts.push(el('h4', {}, 'Run it'));
-    const modes = t.changes_prod ? ['dry', 'apply'] : ['read'];
+    const modes = t.changes_prod ? ['dry', 'apply'] : ['read']; if (t.verify) modes.push('verify');
     parts.push(el('div', { class: 'cmds' }, modes.map(m => { const c = runCommand(t.id, m); return el('span', { class: 'cmd' }, el('span', {}, c), btn('copy', () => copyText(c), 'sm', { title: 'copy to clipboard' }), S.dev ? runButton(t.id, m) : null); })));
     const js = jobs().filter(j => j.task_id === t.id);
     if (js.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'jobs'), js.map(j => btn(`${j.mode} ${jobLabel(j)}`, () => openJob(j.job_id), 'sm'))));

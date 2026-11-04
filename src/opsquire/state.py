@@ -250,8 +250,9 @@ def is_settled(view: dict[str, Any]) -> bool:
 
 def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None:
     """The run the operator owes a task: its first read or dry run when it is ready and never ran, the apply after
-    a dry run that ended ok, or a fresh dry run after anything else (a failed or aborted apply, a failed dry). None
-    when nothing waits: read-only tasks that ran, and tasks that are closed."""
+    a dry run that ended ok, the verify check after an apply that did not close the task (or when the judge asked
+    for it), else a fresh dry run. None when nothing waits: read-only tasks that ran, closed tasks, and a task
+    whose verify check failed (that one needs a decision)."""
     m = task.meta
     if m is None or task.kind == "general" or status in CLOSED or status == "draft":
         return None
@@ -259,9 +260,16 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
         return "dry" if m.changes_prod else "read"
     if not m.changes_prod:
         return None
+    judged = task.raw.get("judged") or {}
+    if m.verify and judged.get("decision") == "verify":
+        return "verify"
     last = runs[-1]
     if last.get("mode") == "dry" and last.get("status") == "ok":
         return "apply"
+    if last.get("mode") == "verify":
+        return None
+    if last.get("mode") == "apply" and last.get("status") != "aborted" and m.verify:
+        return "verify"
     return "dry"
 
 
@@ -332,6 +340,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
             "author": m.author if m else raw.get("author"),
             "changes_prod": m.changes_prod if m else bool(raw.get("changes_prod")),
             "entry": m.entry if m else raw.get("entry"),
+            "verify": m.verify if m else raw.get("verify"),
             "targets": m.targets if m else list(raw.get("targets") or []),
             "uses": m.uses if m else [],
             "links": m.links if m else [],
@@ -415,7 +424,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
                 {
                     "task_id": t.id,
                     "next": nxt,
-                    "command": f"opsquire run {t.id}" + (" --apply" if nxt == "apply" else ""),
+                    "command": f"opsquire run {t.id}" + {"apply": " --apply", "verify": " --verify"}.get(nxt, ""),
                     "created": v["created"],
                     "author": v["author"],
                     "purpose": v["purpose"],

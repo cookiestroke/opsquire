@@ -19,7 +19,8 @@ from typing import Any
 from .model import OpsquireError, iso, now, resolve_task
 from .query import runs_for
 
-MODES = ("read", "dry", "apply")
+MODES = ("read", "dry", "apply", "verify")
+FLAGS = {"apply": ["--apply"], "verify": ["--verify"]}
 PROMPT_RE = re.compile(r"(\[y/N\] ?|Type BREAK to take the lock anyway: ?)$")
 PROMPT_QUIET_S = 0.3
 MAX_JOBS = 50
@@ -83,7 +84,7 @@ class Jobs:
         if mode == "judge":
             argv = [sys.executable, "-m", "opsquire", "judge", task.id]
         else:
-            argv = [sys.executable, "-m", "opsquire", "run", task.id] + (["--apply"] if mode == "apply" else [])
+            argv = [sys.executable, "-m", "opsquire", "run", task.id, *FLAGS.get(mode, [])]
         master, slave = pty.openpty()
         env = {**os.environ, "OPSQUIRE_AUTHOR": os.environ.get("OPSQUIRE_AUTHOR", "opsquire ui"), "TERM": "dumb"}
         try:

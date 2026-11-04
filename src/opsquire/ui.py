@@ -27,7 +27,7 @@ DEFAULT_PORT = 7771
 WATCH_INTERVAL_S = 1.0
 PING_INTERVAL_S = 15.0
 MAX_LOG_BYTES = 512 * 1024
-VIEWABLE = {"design.md", "main.py", "main.sh", "meta.json", "test_main.py"}
+VIEWABLE = {"design.md", "main.py", "main.sh", "verify.py", "verify.sh", "meta.json", "test_main.py"}
 
 
 def page() -> bytes:

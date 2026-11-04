@@ -91,6 +91,10 @@ def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -
         return
     entry = f"main.{a.lang}"
     shutil.copy(TEMPLATES_DIR / entry, folder / entry)
+    verify = None
+    if a.changes_prod and not a.general and not a.no_verify:
+        verify = f"verify.{a.lang}"
+        shutil.copy(TEMPLATES_DIR / verify, folder / verify)
     meta = Meta(
         id=name,
         kind="general" if a.general else "task",
@@ -109,6 +113,7 @@ def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -
         links=a.link or [],
         interpreter=a.interpreter,
         thread=a.thread,
+        verify=verify,
     )
     write_json(folder / "meta.json", meta.to_json())
 
@@ -161,10 +166,12 @@ def cmd_run(a: argparse.Namespace) -> int:
     if task.kind == "plan":
         if a.script_args:
             raise OpsquireError("plans take no arguments after --; put them on the steps in meta.json")
+        if a.verify:
+            raise OpsquireError("plans have no verify check; verify their steps")
         code = run_plan(task, a.apply, a.break_lock)
     else:
-        code = run_task(task, a.apply, a.script_args, a.break_lock)
-    if a.apply and code == 0:
+        code = run_task(task, a.apply, a.script_args, a.break_lock, a.verify)
+    if (a.apply or a.verify) and code == 0:
         steps = [str(s["task"]) for s in (task.meta.steps if task.meta else None) or []]
         closed = [t for t in [task.id, *steps] if auto_close(t, since)]
         if closed:
@@ -480,6 +487,9 @@ def cmd_judge(a: argparse.Namespace) -> int:
     if out["decision"] == "keep":
         print(f"{out['id']}: kept open: {out['note']}")
         return 1
+    if out["decision"] == "verify":
+        print(f"{out['id']}: needs the verify check: {out['note']}")
+        return 1
     print(f"{out['id']}: closed {out['decision']}: {out['note']}")
     for note in out.get("notes") or []:
         print(note, file=sys.stderr)
@@ -549,6 +559,9 @@ def parser() -> argparse.ArgumentParser:
     n.add_argument("--plan", action="store_true", help="a plan: runs --step tasks in order with one command")
     n.add_argument("--step", action="append", metavar="TASK", help="plan step, in order (repeat)")
     n.add_argument("--changes-prod", action="store_true")
+    n.add_argument(
+        "--no-verify", action="store_true", help="changing task without a verify check (say why in design.md)"
+    )
     n.add_argument("--target", action="append")
     n.add_argument("--lock", choices=["exclusive", "shared", "none"])
     n.add_argument("--lock-reason")
@@ -573,6 +586,7 @@ def parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="run a task (dry or read by default); script args go after --")
     r.add_argument("task")
     r.add_argument("--apply", action="store_true", help="really change things (prod-changing tasks only)")
+    r.add_argument("--verify", action="store_true", help="run the task's verify check: is its intended state live?")
     r.add_argument("--break-lock", action="store_true", help="offer to override a held lock (asks you to type BREAK)")
     r.add_argument("-v", "--verbose", action="store_true", help="also show the runner's bookkeeping and [data] events")
     r.set_defaults(fn=cmd_run)

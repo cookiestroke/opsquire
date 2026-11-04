@@ -91,7 +91,7 @@ class Run:
         self.declined = False
         self.interrupted = False
         self.lock_info: dict[str, Any] = {
-            "mode": meta.lock,
+            "mode": "shared" if mode == "verify" else meta.lock,
             "targets": meta.targets,
             "stale_reclaimed": [],
             "broken": [],
@@ -221,7 +221,7 @@ class Run:
             "pid_ns": pid_namespace(),
             "cwd": os.getcwd(),
             "argv": self.args,
-            "entry": self.meta.entry,
+            "entry": self.meta.verify if self.mode == "verify" and self.meta.verify else self.meta.entry,
             "interpreter": self.meta.command(self.task.folder / self.meta.entry)[0],
             "exit_code": exit_code,
             "task_hash": self.task.content_hash(),
@@ -352,6 +352,7 @@ class Run:
             return self.blocked("files changed while linting")
 
         holders: list[str] = self.meta.targets if self.meta.lock != "none" else []
+        lock_kind = "shared" if self.mode == "verify" else self.meta.lock
         if self.plan_run:
             self.lock_info["held_by_plan_run"] = self.plan_run
             self.event("lock", f"targets locked by plan run {self.plan_run}")
@@ -363,7 +364,7 @@ class Run:
                 self.task.id,
                 os.getpid(),
                 socket.gethostname(),
-                self.meta.lock,
+                lock_kind,
                 iso(self.started),
                 pid_namespace(),
             )
@@ -388,12 +389,12 @@ class Run:
                 for h in broken:
                     self.event("lock_broken", f"overrode {h.run_id} ({h.task_id})", level="warn")
                     self.lock_info["broken"].append(h.__dict__)
-            self.event("lock", f"{self.meta.lock} lock on {', '.join(holders)}")
+            self.event("lock", f"{lock_kind} lock on {', '.join(holders)}")
 
         return self._spawn(env_creds)
 
     def _spawn(self, env_creds: dict[str, str]) -> int:
-        entry = self.task.folder / self.meta.entry
+        entry = self.task.folder / (self.meta.verify if self.mode == "verify" and self.meta.verify else self.meta.entry)
         cmd = [*self.meta.command(entry), str(entry), *self.args]
         env = {
             **os.environ,
@@ -484,7 +485,7 @@ class Run:
         return "ok"
 
 
-def run_task(task: Task, apply: bool, args: list[str], break_lock: bool) -> int:
+def run_task(task: Task, apply: bool, args: list[str], break_lock: bool, verify: bool = False) -> int:
     if task.meta is None:
         raise OpsquireError(f"{task.id} has invalid meta.json:\n  " + "\n  ".join(task.errors))
     if task.kind == "general":
@@ -500,7 +501,9 @@ def run_task(task: Task, apply: bool, args: list[str], break_lock: bool) -> int:
     meta = task.meta
     if apply and not meta.changes_prod:
         raise OpsquireError(f"{task.id} is read-only (changes_prod is false); run it without --apply")
-    mode = "apply" if apply else meta.modes[0]
+    if verify and not meta.verify:
+        raise OpsquireError(f"{task.id} has no verify check (meta.json `verify`); add verify.py or verify.sh")
+    mode = "verify" if verify else "apply" if apply else meta.modes[0]
     return Run(task, meta, mode, args, break_lock).execute()
 
 

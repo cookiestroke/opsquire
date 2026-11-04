@@ -71,15 +71,19 @@ def auto_close(task_id: str, since: str) -> str | None:
         return None
     runs = [r for r in runs_for(task.id) if str(r.get("started", "")) >= since]
     last = runs[-1] if runs else None
-    if not last or last.get("mode") != "apply" or last.get("status") != "ok":
+    if not last or last.get("mode") not in ("apply", "verify") or last.get("status") != "ok":
         return None
     targets = last.get("targets") or {}
+    if last.get("mode") == "verify":
+        states = {str(v.get("status") if isinstance(v, dict) else v) for v in targets.values()}
+        if not targets or states - {"ok", "unchanged"}:
+            return None
     by_status: dict[str, list[str]] = {}
     for name, info in targets.items():
         by_status.setdefault(str(info.get("status") if isinstance(info, dict) else info), []).append(name)
     parts = [f"{status} on {', '.join(sorted(names))}" for status, names in sorted(by_status.items())]
     results = [str(x) for x in last.get("results") or []]
-    note = f"apply run {last.get('run_id')} finished ok" + (f": {'; '.join(parts)}" if parts else "")
+    note = f"{last.get('mode')} run {last.get('run_id')} finished ok" + (f": {'; '.join(parts)}" if parts else "")
     if results:
         note += ". Results: " + " | ".join(results)[:1500]
     record: dict[str, Any] = {

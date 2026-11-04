@@ -4,8 +4,10 @@ written with `close`, marked as the judge's, so the operator ticks nothing off b
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 from typing import Any
 
 from .ask import Budget, Conversation, agent_env, pick_agent
@@ -15,6 +17,8 @@ from .query import runs_for
 
 CLOSE_RE = re.compile(r"^CLOSE:\s*(done|partial|abandoned)\s*\|\s*(.+?)\s*$", re.M)
 KEEP_RE = re.compile(r"^KEEP:\s*(.+?)\s*$", re.M)
+VERIFY_RE = re.compile(r"^VERIFY:\s*(.+?)\s*$", re.M)
+PR_RE = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
 JUDGE_BUDGET_USD = 2.0
 LOG_TAIL_LINES = 80
 
@@ -24,9 +28,15 @@ the last output say what happened; the design says what was decided. Rules:
 - done: the purpose was achieved on every target (an ok apply, or later evidence that the hosts ended up right).
 - partial: some of it was achieved and the rest will not be done by this task.
 - abandoned: nothing of it will happen through this task (superseded, not needed any more, given up).
-- keep: the record does not say; name what would settle it.
+- verify: the record does not say, but a read-only check on the targets would (the task's verify check, or one
+  to be written): say exactly what the check must establish.
+- keep: neither the record nor a check can settle it; name what is missing.
+Pull requests linked from the task are listed with their state on GitHub (merged, open, closed): merged means the
+code or config landed in the repository, not that hosts run it; the runs and the verify check say that.
 End your answer with exactly one line, nothing after it:
 CLOSE: done|partial|abandoned | <one or two sentences: what actually ended up live, with the run id as evidence>
+or
+VERIFY: <what a read-only check on the targets must establish to decide>
 or
 KEEP: <what is missing to decide>"""
 
@@ -41,6 +51,13 @@ def brief(task_id: str) -> str:
     lines.append(f"Targets: {', '.join(m.targets)}; created {m.created} by {m.author}; today is {iso(now())}")
     if m.superseded_by:
         lines.append(f"Marked superseded by {m.superseded_by}")
+    lines.append(
+        f"Verify check: {m.verify} (run it with `opsquire run {task.id} --verify`)"
+        if m.verify
+        else "Verify check: none"
+    )
+    for link in m.links:
+        lines.append(f"Link: {link}" + (f" -> {pr_state(link)}" if PR_RE.match(link) else ""))
     if m.outcome:
         lines.append(
             f"Already closed {m.outcome.get('state')} by {m.outcome.get('closed_by')}: {m.outcome.get('note')}"
@@ -70,6 +87,29 @@ def brief(task_id: str) -> str:
     return "\n".join(lines)
 
 
+def pr_state(url: str) -> str:
+    """What GitHub says about a linked pull request, through the operator's `gh` login; one line, or why not."""
+    try:
+        r = subprocess.run(
+            ["gh", "pr", "view", url, "--json", "state,mergedAt,mergeCommit,headRefName,baseRefName,title"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"state unknown ({type(e).__name__})"
+    if r.returncode:
+        return "state unknown (" + (r.stderr.strip().splitlines() or ["gh failed"])[-1][:120] + ")"
+    try:
+        pr = json.loads(r.stdout)
+    except ValueError:
+        return "state unknown (bad gh output)"
+    merged = pr.get("mergedAt")
+    commit = (pr.get("mergeCommit") or {}).get("oid", "")[:10]
+    state = f"merged {merged} as {commit}" if merged else str(pr.get("state", "?")).lower()
+    return f"{state}; {pr.get('headRefName')} -> {pr.get('baseRefName')}; {pr.get('title')}"
+
+
 def judge(task_id: str, agent_name: str | None = None) -> dict[str, Any]:
     """Ask the agent; close the task when it decides, or report why it kept it open."""
     name, agent = pick_agent(agent_name)
@@ -82,6 +122,18 @@ def judge(task_id: str, agent_name: str | None = None) -> dict[str, Any]:
         raise OpsquireError(f"the judge agent failed (exit {res.exit_code}): {res.text[-300:]}")
     close = CLOSE_RE.search(res.text)
     keep = KEEP_RE.search(res.text)
+    verify = VERIFY_RE.search(res.text)
+    if verify and not close:
+        has_check = bool(task.meta and task.meta.verify)
+        note = (
+            verify.group(1)
+            if has_check
+            else f"no verify check yet; an agent must add one that establishes: {verify.group(1)}"
+        )
+        raw = dict(task.raw)
+        raw["judged"] = {"decision": "verify", "note": note, "by": f"opsquire judge ({name})", "when": iso(now())}
+        write_json(task.folder / "meta.json", raw)
+        return {"id": task.id, "decision": "verify", "note": note, "cost_usd": conv.cost, "text": res.text}
     if close:
         os.environ["OPSQUIRE_AUTHOR"] = f"opsquire judge ({name})"
         closed = close_task(task.id, close.group(1), close.group(2))

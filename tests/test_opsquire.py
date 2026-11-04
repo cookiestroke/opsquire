@@ -1367,6 +1367,68 @@ class OpsTest(unittest.TestCase):
             proc.send_signal(signal.SIGINT)
             self.assertEqual(proc.wait(timeout=15), 0)
 
+    def test_verify_check_is_scaffolded_runs_read_only_and_closes_when_all_ok(self) -> None:
+        folder = self.new("deploy-v", "print('deploy')\n", "--changes-prod", "--rollback", "none")
+        tid = folder.name
+        self.assertTrue((folder / "verify.py").is_file())
+        self.assertEqual(json.loads((folder / "meta.json").read_text())["verify"], "verify.py")
+        self.assertEqual(self.cli("lint", tid).returncode, 0)
+        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 0)
+        meta = json.loads((folder / "meta.json").read_text())
+        del meta["outcome"]
+        (folder / "meta.json").write_text(json.dumps(meta))
+        r = self.cli("run", tid, "--verify")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rec = self.last(tid)
+        self.assertEqual(
+            (rec["mode"], rec["status"], rec["entry"], rec["targets"]["web1"]["status"]),
+            ("verify", "ok", "verify.py", "skipped"),
+        )
+        self.assertEqual(rec["lock"]["mode"], "shared")
+        self.assertNotIn("outcome", json.loads((folder / "meta.json").read_text()))
+        self.assertNotIn("closed done", r.stdout)
+        (folder / "verify.py").write_text(
+            "import opsquire_helpers as sq\n\nfor name in sq.TARGETS:\n    sq.target(name, 'ok', 'v2 is live')\n"
+        )
+        r = self.cli("run", tid, "--verify")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("closed done", r.stdout)
+        outcome = json.loads((folder / "meta.json").read_text())["outcome"]
+        self.assertIn("verify run", outcome["note"])
+        self.assertEqual(self.cli("run", tid, "--verify", "--apply").returncode, 0)
+        plain = self.new("plain", "print(1)\n", "--changes-prod", "--rollback", "none", "--no-verify")
+        self.assertFalse((plain / "verify.py").exists())
+        self.assertEqual(self.cli("run", plain.name, "--verify").returncode, 2)
+        read = self.new("ro", "print(1)\n")
+        self.assertFalse((read / "verify.py").exists())
+
+    def test_inbox_asks_for_the_verify_check_after_an_apply_and_when_the_judge_says_so(self) -> None:
+        self.agents_file()
+        body = "import opsquire_helpers as sq\n\nsq.target('web1', 'failed', 'refused')\n"
+        folder = self.new("needs-check", body, "--changes-prod", "--rollback", "none")
+        tid = folder.name
+        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 1)
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual(
+            [(i["next"], i["command"]) for i in state["inbox"]], [("verify", f"opsquire run {tid} --verify")]
+        )
+        self.assertEqual(self.cli("run", tid, "--verify").returncode, 0)
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual(state["inbox"], [])
+        self.env["FAKE_JUDGE"] = "VERIFY: that web1 serves v2 on port 80"
+        r = self.cli("judge", tid)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("needs the verify check: that web1 serves v2", r.stdout)
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual(state["tasks"][tid]["judged"]["decision"], "verify")
+        self.assertEqual([i["next"] for i in state["inbox"]], ["verify"])
+        self.assertEqual(state["tasks"][tid]["verify"], "verify.py")
+        other = self.new("no-check", body, "--changes-prod", "--rollback", "none", "--no-verify").name
+        r = self.cli("judge", other)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no verify check yet; an agent must add one", r.stdout)
+        self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"][0]["task_id"], tid)
+
     def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
         self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
         self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))
