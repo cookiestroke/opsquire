@@ -21,6 +21,16 @@ from typing import Any
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
 CLI = [sys.executable, "-m", "opsquire"]
 BASH_HEADER = (
     '#!/usr/bin/env bash\nset -euo pipefail\n# shellcheck source=opsquire.sh\nsource "$OPSQUIRE_HELPERS/opsquire.sh"\n'
@@ -1034,6 +1044,132 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertEqual(self.last("with-creds")["status"], "blocked")
         self.assertIn("cannot read", self.last("with-creds")["last_error"])
+
+    def test_state_infers_threads_from_sessions_links_and_mentions(self) -> None:
+        self.env["OPSQUIRE_AUTHOR"] = "claude-code 26f643b0"
+        a = self.new("alpha", "print('a')\n", "--link", "https://github.com/x/y/pull/1").name
+        b = self.new("beta", "print('b')\n").name
+        self.env["OPSQUIRE_AUTHOR"] = "claude-code (chat)"
+        c = self.new("gamma", "print('c')\n", "--link", "https://github.com/x/y/pull/1/").name
+        d = self.new("delta", "print('d')\n", "--purpose", f"follows {c} to verify").name
+        e = self.new("eps", "print('e')\n").name
+        f = self.new("zeta", "print('f')\n", "--thread", "named-story").name
+        g = self.new("eta", "print('g')\n", "--thread", "named-story", "--link", "https://slack/1").name
+        h = self.new("theta", "print('h')\n", "--thread", "other-story", "--link", "https://slack/1").name
+        r = self.cli("threads", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        state = json.loads(r.stdout)
+        of = {tid: t["thread"] for tid, t in state["tasks"].items()}
+        self.assertEqual(len({of[a], of[b], of[c], of[d]}), 1, of)
+        self.assertEqual(of[a], a)
+        self.assertNotEqual(of[e], of[a])
+        self.assertEqual((of[f], of[g], of[h]), ("named-story", "named-story", "other-story"))
+        self.assertTrue(state["tasks"][f]["thread_explicit"])
+        titles = {th["id"]: th["title"] for th in state["threads"]}
+        self.assertEqual(titles["named-story"], "named story")
+        self.assertEqual(titles[a], "alpha (web1)")
+        self.assertEqual({th["state"] for th in state["threads"]}, {"open"})
+        self.assertEqual(self.cli("new", "web1", "bad", "--purpose", "p", "--thread", "Bad Name").returncode, 2)
+
+    def test_state_suggestions_and_thread_state(self) -> None:
+        tid = self.new(
+            "deploy",
+            "import opsquire_helpers as sq\n\nsq.target('web1', 'ok')\n",
+            "--changes-prod",
+            "--rollback",
+            "none",
+        ).name
+        for _ in range(3):
+            self.assertEqual(self.cli("run", tid).returncode, 0)
+        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 0)
+        state = json.loads(self.cli("threads", "--json").stdout)
+        kinds = [s["kind"] for s in state["tasks"][tid]["suggestions"]]
+        self.assertEqual(kinds, ["awaiting-close", "rerun-heavy"], state["tasks"][tid]["suggestions"])
+        self.assertEqual(state["threads"][0]["state"], "open")
+        self.assertEqual(self.cli("close", tid, "--outcome", "done", "--note", "landed by hand").returncode, 0)
+        state = json.loads(self.cli("threads", "--json").stdout)
+        kinds = [s["kind"] for s in state["tasks"][tid]["suggestions"]]
+        self.assertEqual(kinds, ["no-result", "rerun-heavy"])
+        self.assertEqual(state["threads"][0]["state"], "done")
+        old = self.new("old", "print('x')\n").name
+        meta = json.loads((self.home / f"tasks/{old[:4]}-{old[4:6]}/{old}/meta.json").read_text())
+        meta["created"] = "2026-01-01T00:00:00.000Z"
+        (self.home / f"tasks/{old[:4]}-{old[4:6]}/{old}/meta.json").write_text(json.dumps(meta))
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual([s["kind"] for s in state["tasks"][old]["suggestions"]], ["stale"])
+        self.assertEqual(state["runs"][state["tasks"][tid]["runs"][0]]["targets"], {"web1": "ok"})
+
+    def test_ui_serves_state_stream_log_file_and_close(self) -> None:
+        import http.client
+
+        tid = self.new("served", "import opsquire_helpers as sq\n\nsq.result('served fine')\n").name
+        self.assertEqual(self.cli("run", tid).returncode, 0)
+        (self.home / f"tasks/{tid[:4]}-{tid[4:6]}/{tid}/design.md").write_text("# d\n")
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn(f"http://127.0.0.1:{port}/", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def get(path: str) -> tuple[int, Any]:
+                conn.request("GET", path)
+                resp = conn.getresponse()
+                body = resp.read()
+                return resp.status, (
+                    json.loads(body) if resp.getheader("Content-Type", "").startswith("application/json") else body
+                )
+
+            status, page = get("/")
+            self.assertEqual(status, 200)
+            self.assertIn(b"<title>Opsquire</title>", page)
+            status, state = get("/api/state")
+            self.assertEqual(status, 200)
+            self.assertEqual(state["tasks"][tid]["status"], "done")
+            run_id = state["tasks"][tid]["runs"][0]
+            status, log = get(f"/api/log?run={run_id}")
+            self.assertEqual((status, log["status"], log["start"]), (200, "ok", 0))
+            self.assertIn("served fine", log["text"])
+            self.assertEqual(get(f"/api/log?run={run_id}&offset={log['offset']}")[1]["text"], "")
+            head = get(f"/api/log?run={run_id}&offset=0&until=10")[1]
+            self.assertEqual((len(head["text"]), head["offset"]), (10, 10))
+            self.assertEqual(state["tasks"][tid]["entry"], "main.py")
+            self.assertEqual(get("/api/log?run=nope")[0], 400)
+            self.assertEqual(get(f"/api/file?task={tid}&name=design.md")[1]["text"], "# d\n")
+            self.assertEqual(get(f"/api/file?task={tid}&name=../LOCAL.md")[0], 400)
+            self.assertEqual(get(f"/api/file?task={tid}&name=nothing.md")[0], 400)
+            body = json.dumps({"task": tid, "outcome": "partial", "note": "half done", "run": run_id})
+            conn.request("POST", "/api/close", body, {"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            closed = json.loads(resp.read())
+            self.assertEqual(
+                (resp.status, closed["outcome"]["state"], closed["outcome"]["run"]), (200, "partial", run_id)
+            )
+            self.assertTrue(any("Result" in n for n in closed["notes"]), closed)
+            conn.request(
+                "POST",
+                "/api/close",
+                json.dumps({"task": tid, "outcome": "nope", "note": "x"}),
+                {"Content-Type": "application/json"},
+            )
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 400)
+            resp.read()
+            self.assertEqual(json.loads(self.cli("show", tid, "--json").stdout)["status"], "partial")
+            stream = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            stream.request("GET", "/api/stream")
+            sresp = stream.getresponse()
+            self.assertIn(b"event: hello", sresp.readline() + sresp.readline())
+            self.new("later", "print('later')\n")
+            deadline = time.time() + 5
+            seen = b""
+            while b"event: change" not in seen and time.time() < deadline:
+                seen += sresp.readline()
+            self.assertIn(b"event: change", seen)
+            stream.close()
+            conn.close()
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=10), 0)
 
     def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
         self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}

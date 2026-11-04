@@ -189,6 +189,7 @@ class Meta:
     interpreter: str | None = None
     steps: list[dict[str, Any]] | None = None
     outcome: dict[str, Any] | None = None
+    thread: str | None = None
 
     def command(self, entry: Path) -> list[str]:
         if self.interpreter and entry.suffix == ".py":
@@ -241,7 +242,10 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
         interpreter=raw.get("interpreter"),
         steps=raw.get("steps"),
         outcome=raw.get("outcome"),
+        thread=raw.get("thread"),
     )
+    if meta.thread is not None and not (isinstance(meta.thread, str) and THREAD_RE.match(meta.thread)):
+        errors.append("thread must be a lowercase kebab-case name of at most 40 characters")
     if meta.outcome is not None:
         errors += validate_outcome(meta.outcome)
     if meta.archived is not None and not (
@@ -302,6 +306,7 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
 
 
 OUTCOME_STATES = ("done", "partial", "abandoned")
+THREAD_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 
 def validate_outcome(outcome: Any) -> list[str]:
@@ -429,8 +434,8 @@ def load_task(folder: Path) -> Task:
 
 def all_task_folders() -> list[Path]:
     home = home_dir()
-    tasks = sorted(p for p in (home / "tasks").glob("*/*") if p.is_dir())
-    general = sorted(p for p in (home / "general").glob("*") if p.is_dir())
+    tasks = sorted(p for p in (home / "tasks").glob("*/*") if p.is_dir() and not p.name.startswith("."))
+    general = sorted(p for p in (home / "general").glob("*") if p.is_dir() and not p.name.startswith("."))
     return tasks + general
 
 

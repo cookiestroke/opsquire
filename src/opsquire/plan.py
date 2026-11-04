@@ -41,6 +41,7 @@ def plan_meta(
     steps: list[dict[str, Any]],
     rollback: str | None = None,
     links: list[str] | None = None,
+    thread: str | None = None,
 ) -> Meta:
     """Meta for a plan over existing tasks; targets and changes_prod follow from the steps."""
     metas = []
@@ -67,6 +68,7 @@ def plan_meta(
         rollback=rollback or ("each step's own rollback, see steps" if changes else "read-only"),
         links=links or [],
         steps=steps,
+        thread=thread,
     )
 
 

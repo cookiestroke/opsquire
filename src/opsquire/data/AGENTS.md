@@ -55,7 +55,9 @@ opsquire runs [<task>] [--status failed] [--area x] [--since 2026-10-30]
 opsquire last                        most recent run
 opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, latest run for a task
 opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it
+opsquire threads [--json]            tasks grouped into threads (the stories they belong to), with suggestions
 opsquire locks
+opsquire ui [--port N] [--open]      the same picture in the browser (localhost), live; closing is its one write
 ```
 
 `<task>` may be the full id or any unique part of it. To answer "did it work", read `run.json`:
@@ -82,6 +84,23 @@ opsquire locks
    `opsquire close <task> --outcome done|partial|abandoned --note "what actually happened" [--run <run-id>]`.
    It only annotates meta.json (`outcome`: state, note, closed_by, closed, run) and touches no host. Put what ended
    up live in a `## Result` section of the task's design.md; `close` reminds you when it is missing.
+   A changing task is not finished by its ok apply run: it waits for `close`, and its thread stays open until then.
+
+### Threads: the story a task belongs to
+
+Work rarely ends with one task (a deploy, its check, its rollback, the follow-up). A thread groups them. Give a task
+its thread with `opsquire new ... --thread <kebab-name>` (join an existing one with the same name; the name should
+read as a story, `gateway-drain-rollout`). Without it, opsquire infers threads from the session that created the
+tasks (the session id in `OPSQUIRE_AUTHOR`), the asks that produced them, plans and their steps, supersession,
+shared PR or Slack links, and task ids mentioned in purposes and close notes; `opsquire threads` shows them, marked
+inferred. A thread is done when every task in it is settled (closed, retired, or a read-only task that ran ok). When
+a thread ends, write its one-paragraph result to `threads/<thread>.md` in the home: what changed, where it stands,
+what remains. That paragraph, not the run records, is what the handover reads.
+
+`opsquire threads` and the UI also show what a task's record suggests: an apply that ran ok and awaits `close`; a
+closed changing task whose design.md has no `## Result`; a task never run for a week, or failed and untouched for
+three days; a newer task in the same area using the same scripts (superseded?); a task run many times per success.
+They are suggestions with their evidence; acting on them (close, fix, supersede) is the agent's or operator's call.
 
 ### Plans: several tasks, one command
 
@@ -116,6 +135,7 @@ like any task: `opsquire run <plan>` (every step in its dry/read mode), then `op
 | `rollback` | how to undo, or `read-only` |
 | `links` | chat threads, PRs, incident links |
 | `superseded_by`, `abandoned_reason` | set by hand to retire a task |
+| `thread` | optional: the thread (story) this task belongs to, kebab-case; inferred when absent |
 | `steps` | plans only: `[{"task": id, "args": [...], "verify": bool, "on_failure": id}]`; a plan has `entry: ""` and no credentials, uses or interpreter |
 | `archived` | `{"note": ..., "history": [{when, by, command, source, outcome}]}` for scripts that ran before opsquire; kept byte-for-byte, never linted or runnable |
 

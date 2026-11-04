@@ -14,6 +14,7 @@ from typing import Any
 
 from . import locks, piece, repos, runner
 from .ask import DEFAULT_BUDGET_USD, Budget, ask
+from .close import close_task
 from .docs import write_docs
 from .homegit import commit_quietly
 from .integrate import integrate
@@ -24,6 +25,7 @@ from .model import (
     OUTCOME_STATES,
     TASK_ID_RE,
     TEMPLATES_DIR,
+    THREAD_RE,
     Meta,
     OpsquireError,
     config_path,
@@ -37,6 +39,8 @@ from .model import (
 from .plan import plan_meta, run_plan
 from .query import all_runs, find_run, find_tasks, list_tasks, runs_for, summarize, wait_for_run
 from .runner import EXIT_CODES, load_run, run_task, tty_prompt
+from .state import state
+from .ui import DEFAULT_PORT, serve, url
 
 
 def emit(data: Any, as_json: bool, table: list[list[str]] | None = None) -> None:
@@ -79,6 +83,8 @@ def cmd_new(a: argparse.Namespace) -> int:
 
 
 def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -> None:
+    if a.thread and not THREAD_RE.match(a.thread):
+        raise OpsquireError("--thread must be a lowercase kebab-case name of at most 40 characters")
     if a.plan:
         build_plan(a, name, t, folder)
         return
@@ -101,6 +107,7 @@ def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -
         rollback=a.rollback or "read-only",
         links=a.link or [],
         interpreter=a.interpreter,
+        thread=a.thread,
     )
     write_json(folder / "meta.json", meta.to_json())
 
@@ -110,7 +117,7 @@ def build_plan(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -
         raise OpsquireError("a plan needs at least one --step <task-id>, in order")
     steps = [{"task": resolve_task(s).id} for s in a.step]
     author = a.author or os.environ.get("OPSQUIRE_AUTHOR", "unknown")
-    meta = plan_meta(name, t, a.area, a.purpose, author, steps, a.rollback, a.link or [])
+    meta = plan_meta(name, t, a.area, a.purpose, author, steps, a.rollback, a.link or [], a.thread)
     write_json(folder / "meta.json", meta.to_json())
 
 
@@ -135,44 +142,10 @@ def cmd_lint(a: argparse.Namespace) -> int:
 def cmd_close(a: argparse.Namespace) -> int:
     """Record how a task really ended: done, partial or abandoned, with a note (what was finished by hand, which
     run landed). Only annotates meta.json; touches no host. The catalog and `ls` show the state from then on."""
-    task = resolve_task(a.task)
-    if task.meta is None:
-        raise OpsquireError("cannot close a task with invalid meta.json: " + "; ".join(task.errors))
-    if task.kind == "general":
-        raise OpsquireError("general scripts are not closed; close the tasks that use them")
-    if task.meta.archived:
-        raise OpsquireError("archived tasks are historical records and stay as they are")
-    note = a.note.strip()
-    if not note:
-        raise OpsquireError("--note is empty: say what actually happened")
-    run_id = None
-    if a.run:
-        found = find_run(a.run)
-        if found is None or found.parent.name != task.id:
-            raise OpsquireError(f"run {a.run!r} is not a run of {task.id}")
-        run_id = found.name
-    outcome: dict[str, Any] = {
-        "state": a.outcome,
-        "note": note,
-        "closed_by": os.environ.get("OPSQUIRE_AUTHOR", "unknown"),
-        "closed": iso(now()),
-    }
-    if run_id:
-        outcome["run"] = run_id
-    raw = dict(task.raw)
-    raw["outcome"] = outcome
-    if a.outcome == "abandoned":
-        raw["abandoned_reason"] = note
-    write_json(task.folder / "meta.json", raw)
-    print(f"{task.id}: closed {a.outcome}")
-    design = task.folder / "design.md"
-    if not design.is_file():
-        print("note: no design.md; the decisions behind this task are not recorded", file=sys.stderr)
-    elif not any(line.startswith("## Result") for line in design.read_text().splitlines()):
-        print("note: design.md has no '## Result' section; add one saying what ended up live", file=sys.stderr)
-    note_commit = commit_quietly(home_dir(), [task.folder], f"closed {a.outcome}: {task.id}")
-    if note_commit:
-        print(note_commit, file=sys.stderr)
+    closed = close_task(a.task, a.outcome, a.note, a.run)
+    print(f"{closed['id']}: closed {a.outcome}")
+    for note in closed["notes"]:
+        print(note, file=sys.stderr)
     return 0
 
 
@@ -466,6 +439,40 @@ def cmd_piece(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_threads(a: argparse.Namespace) -> int:
+    """The home as threads (the stories tasks belong to), with each task's status and suggestions."""
+    s = state()
+    if a.json:
+        emit(s, True)
+        return 0
+    for th in s["threads"]:
+        flag = "" if th["explicit"] else " (inferred)"
+        print(f"{th['state']:<5} {th['title']}{flag}  [{th['updated'] or '-'}]")
+        for tid in th["tasks"]:
+            t = s["tasks"][tid]
+            print(f"      {t['status']:<10} {tid}")
+            for sg in t["suggestions"]:
+                print(f"                 ! {sg['kind']}: {sg['text']}")
+    return 0
+
+
+def cmd_ui(a: argparse.Namespace) -> int:
+    """Serve the home's picture (threads, tasks, runs, scripts, locks; closing is its one write) on localhost."""
+
+    def ready() -> None:
+        print(f"opsquire ui: {url(a.port)}  (home {home_dir()}; Ctrl-C stops)", flush=True)
+        if a.open:
+            import webbrowser
+
+            webbrowser.open(url(a.port))
+
+    try:
+        serve(a.port, on_ready=ready)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_docs(a: argparse.Namespace) -> int:
     out = write_docs()
     print(f"wrote {out / 'CATALOG.md'} and one page per general script in {out}")
@@ -519,6 +526,7 @@ def parser() -> argparse.ArgumentParser:
     n.add_argument("--uses", action="append", metavar="GENERAL_ID")
     n.add_argument("--rollback")
     n.add_argument("--link", action="append")
+    n.add_argument("--thread", help="the thread (story) this task belongs to; else inferred from session and links")
     n.add_argument("--author")
     n.add_argument("--interpreter", help="python for this task (e.g. a project venv); default: opsquire's own")
     n.set_defaults(fn=cmd_new)
@@ -634,6 +642,15 @@ def parser() -> argparse.ArgumentParser:
     pc.add_argument("--delete", action="store_true", help="drop: discard the piece and its branch, do not park it")
     pc.add_argument("--json", action="store_true")
     pc.set_defaults(fn=cmd_piece)
+
+    th = sub.add_parser("threads", help="tasks grouped into the threads (stories) they belong to, with suggestions")
+    th.add_argument("--json", action="store_true")
+    th.set_defaults(fn=cmd_threads)
+
+    ui = sub.add_parser("ui", help="serve the home's picture on localhost: threads, tasks, runs, scripts, locks")
+    ui.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ui.add_argument("--open", action="store_true", help="open it in the browser")
+    ui.set_defaults(fn=cmd_ui)
 
     dc = sub.add_parser("docs", help="regenerate docs/: the catalog and an API page per general script")
     dc.set_defaults(fn=cmd_docs)

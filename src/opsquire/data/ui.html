@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Opsquire</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9; --panel: #ffffff; --panel2: #f0f2f5; --line: #d9dde3; --line2: #e9ecf0;
+  --fg: #1c2127; --muted: #5f6b7a; --faint: #8b95a3;
+  --accent: #2563a8; --accent-bg: #e3edf9; --accent-fg: #1a4b86;
+  --good: #1f7a3f; --good-bg: #e1f3e7; --bad: #b42323; --bad-bg: #fbe4e4;
+  --warn: #8a5a00; --warn-bg: #fdf0d2; --grey: #5a6472; --grey-bg: #e8ebef;
+  --code-bg: #eef1f4; --shadow: 0 8px 24px rgba(20, 30, 40, .18);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #15181c; --panel: #1d2126; --panel2: #23282e; --line: #343a42; --line2: #2b3138;
+    --fg: #e3e7eb; --muted: #a3acb8; --faint: #76808c;
+    --accent: #6ea6e8; --accent-bg: #1f2f45; --accent-fg: #a9cbf2;
+    --good: #6ccc8a; --good-bg: #1a3324; --bad: #f08a8a; --bad-bg: #44201f;
+    --warn: #f0c060; --warn-bg: #3d2f12; --grey: #aab3bf; --grey-bg: #2b3139;
+    --code-bg: #12151a; --shadow: 0 8px 28px rgba(0, 0, 0, .55);
+  }
+}
+* { box-sizing: border-box; }
+html { font-size: 13.5px; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px); }
+.mono, code, pre, kbd, .id, .cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .93em; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: var(--fg); background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 3px 9px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+input, select, textarea { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
+input:focus, select:focus, textarea:focus, button:focus-visible, .head:focus-visible, .run:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.brand { font-weight: 650; font-size: 1.1rem; letter-spacing: .01em; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: transparent; padding: 4px 12px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+#search { flex: 1 1 180px; min-width: 120px; max-width: 420px; }
+#conn { color: var(--muted); font-size: .9em; white-space: nowrap; }
+#conn::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--grey); margin-right: 5px; }
+#conn.live::before { background: var(--good); }
+#conn.down::before { background: var(--bad); }
+.wrap { padding: 12px 16px 48px; max-width: 1280px; margin: 0 auto; }
+#strip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; font-size: .95em; }
+#strip .lbl { color: var(--muted); margin-right: 4px; }
+#strip .home { color: var(--muted); margin-left: auto; word-break: break-all; }
+.strip-item { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.row { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; scroll-margin-top: 70px; }
+.row .row { border-color: var(--line2); margin: 6px 0; }
+.row .row .row { background: var(--panel2); }
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 10px; cursor: pointer; border-radius: 8px; }
+.head:hover { background: var(--panel2); }
+.row .row .head:hover { background: var(--bg); }
+.chev { display: inline-block; width: 0; height: 0; border: 5px solid transparent; border-left: 6px solid var(--faint); margin-right: 2px; transition: transform .12s; flex: none; }
+.row.open > .head .chev { transform: rotate(90deg); }
+.body { padding: 2px 10px 10px 24px; border-top: 1px solid var(--line2); }
+.title { font-weight: 600; }
+.grow { flex: 1 1 auto; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.small { font-size: .9em; }
+.line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 3px 0; }
+.full { flex-basis: 100%; }
+.pill { display: inline-block; padding: 0 7px; border-radius: 10px; font-size: .85em; font-weight: 600; line-height: 1.6; border: 1px solid transparent; white-space: nowrap; }
+.pill.good { background: var(--good-bg); color: var(--good); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.grey { background: var(--grey-bg); color: var(--grey); }
+.pill.live { background: var(--accent-bg); color: var(--accent-fg); }
+.pill.neutral { background: transparent; color: var(--muted); border-color: var(--line); }
+.tag { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: .85em; background: var(--grey-bg); color: var(--grey); white-space: nowrap; }
+.tag.accent { background: var(--accent-bg); color: var(--accent-fg); }
+.tag.warn { background: var(--warn-bg); color: var(--warn); }
+.tag.mono { font-size: .82em; }
+.count { color: var(--muted); font-size: .9em; }
+.sugg { color: var(--warn); }
+.sugg .tag { margin-right: 4px; }
+.err { color: var(--bad); }
+.note { background: var(--panel2); border-left: 3px solid var(--line); padding: 4px 8px; margin: 4px 0; border-radius: 0 4px 4px 0; white-space: pre-wrap; }
+.note.good { border-color: var(--good); }
+.note.warn { border-color: var(--warn); }
+.note.bad { border-color: var(--bad); }
+.cmds { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; align-items: flex-start; }
+.cmd { display: inline-flex; align-items: center; gap: 8px; background: var(--code-bg); border: 1px solid var(--line2); border-radius: 5px; padding: 3px 4px 3px 8px; max-width: 100%; }
+.cmd span { overflow-wrap: anywhere; }
+.cmd button { padding: 1px 7px; font-size: .9em; }
+.runs { margin: 4px 0; }
+.run { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; padding: 5px 8px; border-top: 1px solid var(--line2); cursor: pointer; border-radius: 4px; }
+.run:hover { background: var(--bg); }
+.run:first-child { border-top: 0; }
+.run .id { color: var(--faint); font-size: .85em; }
+.run ul { margin: 0; padding-left: 18px; flex-basis: 100%; }
+h4 { margin: 10px 0 4px; font-size: .85em; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.form { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 6px 0; display: grid; gap: 6px; max-width: 640px; }
+.form textarea { width: 100%; min-height: 70px; resize: vertical; }
+.form label { margin-right: 10px; }
+.empty { color: var(--muted); padding: 14px 4px; }
+table.tbl { border-collapse: collapse; width: 100%; font-size: .95em; }
+.tbl th, .tbl td { text-align: left; padding: 4px 8px 4px 0; vertical-align: top; border-top: 1px solid var(--line2); }
+.tbl th { color: var(--muted); font-weight: 600; border-top: 0; font-size: .9em; }
+.tbl tr.click { cursor: pointer; }
+.tbl tr.click:hover td { background: var(--bg); }
+.scroll { overflow-x: auto; }
+#drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100%); background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow); z-index: 10; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); }
+#drawer .dh { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+#drawer .dh .title { overflow-wrap: anywhere; }
+#drawer .db { flex: 1; overflow: auto; padding: 10px 14px; }
+#drawer pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; line-height: 1.4; }
+#drawer .db.log { background: var(--code-bg); }
+.md h3, .md h4, .md h5, .md h6 { margin: 10px 0 4px; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 1em; }
+.md h3 { font-size: 1.15em; }
+.md h4 { font-size: 1.05em; }
+.md p { margin: 4px 0; }
+.md ul, .md ol { margin: 4px 0; padding-left: 22px; }
+.md pre { background: var(--code-bg); padding: 6px 8px; border-radius: 5px; overflow-x: auto; }
+.md code { background: var(--code-bg); padding: 0 3px; border-radius: 3px; }
+.md pre code { padding: 0; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
+.result { background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
+#toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 14px; border-radius: 6px; z-index: 20; font-size: .95em; opacity: 0; transition: opacity .15s; pointer-events: none; }
+#toast.show { opacity: 1; }
+@media (max-width: 700px) {
+  .body { padding-left: 12px; }
+  #strip .home { margin-left: 0; flex-basis: 100%; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand">Opsquire</span>
+  <div class="seg" role="tablist" id="seg"></div>
+  <input id="search" type="search" placeholder="Search id, purpose, area, target  ( / )" aria-label="Search">
+  <span id="conn" title="Connection to the local server">connecting</span>
+</header>
+<div class="wrap">
+  <div id="strip"></div>
+  <main id="main"><div class="empty">Loading the home.</div></main>
+</div>
+<aside id="drawer" hidden aria-label="Details"></aside>
+<div id="toast" role="status"></div>
+<script>
+'use strict';
+/* ---- pure helpers (no DOM) ---- */
+const VIEWS = [['threads', 'Threads'], ['targets', 'Targets'], ['scripts', 'Scripts']];
+const TONE = {
+  ok: 'good', done: 'good', failed: 'bad', blocked: 'bad', partial: 'warn', running: 'live', open: 'live',
+  ready: 'neutral', draft: 'grey', abandoned: 'grey', superseded: 'grey', archived: 'grey', skipped: 'grey',
+  unchanged: 'grey', interrupted: 'grey', aborted: 'grey', merged: 'good', waiting: 'warn', alive: 'good', dead: 'grey',
+};
+function tone(status) { return TONE[status] || 'neutral'; }
+function parseTime(iso) { const t = iso ? Date.parse(iso) : NaN; return Number.isNaN(t) ? null : t; }
+function pad(n) { return String(n).padStart(2, '0'); }
+function utc(iso) {
+  const t = parseTime(iso); if (t === null) return iso ? String(iso) : '';
+  const d = new Date(t);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`;
+}
+function relTime(iso, nowMs) {
+  const t = parseTime(iso); if (t === null) return iso ? String(iso) : '-';
+  let s = Math.round(((nowMs === undefined ? Date.now() : nowMs) - t) / 1000);
+  const future = s < 0; s = Math.abs(s);
+  if (s < 45) return 'just now';
+  const txt = s < 90 ? '1 min' : s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.round(s / 3600)} h`
+    : s < 86400 * 14 ? `${Math.round(s / 86400)} d` : s < 86400 * 60 ? `${Math.round(s / 86400 / 7)} w` : `${Math.round(s / 86400 / 30)} mo`;
+  return future ? `in ${txt}` : `${txt} ago`;
+}
+function duration(sec) {
+  if (sec === null || sec === undefined || Number.isNaN(Number(sec))) return '';
+  const s = Math.max(0, Number(sec));
+  if (s < 1) return '<1s';
+  if (s < 60) return `${Math.round(s)}s`;
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  if (m < 60) return `${m}m ${pad(r)}s`;
+  return `${Math.floor(m / 60)}h ${pad(m % 60)}m`;
+}
+function linkLabel(url) {
+  const u = String(url || '');
+  let m = /github\.com\/[^/]+\/([^/]+)\/(?:pull|issues)\/(\d+)/.exec(u);
+  if (m) return `${m[1]}#${m[2]}`;
+  m = /github\.com\/[^/]+\/([^/]+)/.exec(u);
+  if (m) return m[1];
+  if (/slack\.com\//.test(u)) return 'slack';
+  m = /^[a-z]+:\/\/([^/]+)/.exec(u);
+  return m ? m[1] : u;
+}
+function safeHref(url) { return /^https?:\/\//.test(String(url || '')) ? String(url) : null; }
+function money(x) { return typeof x === 'number' ? `$${x.toFixed(2)}` : ''; }
+function truncate(text, n) { const s = String(text || ''); return s.length > n ? s.slice(0, n - 1).trimEnd() + '...' : s; }
+function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}`; }
+function statsText(stats, changesProd) {
+  if (!stats || !stats.runs) return 'never run';
+  let t = `${plural(stats.runs, 'run')}, ${stats.ok} ok ${changesProd ? 'apply' : 'read'}`;
+  if (changesProd && stats.ok) t += `, ${stats.per_ok} runs per ok apply`;
+  return t;
+}
+function scriptStats(st) {
+  if (!st || !st.runs) return 'never run';
+  return `${plural(st.runs, 'run')}, ${st.ok} ok, ${st.ok ? st.per_ok + ' runs per ok apply' : 'no ok apply yet'}`;
+}
+function hay(parts) { return parts.flat().filter(x => x !== null && x !== undefined).join(' ').toLowerCase(); }
+function taskMatches(task, q, extra) {
+  if (!q) return true;
+  return hay([task.id, task.purpose, task.area, task.targets || [], task.uses || [], task.status, task.author, extra || '']).includes(q);
+}
+function threadMatches(thread, q) { return !q || hay([thread.id, thread.title, thread.areas || [], thread.targets || []]).includes(q); }
+function sortByUpdated(threads) { return [...threads].sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || ''))); }
+function targetIndex(data) {
+  const map = new Map();
+  const get = name => { if (!map.has(name)) map.set(name, { name, entries: [], declared: [] }); return map.get(name); };
+  for (const t of Object.values(data.tasks || {})) for (const name of t.targets || []) get(name).declared.push(t.id);
+  for (const r of Object.values(data.runs || {})) {
+    for (const [name, st] of Object.entries(r.targets || {})) get(name).entries.push({ time: String(r.ended || r.started || ''), run: r, tstatus: st });
+  }
+  for (const g of map.values()) {
+    g.entries.sort((a, b) => b.time.localeCompare(a.time));
+    g.last = g.entries[0] || null;
+    g.lastApply = g.entries.find(e => e.run.mode === 'apply') || null;
+  }
+  return [...map.values()].sort((a, b) => ((b.last && b.last.time) || '').localeCompare((a.last && a.last.time) || '') || a.name.localeCompare(b.name));
+}
+function asksForThread(asks, thread) {
+  const ids = new Set(thread.tasks || []);
+  return (asks || []).filter(a => (a.task_ids || []).some(id => ids.has(id)));
+}
+function parseHash(h) {
+  const i = h.indexOf('/');
+  const kind = i < 0 ? h : h.slice(0, i);
+  let id = i < 0 ? '' : h.slice(i + 1);
+  try { id = decodeURIComponent(id); } catch (e) { /* keep raw */ }
+  return { kind, id };
+}
+/* minimal markdown: headings, paragraphs, lists, fenced code, rules, inline code, links, bold. Only text nodes, never HTML. */
+function inlineMd(text) {
+  const out = []; const re = /(`[^`]+`)|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1]) out.push(el('code', {}, m[1].slice(1, -1)));
+    else if (m[2]) out.push(el('a', { href: m[3], target: '_blank', rel: 'noopener' }, m[2]));
+    else out.push(el('strong', {}, m[4]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+function markdown(text) {
+  const root = el('div', { class: 'md' });
+  const lines = String(text || '').replace(/\r/g, '').split('\n');
+  let para = [], list = null, i = 0;
+  const flushPara = () => { if (para.length) { root.append(el('p', {}, inlineMd(para.join(' ')))); para = []; } };
+  const flush = () => { flushPara(); list = null; };
+  while (i < lines.length) {
+    const line = lines[i]; let m;
+    if (line.startsWith('```')) {
+      flush(); const buf = []; i++;
+      while (i < lines.length && !lines[i].startsWith('```')) buf.push(lines[i++]);
+      i++; root.append(el('pre', {}, el('code', {}, buf.join('\n')))); continue;
+    }
+    if ((m = /^(#{1,6})\s+(.*?)\s*#*$/.exec(line))) { flush(); root.append(el(`h${Math.min(m[1].length + 2, 6)}`, {}, inlineMd(m[2]))); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); root.append(el('hr')); i++; continue; }
+    if ((m = /^\s*(?:[-*+]|(\d+)[.)])\s+(.*)$/.exec(line))) {
+      flushPara();
+      const tag = m[1] ? 'ol' : 'ul';
+      if (!list || list.tagName.toLowerCase() !== tag) { list = el(tag); root.append(list); }
+      list.append(el('li', {}, inlineMd(m[2]))); i++; continue;
+    }
+    if (!line.trim()) { flush(); i++; continue; }
+    if (list && /^\s{2,}\S/.test(line)) { list.lastChild.append(' ', ...inlineMd(line.trim())); i++; continue; }
+    list = null; para.push(line.replace(/^>\s?/, '').trim()); i++;
+  }
+  flush();
+  return root;
+}
+/* ---- DOM helpers ---- */
+function el(tag, attrs, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === 'class') n.className = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? '' : v);
+  }
+  append(n, children);
+  return n;
+}
+function append(n, c) {
+  if (c === null || c === undefined || c === false) return;
+  if (Array.isArray(c)) { for (const x of c) append(n, x); return; }
+  n.append(c instanceof Node ? c : String(c));
+}
+const $ = sel => document.querySelector(sel);
+function pill(status) { return el('span', { class: `pill ${tone(status)}` }, status || '?'); }
+function when(iso) { return el('span', { class: 'muted', title: utc(iso) }, relTime(iso)); }
+function tag(text, cls) { return el('span', { class: `tag ${cls || ''}` }, text); }
+function modeTag(mode) { return tag(mode || '?', 'mono' + (mode === 'apply' ? ' accent' : '')); }
+function linkTag(url) {
+  const href = safeHref(url);
+  return href ? el('a', { class: 'tag accent', href, target: '_blank', rel: 'noopener', title: url }, linkLabel(url)) : tag(linkLabel(url));
+}
+let toastTimer = null;
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1400);
+}
+function copyText(text) {
+  const done = () => toast('copied'), fail = () => toast('copy failed');
+  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, () => (fallbackCopy(text) ? done() : fail())); return; }
+  if (fallbackCopy(text)) done(); else fail();
+}
+function fallbackCopy(text) {
+  const ta = el('textarea', { style: 'position:fixed;opacity:0', 'aria-hidden': 'true' }, text);
+  document.body.append(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  ta.remove(); return ok;
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let body = null;
+  try { body = await r.json(); } catch (e) { body = null; }
+  if (!r.ok) throw new Error((body && body.error) || `${r.status} ${r.statusText}`);
+  return body;
+}
+/* ---- state ---- */
+const S = { data: null, view: 'threads', q: '', open: new Set(), hash: null, scrollTo: null, drawer: null, closeForm: null, error: null };
+const task = id => (S.data && S.data.tasks && S.data.tasks[id]) || null;
+const run = id => (S.data && S.data.runs && S.data.runs[id]) || null;
+function setHash(h) { S.hash = h; if (location.hash.slice(1) !== h) history.replaceState(null, '', '#' + h); }
+function applyHash() {
+  const h = location.hash.slice(1); if (h === S.hash) return;
+  S.hash = h;
+  const { kind, id } = parseHash(h);
+  const focus = (view, key) => { S.view = view; S.open.add(key); S.scrollTo = key; };
+  if (VIEWS.some(v => v[0] === kind)) S.view = kind;
+  else if (kind === 'thread') focus('threads', 't:' + id);
+  else if (kind === 'target') focus('targets', 'g:' + id);
+  else if (kind === 'script') focus('scripts', 's:' + id);
+  else if (kind === 'task') { const t = task(id); if (t && t.thread) S.open.add('t:' + t.thread); focus('threads', 'k:' + id); }
+  render();
+  if (kind === 'run') openLog(id);
+}
+function toggle(key, hash) {
+  if (S.open.has(key)) S.open.delete(key); else { S.open.add(key); if (hash) setHash(hash); }
+  render();
+}
+function switchView(view) { S.view = view; setHash(view); render(); window.scrollTo(0, 0); }
+function focusKey(view, key, hash) { S.view = view; S.open.add(key); S.scrollTo = key; setHash(hash); render(); }
+function goToTask(id) {
+  const t = task(id); if (!t) { toast(`no task ${id}`); return; }
+  if (t.thread) S.open.add('t:' + t.thread);
+  focusKey('threads', 'k:' + id, 'task/' + encodeURIComponent(id));
+}
+/* ---- rendering ---- */
+function render() {
+  if (!S.data) return;
+  const y = window.scrollY;
+  renderSeg(); renderStrip();
+  const main = $('#main');
+  const active = document.activeElement;
+  const keep = active && main.contains(active) && active.id ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
+  main.replaceChildren(S.view === 'targets' ? renderTargets() : S.view === 'scripts' ? renderScripts() : renderThreads());
+  if (keep) {
+    const n = document.getElementById(keep.id);
+    if (n) { n.focus({ preventScroll: true }); if (typeof keep.start === 'number') n.setSelectionRange(keep.start, keep.end); }
+  }
+  if (S.scrollTo) {
+    const node = main.querySelector(`[data-key="${CSS.escape(S.scrollTo)}"]`);
+    S.scrollTo = null;
+    if (node) { node.scrollIntoView({ block: 'start' }); return; }
+  }
+  window.scrollTo(0, y);
+}
+function renderSeg() {
+  $('#seg').replaceChildren(...VIEWS.map(([id, label]) => el('button', { role: 'tab', 'aria-pressed': String(S.view === id), onclick: () => switchView(id) }, label)));
+}
+function renderStrip() {
+  const d = S.data, items = [];
+  const running = (d.running || []).map(run).filter(Boolean);
+  items.push(el('span', { class: 'strip-item' }, el('span', { class: 'lbl' }, 'running'),
+    running.length ? running.map(r => el('span', { class: 'strip-item' },
+      pill('running'), taskLink(r.task_id || '?'), modeTag(r.mode), when(r.started),
+      el('button', { onclick: () => openLog(r.run_id) }, 'tail'))) : el('span', { class: 'muted' }, 'nothing')));
+  const locks = d.locks || [];
+  items.push(el('span', { class: 'strip-item' }, el('span', { class: 'lbl' }, 'locks'),
+    locks.length ? locks.map(l => el('span', { class: 'strip-item', title: `run ${l.run_id || '?'}` },
+      tag(l.target || '?'), taskLink(l.task_id || '?'), modeTag(l.mode), el('span', { class: 'muted' }, 'since'), when(l.since),
+      pill(l.alive ? 'alive' : 'dead'))) : el('span', { class: 'muted' }, 'none held')));
+  items.push(el('span', { class: 'home mono', title: 'home' }, d.home || ''));
+  if (S.error) items.push(el('span', { class: 'err full' }, S.error));
+  $('#strip').replaceChildren(...items);
+}
+function collapsible(key, headParts, bodyFn, hash, cls) {
+  const open = S.open.has(key);
+  const node = el('div', { class: `row ${cls || ''} ${open ? 'open' : ''}`, 'data-key': key });
+  const head = el('div', {
+    class: 'head', role: 'button', tabindex: '0', 'aria-expanded': String(open),
+    onclick: e => { if (e.target.closest('a, button, input, select, textarea, label, .run')) return; toggle(key, hash); },
+    onkeydown: e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === head) { e.preventDefault(); toggle(key, hash); } },
+  }, el('span', { class: 'chev' }), headParts);
+  node.append(head);
+  if (open) node.append(el('div', { class: 'body' }, bodyFn()));
+  return node;
+}
+function empty(text) { return el('div', { class: 'empty' }, text); }
+function noMatch() { return empty(`Nothing matches "${S.q}".`); }
+function targetLink(name) { return el('a', { class: 'tag', href: '#target/' + encodeURIComponent(name), onclick: e => { e.preventDefault(); focusKey('targets', 'g:' + name, 'target/' + encodeURIComponent(name)); } }, name); }
+function scriptLink(id) { return el('a', { class: 'tag mono', href: '#script/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); focusKey('scripts', 's:' + id, 'script/' + encodeURIComponent(id)); } }, id); }
+function taskLink(id) { return el('a', { class: 'id', href: '#task/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); goToTask(id); } }, id); }
+function prodMarker(t) { return t.changes_prod ? tag('changes production', 'warn') : tag('read-only'); }
+/* threads */
+function renderThreads() {
+  const threads = sortByUpdated(S.data.threads || []);
+  if (!threads.length) return empty('No threads yet: they appear once an agent creates a task.');
+  const q = S.q, shown = [];
+  for (const th of threads) {
+    const whole = threadMatches(th, q);
+    const ids = whole ? th.tasks || [] : (th.tasks || []).filter(id => task(id) && taskMatches(task(id), q, th.title));
+    if (whole || ids.length) shown.push(renderThread(th, ids));
+  }
+  return shown.length ? el('div', {}, shown) : noMatch();
+}
+function renderThread(th, taskIds) {
+  const n = (th.tasks || []).length;
+  const head = [
+    el('span', { class: 'title' }, th.title || th.id),
+    pill(th.state || 'open'),
+    th.explicit ? null : tag('inferred'),
+    (th.areas || []).map(a => tag(a)),
+    el('span', { class: 'count' }, plural(n, 'task')),
+    th.suggestions ? tag(plural(th.suggestions, 'suggestion'), 'warn') : null,
+    el('span', { class: 'grow' }),
+    el('span', { class: 'id faint small', title: 'thread id' }, th.id),
+    when(th.updated),
+  ];
+  return collapsible('t:' + th.id, head, () => renderThreadBody(th, taskIds), 'thread/' + encodeURIComponent(th.id));
+}
+function renderThreadBody(th, taskIds) {
+  const parts = [];
+  if (th.result) parts.push(el('div', { class: 'result' }, markdown(th.result)));
+  parts.push(el('div', { class: 'line small' },
+    (th.targets || []).length ? el('span', { class: 'line' }, el('span', { class: 'muted' }, 'targets'), th.targets.map(targetLink)) : null,
+    (th.links || []).length ? el('span', { class: 'line' }, el('span', { class: 'muted' }, 'links'), th.links.map(linkTag)) : null,
+    el('span', { class: 'muted' }, 'started ', when(th.started))));
+  const asks = asksForThread(S.data.asks, th);
+  if (asks.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'asks'), asks.map(renderAsk)));
+  const tasks = taskIds.map(task).filter(Boolean);
+  parts.push(el('div', {}, tasks.length ? tasks.map(renderTask) : empty('No task in this thread matches.')));
+  return parts;
+}
+function renderAsk(a) {
+  const rounds = (a.rounds || []).length;
+  return el('span', { class: 'line', title: a.prompt || '' },
+    pill(a.status || '?'), el('span', {}, truncate(a.prompt, 110)),
+    typeof a.cost_usd === 'number' ? el('span', { class: 'muted' }, money(a.cost_usd)) : null,
+    rounds ? el('span', { class: 'muted' }, plural(rounds, 'round')) : null,
+    a.waiting_on ? el('span', { class: 'sugg' }, `waiting on ${a.waiting_on}`) : null,
+    (a.pieces || []).map(p => tag(`${p.name || '?'} ${p.status || ''}`)), when(a.started));
+}
+function renderTask(t) {
+  const head = [
+    el('span', { class: 'id title' }, t.id),
+    pill(t.status || 'draft'),
+    t.kind && t.kind !== 'task' ? tag(t.kind, 'accent') : null,
+    prodMarker(t),
+    t.area ? tag(t.area) : null,
+    el('span', { class: 'grow' }),
+    el('span', { class: 'muted small' }, statsText(t.stats, t.changes_prod)),
+    when(t.created),
+    el('span', { class: 'full' }, t.purpose || el('span', { class: 'faint' }, 'no purpose')),
+    renderChips(t),
+    (t.meta_errors || []).length ? el('span', { class: 'full err small' }, 'meta.json: ', t.meta_errors.join('; ')) : null,
+    (t.suggestions || []).map(s => el('span', { class: 'full sugg small' }, tag(s.kind || 'note', 'warn'), s.text || '')),
+    t.outcome ? el('span', { class: `full note small ${tone(t.outcome.state)}` }, `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`,
+      el('span', { class: 'faint' }, ` (${t.outcome.closed_by || '?'}, `, when(t.outcome.closed), t.outcome.run ? `, run ${t.outcome.run})` : ')')) : null,
+    !t.outcome && t.abandoned_reason ? el('span', { class: 'full note small' }, 'abandoned: ', t.abandoned_reason) : null,
+    t.superseded_by ? el('span', { class: 'full small muted' }, 'superseded by ', taskLink(t.superseded_by)) : null,
+  ];
+  return collapsible('k:' + t.id, head, () => renderTaskBody(t), 'task/' + encodeURIComponent(t.id));
+}
+function renderChips(t) {
+  const chips = [];
+  if ((t.targets || []).length) chips.push(el('span', { class: 'muted small' }, 'targets'), t.targets.map(targetLink));
+  if ((t.uses || []).length) chips.push(el('span', { class: 'muted small' }, 'uses'), t.uses.map(scriptLink));
+  if ((t.steps || []).length) chips.push(el('span', { class: 'muted small' }, 'steps'), t.steps.map(s => (s ? taskLink(s) : null)));
+  if ((t.links || []).length) chips.push(t.links.map(linkTag));
+  return chips.length ? el('span', { class: 'full line' }, chips) : null;
+}
+function fileButtons(t) {
+  const b = [];
+  if (t.has_design) b.push(el('button', { onclick: () => openFile(t, 'design.md') }, t.has_result ? 'design.md (has result)' : 'design.md'));
+  if (t.entry) b.push(el('button', { onclick: () => openScript(t) }, t.entry));
+  b.push(el('button', { onclick: () => openFile(t, 'meta.json') }, 'meta.json'));
+  if (t.kind !== 'plan') b.push(el('button', { onclick: () => openFile(t, 'test_main.py') }, 'tests'));
+  return b;
+}
+function renderTaskBody(t) {
+  const parts = [];
+  const closable = t.kind !== 'general' && !t.archived;
+  if (closable) {
+    parts.push(el('h4', {}, 'Run it'));
+    const cmds = [`opsquire run ${t.id}`]; if (t.changes_prod) cmds.push(`opsquire run ${t.id} --apply`);
+    parts.push(el('div', { class: 'cmds' }, cmds.map(c => el('span', { class: 'cmd' }, el('span', {}, c), el('button', { onclick: () => copyText(c), title: 'copy to clipboard' }, 'copy')))));
+  }
+  const btns = fileButtons(t);
+  if (closable) btns.push(el('button', { onclick: () => { S.closeForm = S.closeForm && S.closeForm.task === t.id ? null : { task: t.id, outcome: 'done', note: '', run: '', busy: false, error: null, result: null }; render(); } }, 'Close...'));
+  if (t.author) btns.push(el('span', { class: 'muted small' }, 'by ', t.author));
+  if (t.path) btns.push(el('span', { class: 'faint small mono', title: 'folder' }, t.path));
+  parts.push(el('div', { class: 'line' }, btns));
+  if (S.closeForm && S.closeForm.task === t.id) parts.push(renderCloseForm(t));
+  const runs = (t.runs || []).map(run).filter(Boolean).reverse();
+  parts.push(el('h4', {}, `Runs (${runs.length})`));
+  parts.push(runs.length ? el('div', { class: 'runs' }, runs.map(renderRun)) : el('div', { class: 'muted' }, 'Never run.'));
+  return parts;
+}
+function renderRun(r) {
+  const targets = Object.entries(r.targets || {});
+  return el('div', { class: 'run', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`, onclick: () => openLog(r.run_id),
+    onkeydown: e => { if (e.key === 'Enter') openLog(r.run_id); } },
+    modeTag(r.mode), pill(r.status || '?'), when(r.started), el('span', { class: 'muted' }, duration(r.duration_s)),
+    r.plan_run ? el('span', { class: 'muted small' }, 'step of plan run ', el('span', { class: 'id' }, r.plan_run)) : null,
+    r.steps ? el('span', { class: 'muted small' }, plural(r.steps.length, 'step')) : null,
+    r.user ? el('span', { class: 'faint small' }, r.user) : null,
+    el('span', { class: 'grow' }), el('span', { class: 'id' }, r.run_id),
+    targets.length ? el('span', { class: 'full line' }, targets.map(([n, st]) => el('span', { class: `pill ${tone(st)} mono` }, `${n} ${st || '?'}`))) : null,
+    r.last_error ? el('span', { class: 'full err small' }, r.last_error) : null,
+    (r.results || []).length ? el('ul', { class: 'small' }, r.results.map(x => el('li', {}, x))) : null,
+    (r.warnings || []).length ? el('ul', { class: 'small sugg' }, r.warnings.map(x => el('li', {}, x))) : null);
+}
+function renderCloseForm(t) {
+  const f = S.closeForm;
+  if (f.result) {
+    return el('div', { class: 'form' }, el('div', { class: 'note good' }, `closed ${(f.result.outcome && f.result.outcome.state) || f.outcome}: ${t.id}`),
+      (f.result.notes || []).map(n => el('div', { class: 'note warn small' }, n)),
+      el('div', {}, el('button', { onclick: () => { S.closeForm = null; render(); } }, 'dismiss')));
+  }
+  const runs = (t.runs || []).slice().reverse();
+  const outcomes = ['done', 'partial', 'abandoned'].map(o => el('label', {}, el('input', { type: 'radio', name: 'outcome', value: o, checked: f.outcome === o, onchange: () => { f.outcome = o; } }), ' ', o));
+  const sel = el('select', { onchange: e => { f.run = e.target.value; } }, el('option', { value: '' }, 'no run'),
+    runs.map(id => el('option', { value: id, selected: f.run === id }, `${id}${run(id) ? ' ' + run(id).status : ''}`)));
+  const note = el('textarea', { id: 'close-note', placeholder: 'What actually happened (required)', oninput: e => { f.note = e.target.value; } }, f.note);
+  return el('form', { class: 'form', onsubmit: e => { e.preventDefault(); submitClose(t); } },
+    el('div', {}, el('span', { class: 'muted' }, 'outcome '), outcomes),
+    note,
+    el('div', { class: 'line' }, el('span', { class: 'muted' }, 'run '), sel),
+    f.error ? el('div', { class: 'err' }, f.error) : null,
+    el('div', { class: 'line' }, el('button', { class: 'primary', type: 'submit', disabled: f.busy }, f.busy ? 'closing...' : 'Close task'),
+      el('button', { type: 'button', onclick: () => { S.closeForm = null; render(); } }, 'Cancel')));
+}
+async function submitClose(t) {
+  const f = S.closeForm; if (!f || f.busy) return;
+  if (!f.note.trim()) { f.error = 'The note is required: say what actually happened.'; render(); return; }
+  f.busy = true; f.error = null; render();
+  try {
+    const body = { task: t.id, outcome: f.outcome, note: f.note.trim() }; if (f.run) body.run = f.run;
+    f.result = await api('/api/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    toast('task closed'); refresh();
+  } catch (e) { f.error = e.message; }
+  f.busy = false; render();
+}
+/* targets */
+function renderTargets() {
+  const groups = targetIndex(S.data);
+  if (!groups.length) return empty('No targets: no task or run has touched a host yet.');
+  const q = S.q;
+  const touches = g => g.declared.some(id => task(id) && taskMatches(task(id), q)) || g.entries.some(e => task(e.run.task_id) && taskMatches(task(e.run.task_id), q));
+  const shown = groups.filter(g => !q || g.name.toLowerCase().includes(q) || touches(g));
+  if (!shown.length) return noMatch();
+  return el('div', {}, shown.map(g => collapsible('g:' + g.name, [
+    el('span', { class: 'title mono' }, g.name),
+    el('span', { class: 'count' }, `${plural(g.entries.length, 'run')}, ${plural(g.declared.length, 'task')}`),
+    g.lastApply ? el('span', { class: 'line small' }, el('span', { class: 'muted' }, 'last apply'), pill(g.lastApply.run.status), el('span', { class: `pill ${tone(g.lastApply.tstatus)}` }, `target ${g.lastApply.tstatus || '?'}`), when(g.lastApply.time))
+      : el('span', { class: 'muted small' }, 'never applied'),
+    el('span', { class: 'grow' }), g.last ? when(g.last.time) : el('span', { class: 'muted' }, 'never run'),
+  ], () => renderTargetBody(g), 'target/' + encodeURIComponent(g.name))));
+}
+function renderTargetBody(g) {
+  const parts = [];
+  const silent = g.declared.filter(id => !g.entries.some(e => e.run.task_id === id));
+  if (silent.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'declared but never run here'), silent.map(taskLink)));
+  if (!g.entries.length) { parts.push(el('div', { class: 'muted' }, 'No run has touched this target.')); return parts; }
+  const rows = g.entries.map(e => el('tr', { class: 'click', title: `open the log of ${e.run.run_id}`, onclick: () => openLog(e.run.run_id) },
+    el('td', {}, when(e.time)), el('td', {}, taskLink(e.run.task_id || '?')), el('td', {}, modeTag(e.run.mode)),
+    el('td', {}, pill(e.run.status)), el('td', {}, pill(e.tstatus)),
+    el('td', { class: 'small' }, e.run.last_error ? el('span', { class: 'err' }, e.run.last_error) : (e.run.results || [])[0] || '')));
+  parts.push(el('div', { class: 'scroll' }, el('table', { class: 'tbl' },
+    el('thead', {}, el('tr', {}, ['when', 'task', 'mode', 'run', 'target', 'note'].map(h => el('th', {}, h)))), el('tbody', {}, rows))));
+  return parts;
+}
+/* scripts */
+function renderScripts() {
+  const scripts = Object.values(S.data.scripts || {}).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  if (!scripts.length) return empty('No general scripts yet: the second time a task is needed, its logic moves to general/.');
+  const q = S.q;
+  const shown = scripts.filter(s => !q || hay([s.id, s.purpose]).includes(q) || (s.used_by || []).some(id => task(id) && taskMatches(task(id), q)));
+  if (!shown.length) return noMatch();
+  return el('div', {}, shown.map(s => {
+    const t = task(s.id);
+    const head = [
+      el('span', { class: 'id title' }, s.id), tag('general', 'accent'),
+      t && (t.meta_errors || []).length ? el('span', { class: 'err small' }, t.meta_errors.join('; ')) : null,
+      el('span', { class: 'grow' }), el('span', { class: 'muted small' }, scriptStats(s.stats)),
+      el('span', { class: 'count' }, plural((s.used_by || []).length, 'task')),
+      el('span', { class: 'full' }, s.purpose || el('span', { class: 'faint' }, 'no purpose')),
+    ];
+    return collapsible('s:' + s.id, head, () => renderScriptBody(s, t), 'script/' + encodeURIComponent(s.id));
+  }));
+}
+function renderScriptBody(s, t) {
+  const parts = [];
+  if (t) parts.push(el('div', { class: 'line' }, fileButtons(t), t.path ? el('span', { class: 'faint small mono' }, t.path) : null));
+  const users = (s.used_by || []).map(task).filter(Boolean);
+  parts.push(el('h4', {}, `Used by (${users.length})`));
+  parts.push(users.length ? users.map(u => el('div', { class: 'line' }, taskLink(u.id), pill(u.status), prodMarker(u), u.area ? tag(u.area) : null,
+    el('span', { class: 'muted small' }, statsText(u.stats, u.changes_prod)),
+    u.thread ? el('a', { class: 'small', href: '#task/' + encodeURIComponent(u.id), onclick: e => { e.preventDefault(); goToTask(u.id); } }, 'open in thread') : null,
+    el('span', { class: 'full small' }, u.purpose || ''))) : el('div', { class: 'muted' }, 'No task uses this script yet.'));
+  return parts;
+}
+/* ---- drawer ---- */
+function stopDrawer() { if (S.drawer && S.drawer.timer) clearTimeout(S.drawer.timer); if (S.hash && S.hash.startsWith('run/')) setHash(S.view); }
+function closeDrawer() {
+  stopDrawer(); S.drawer = null;
+  const d = $('#drawer'); d.hidden = true; d.replaceChildren();
+}
+function drawerShell(titleParts, bodyNode, cls) {
+  const d = $('#drawer');
+  d.replaceChildren(
+    el('div', { class: 'dh' }, el('span', { class: 'title' }, titleParts), el('span', { class: 'grow' }), el('button', { onclick: closeDrawer, title: 'close (Esc)' }, 'close')),
+    el('div', { class: `db ${cls || ''}` }, bodyNode));
+  d.hidden = false;
+  return d;
+}
+function openLog(runId) {
+  stopDrawer();
+  const r = run(runId);
+  const d = { kind: 'log', run: runId, start: null, offset: 0, pre: el('pre', {}), status: el('span', {}), timer: null, first: true, loading: false };
+  d.earlier = el('button', { class: 'small', hidden: true, onclick: () => loadEarlier(d) }, 'load earlier');
+  S.drawer = d;
+  setHash('run/' + runId);
+  drawerShell([el('span', { class: 'id' }, runId), ' ', r ? [modeTag(r.mode), ' ', taskLink(r.task_id || '')] : null, ' ', d.status],
+    el('div', {}, el('div', { class: 'line' }, d.earlier), d.pre), 'log');
+  pollLog(d);
+}
+function logBox(d) { return d.pre.parentElement.parentElement; }
+function showEarlier(d) { d.earlier.hidden = !(d.start > 0); d.earlier.disabled = d.loading; }
+async function pollLog(d) {
+  if (S.drawer !== d) return;
+  try {
+    const r = await api(`/api/log?run=${encodeURIComponent(d.run)}${d.start !== null && d.offset > 0 ? '&offset=' + d.offset : ''}`);
+    if (S.drawer !== d) return;
+    const box = logBox(d);
+    const atBottom = d.first || box.scrollTop + box.clientHeight >= box.scrollHeight - 12;
+    if (d.start === null) { d.start = r.start || 0; showEarlier(d); }
+    if (r.text) { if (d.pre.firstChild && d.pre.firstChild.nodeType !== Node.TEXT_NODE) d.pre.replaceChildren(r.text); else d.pre.append(r.text); }
+    d.offset = Math.max(d.offset, r.offset || 0);
+    if (!d.pre.textContent) d.pre.replaceChildren(el('span', { class: 'muted' }, r.status === 'running' ? '(no output yet)' : '(no output)'));
+    d.status.replaceChildren(pill(r.status || 'no record'));
+    if (atBottom) box.scrollTop = box.scrollHeight;
+    d.first = false;
+    if (r.status === 'running') d.timer = setTimeout(() => pollLog(d), 1500);
+  } catch (e) {
+    if (S.drawer !== d) return;
+    d.status.replaceChildren(el('span', { class: 'err' }, e.message));
+    d.timer = setTimeout(() => pollLog(d), 4000);
+  }
+}
+async function loadEarlier(d) {
+  if (S.drawer !== d || d.loading || !(d.start > 0)) return;
+  d.loading = true; showEarlier(d);
+  const from = Math.max(0, d.start - 512 * 1024);
+  try {
+    const r = await api(`/api/log?run=${encodeURIComponent(d.run)}&offset=${from}&until=${d.start}`);
+    if (S.drawer !== d) return;
+    const box = logBox(d), before = box.scrollHeight;
+    if (d.pre.firstChild && d.pre.firstChild.nodeType !== Node.TEXT_NODE) d.pre.replaceChildren();
+    d.pre.prepend(r.text || '');
+    box.scrollTop += box.scrollHeight - before;
+    d.start = from;
+  } catch (e) { toast(`load earlier failed: ${e.message}`); }
+  d.loading = false; showEarlier(d);
+}
+async function openFile(t, name) {
+  stopDrawer();
+  const body = el('div', { class: 'muted' }, 'loading...');
+  S.drawer = { kind: 'file', task: t.id, name };
+  drawerShell([el('span', { class: 'id' }, t.id), ' / ', name], body);
+  try {
+    const r = await api(`/api/file?task=${encodeURIComponent(t.id)}&name=${encodeURIComponent(name)}`);
+    if (!S.drawer || S.drawer.task !== t.id || S.drawer.name !== name) return;
+    if (r.text === null || r.text === undefined) body.replaceWith(el('div', { class: 'muted' }, `No ${name} in this task.`));
+    else body.replaceWith(name.endsWith('.md') ? markdown(r.text) : el('pre', {}, r.text));
+  } catch (e) { body.replaceWith(el('div', { class: 'err' }, e.message)); }
+}
+function openScript(t) { openFile(t, t.entry || 'main.py'); }
+/* ---- data flow ---- */
+let refreshTimer = null, loading = false, loadAgain = false;
+function refresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(load, 150); }
+async function load() {
+  if (loading) { loadAgain = true; return; }
+  loading = true;
+  try {
+    const data = await api('/api/state');
+    if (data && typeof data === 'object') { S.data = data; S.error = null; }
+    if (S.hash === null) applyHash(); else render();
+  } catch (e) {
+    S.error = `state: ${e.message}`;
+    if (S.data) renderStrip(); else $('#main').replaceChildren(empty(`Cannot load the home: ${e.message}`));
+  }
+  loading = false;
+  if (loadAgain) { loadAgain = false; refresh(); }
+}
+let es = null, backoff = 1000;
+function setConn(state, text) { const c = $('#conn'); c.className = state; c.textContent = text; }
+function connect() {
+  if (es) es.close();
+  es = new EventSource('/api/stream');
+  es.addEventListener('hello', () => { backoff = 1000; setConn('live', 'live'); refresh(); });
+  es.addEventListener('change', () => refresh());
+  es.onerror = () => {
+    es.close(); es = null;
+    setConn('down', `reconnecting in ${Math.round(backoff / 1000)}s`);
+    setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 30000);
+  };
+}
+function boot() {
+  const search = $('#search');
+  let qTimer = null;
+  search.addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.q = search.value.trim().toLowerCase(); render(); }, 120); });
+  document.addEventListener('keydown', e => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+    if (e.key === 'Escape') { if (S.drawer) closeDrawer(); else if (typing) e.target.blur(); }
+    else if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); search.focus(); search.select(); }
+  });
+  window.addEventListener('hashchange', () => { if (S.data) applyHash(); });
+  setInterval(() => { if (S.data && !document.hidden) render(); }, 60000);
+  connect();
+  load();
+}
+boot();
+</script>
+</body>
+</html>
