@@ -1193,7 +1193,9 @@ class OpsTest(unittest.TestCase):
         self.assertEqual((outcome["state"], outcome["closed_by"]), ("done", "opsquire run (auto)"))
         self.assertIn("ok on web1", outcome["note"])
         self.assertIn("web1 on v2", outcome["note"])
-        self.assertEqual(outcome["run"], self.last(tid)["run_id"])
+        runs = json.loads(self.cli("runs", tid, "--json").stdout)
+        self.assertEqual([r["mode"] for r in runs][-2:], ["apply", "verify"])
+        self.assertEqual(outcome["run"], runs[-2]["run_id"])
         design = (meta_path.parent / "design.md").read_text()
         self.assertIn("## Result", design)
         self.assertIn("- web1 on v2", design)
@@ -1373,9 +1375,13 @@ class OpsTest(unittest.TestCase):
         self.assertTrue((folder / "verify.py").is_file())
         self.assertEqual(json.loads((folder / "meta.json").read_text())["verify"], "verify.py")
         self.assertEqual(self.cli("lint", tid).returncode, 0)
-        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 0)
+        r = self.cli("run", tid, "--apply", answers=[("", "y")])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.last(tid)["mode"], "verify")
+        self.assertIn("closed done", r.stdout)
+        self.assertIn("apply run", json.loads((folder / "meta.json").read_text())["outcome"]["note"])
         meta = json.loads((folder / "meta.json").read_text())
-        del meta["outcome"]
+        meta["outcome"] = None
         (folder / "meta.json").write_text(json.dumps(meta))
         r = self.cli("run", tid, "--verify")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -1385,7 +1391,7 @@ class OpsTest(unittest.TestCase):
             ("verify", "ok", "verify.py", "skipped"),
         )
         self.assertEqual(rec["lock"]["mode"], "shared")
-        self.assertNotIn("outcome", json.loads((folder / "meta.json").read_text()))
+        self.assertIsNone(json.loads((folder / "meta.json").read_text())["outcome"])
         self.assertNotIn("closed done", r.stdout)
         (folder / "verify.py").write_text(
             "import opsquire_helpers as sq\n\nfor name in sq.TARGETS:\n    sq.target(name, 'ok', 'v2 is live')\n"
@@ -1401,6 +1407,33 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("run", plain.name, "--verify").returncode, 2)
         read = self.new("ro", "print(1)\n")
         self.assertFalse((read / "verify.py").exists())
+
+    def test_staged_apply_stays_open_until_its_verify_check_passes(self) -> None:
+        body = (
+            "import os\nimport sys\nfrom pathlib import Path\n\nimport opsquire_helpers as sq\n\n"
+            "stage = sys.argv[1] if len(sys.argv) > 1 else 'build'\n"
+            "if sq.APPLY and stage == 'deploy':\n    Path(os.environ['STAGED_LIVE']).write_text('v2')\n"
+            "sq.target('web1', 'ok', stage)\n"
+        )
+        self.env["STAGED_LIVE"] = str(self.tmp / "staged-live")
+        folder = self.new("staged", body, "--changes-prod", "--rollback", "none")
+        tid = folder.name
+        (folder / "verify.py").write_text(
+            "import os\nfrom pathlib import Path\n\nimport opsquire_helpers as sq\n\n"
+            "live = Path(os.environ['STAGED_LIVE']).is_file()\n"
+            "sq.target('web1', 'ok' if live else 'failed', 'v2 live' if live else 'still v1')\n"
+        )
+        self.assertEqual(self.cli("lint", tid).returncode, 0)
+        r = self.cli("run", tid, "--apply", "--", "build", answers=[("", "y")])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("running the verify check", r.stdout)
+        self.assertEqual((self.last(tid)["mode"], self.last(tid)["targets"]["web1"]["status"]), ("verify", "failed"))
+        self.assertIsNone(json.loads((folder / "meta.json").read_text()).get("outcome"))
+        r = self.cli("run", tid, "--apply", "--", "deploy", answers=[("", "y")])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("closed done", r.stdout)
+        outcome = json.loads((folder / "meta.json").read_text())["outcome"]
+        self.assertIn("verify run", outcome["note"])
 
     def test_inbox_asks_for_the_verify_check_after_an_apply_and_when_the_judge_says_so(self) -> None:
         self.agents_file()

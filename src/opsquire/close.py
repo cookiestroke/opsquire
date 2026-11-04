@@ -62,16 +62,32 @@ def has_result(task: Task) -> bool:
     return design.is_file() and any(line.startswith("## Result") for line in design.read_text().splitlines())
 
 
+def unwritten(run: dict[str, Any]) -> bool:
+    """A verify run that finished ok with every target `skipped`: the scaffolded check nobody wrote, which says
+    nothing. A blocked or failed verify run is not this, even though its targets read skipped."""
+    targets = run.get("targets") or {}
+    return run.get("status") == "ok" and bool(targets) and all(
+        (v.get("status") if isinstance(v, dict) else v) == "skipped" for v in targets.values()
+    )
+
+
 def auto_close(task_id: str, since: str) -> str | None:
     """After an apply run finished ok: close the task as done with a note built from the run record and write the
     Result section of its design.md from it, unless an agent or the operator already closed it. The common case
-    ends itself; `opsquire close` stays for the runs that lie (a failed run whose host ended up fine)."""
+    ends itself; `opsquire close` stays for the runs that lie (a failed run whose host ended up fine). A task with a
+    verify check closes only on that check: `opsquire run --apply` runs it after an ok apply, and an apply whose
+    check reports a target not ok (a build stage before the deploy) leaves the task open. A check that is still the
+    unwritten scaffold (every target skipped) says nothing, so the apply closes the task as before."""
     task = resolve_task(task_id)
     if task.meta is None or task.kind == "general" or task.meta.archived or task.meta.outcome:
         return None
     runs = [r for r in runs_for(task.id) if str(r.get("started", "")) >= since]
     last = runs[-1] if runs else None
+    if last and len(runs) > 1 and last.get("mode") == "verify" and unwritten(last):
+        last = runs[-2]
     if not last or last.get("mode") not in ("apply", "verify") or last.get("status") != "ok":
+        return None
+    if last.get("mode") == "apply" and task.meta.verify and last is runs[-1]:
         return None
     targets = last.get("targets") or {}
     if last.get("mode") == "verify":

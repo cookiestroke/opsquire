@@ -84,7 +84,10 @@ opsquire ui [--port N] [--open]      the operator's console in the browser (loca
 6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the
    operator to paste output.
 7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,
-   and a `## Result` section in design.md (amend either when the generated text is not the truth). Every other end
+   and a `## Result` section in design.md (amend either when the generated text is not the truth). A task with a
+   verify check closes only on it: right after an ok apply, `opsquire run` runs the verify check, and the task closes
+   when every target is ok; otherwise it stays open (a staged task's `-- build` apply is not its end). An unwritten
+   scaffold check (every target skipped) says nothing, and the apply closes the task as before. Every other end
    is the agent's decision, right after `opsquire wait` returns: a failed, partial, aborted or interrupted apply
    means either fix the task and hand it over again, or close it:
    `opsquire close <task> --outcome done|partial|abandoned --note "what actually happened" [--run <run-id>]`

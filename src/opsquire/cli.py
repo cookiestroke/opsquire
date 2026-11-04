@@ -171,6 +171,11 @@ def cmd_run(a: argparse.Namespace) -> int:
         code = run_plan(task, a.apply, a.break_lock)
     else:
         code = run_task(task, a.apply, a.script_args, a.break_lock, a.verify)
+    if a.apply and code == 0 and task.kind != "plan" and task.meta and task.meta.verify:
+        # A staged task (build, then deploy) ends ok after every stage; only its verify check knows the end state.
+        print(f"opsquire: apply ok; running the verify check of {task.id} before closing it")
+        if run_task(task, False, [], False, True) != 0:
+            print("opsquire: the verify check did not finish ok; the task stays open")
     if (a.apply or a.verify) and code == 0:
         steps = [str(s["task"]) for s in (task.meta.steps if task.meta else None) or []]
         closed = [t for t in [task.id, *steps] if auto_close(t, since)]
