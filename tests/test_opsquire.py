@@ -786,6 +786,38 @@ class OpsTest(unittest.TestCase):
         "    def test_zero(self) -> None:\n        self.assertEqual(double(0), 0)\n"
     )
 
+    def test_ctrl_c_during_a_lint_tool_is_an_interruption_not_a_verdict(self) -> None:
+        """Ctrl-C reaches the lint tools too (same process group); their death must not read as a lint failure, in
+        the main thread or in an ask's worker thread, and no lint stamp may record it."""
+        folder = self.new("tooled", "print(1)\n")
+        fake = self.tmp / "ruff-sigint"
+        fake.write_text("#!/bin/sh\nkill -INT $$\n")
+        fake.chmod(0o755)
+        self.env["OPSQUIRE_RUFF"] = str(fake)
+        r = self.cli("lint", "tooled")
+        self.assertEqual(r.returncode, 130, r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stdout + r.stderr)
+        self.assertIn("opsquire: interrupted", r.stderr)
+        self.assertFalse((folder / ".lint.json").exists())
+
+        sys.path.insert(0, str(ROOT / "src"))
+        import threading
+
+        from opsquire.lint import lint_task, save_lint
+        from opsquire.model import resolve_task
+
+        results: list[Any] = []
+        with mock.patch.dict(os.environ, {"OPSQUIRE_HOME": str(self.home), "OPSQUIRE_RUFF": str(fake)}):
+            task = resolve_task("tooled")
+            t = threading.Thread(target=lambda: results.append(lint_task(task)))
+            t.start()
+            t.join(timeout=30)
+            save_lint(task, results[0])
+        self.assertEqual((results[0].ok, results[0].interrupted), (False, True))
+        self.assertIn("interrupted: ruff-sigint was stopped by Ctrl-C", results[0].output)
+        self.assertNotIn("Traceback", results[0].output)
+        self.assertFalse((folder / ".lint.json").exists())
+
     def test_unit_tests_gate_lint_and_runs(self) -> None:
         folder = self.new("tested", "from logic import double\n\nprint(double(21))\n")
         (folder / "logic.py").write_text("def double(x: int) -> int:\n    return x * 2\n")

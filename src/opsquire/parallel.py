@@ -229,7 +229,9 @@ class Fanout:
             task = resolve_task(tid)
             result = lint_task(task)
             save_lint(task, result)
-            if not result.ok:
+            if result.interrupted:
+                say(f"  ! {piece.label} {tid} merged, but its lint was interrupted: run `opsquire lint {tid}`")
+            elif not result.ok:
                 say(f"  ! {piece.label} {tid} does not pass lint in the home after merging:\n{result.output}")
 
     def park(self, piece: Piece) -> None:

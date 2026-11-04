@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import sysconfig
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,12 @@ class LintResult:
     content_hash: str
     output: str
     tests: int = 0
+    interrupted: bool = False
+
+
+class Interrupted(Exception):
+    """A lint tool was stopped by the operator's Ctrl-C (the signal reaches the whole process group), so its exit
+    says nothing about the files."""
 
 
 TEST_TIMEOUT = 600
@@ -52,11 +60,25 @@ def find_tool(name: str) -> str | None:
 
 def _run(cmd: list[str], env: dict[str, str] | None = None) -> tuple[bool, str]:
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+    if proc.returncode == -signal.SIGINT:
+        raise Interrupted(Path(cmd[0]).name)
     text = (proc.stdout + proc.stderr).strip()
     return proc.returncode == 0, f"$ {' '.join(cmd)}\n{text}" if text else f"$ {' '.join(cmd)}\nok"
 
 
 def lint_task(task: Task) -> LintResult:
+    """Lint the task's files, run its tests and say whether it is ready. Ctrl-C while a tool runs is an interruption,
+    never a verdict: the main thread gets its KeyboardInterrupt as usual, a worker thread gets a result marked
+    interrupted that callers report as such and never save."""
+    try:
+        return _lint_task(task)
+    except Interrupted as e:
+        if threading.current_thread() is threading.main_thread():
+            raise KeyboardInterrupt from e
+        return LintResult(False, task.content_hash(), f"interrupted: {e} was stopped by Ctrl-C", interrupted=True)
+
+
+def _lint_task(task: Task) -> LintResult:
     content_hash = task.content_hash()
     if task.errors or task.meta is None:
         return LintResult(False, content_hash, "meta.json:\n  " + "\n  ".join(task.errors))
@@ -121,6 +143,8 @@ def run_tests(task: Task) -> tuple[int, bool, str]:
             code, text = r.returncode, r.stdout + r.stderr
         except subprocess.TimeoutExpired:
             code, text = 1, f"timed out after {TEST_TIMEOUT}s"
+        if code == -signal.SIGINT:
+            raise Interrupted("unittest")
         m = re.search(r"Ran (\d+) tests?", text)
         ran = int(m.group(1)) if m else 0
         passed = code == 0 and ran > 0
@@ -140,10 +164,18 @@ def lint_plan(plan: Task, content_hash: str) -> LintResult:
         sub = lint_task(load_task(folder)) if folder else LintResult(False, "", f"{step['task']} not found")
         steps.append(sub)
         report.append(f"== step {step['task']}: {'ok' if sub.ok else 'FAILED'}\n{sub.output}")
-    return LintResult(all(s.ok for s in steps), content_hash, "\n\n".join(report), sum(s.tests for s in steps))
+    return LintResult(
+        all(s.ok for s in steps),
+        content_hash,
+        "\n\n".join(report),
+        sum(s.tests for s in steps),
+        interrupted=any(s.interrupted for s in steps),
+    )
 
 
 def save_lint(task: Task, result: LintResult) -> None:
+    if result.interrupted:
+        return
     try:
         write_json(
             task.folder / LINT_FILE,
