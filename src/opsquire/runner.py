@@ -407,6 +407,7 @@ class Run:
             "OPSQUIRE_GENERAL": str(home_dir() / "general"),
             "OPSQUIRE_HELPERS": str(HELPERS_DIR),
             "PYTHONUNBUFFERED": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONPATH": os.pathsep.join(filter(None, [str(HELPERS_DIR), os.environ.get("PYTHONPATH", "")])),
         }
         self.event("spawn", " ".join(cmd))
