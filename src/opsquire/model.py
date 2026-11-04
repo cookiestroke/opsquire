@@ -188,6 +188,7 @@ class Meta:
     archived: dict[str, Any] | None = None
     interpreter: str | None = None
     steps: list[dict[str, Any]] | None = None
+    outcome: dict[str, Any] | None = None
 
     def command(self, entry: Path) -> list[str]:
         if self.interpreter and entry.suffix == ".py":
@@ -239,7 +240,10 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
         archived=raw.get("archived"),
         interpreter=raw.get("interpreter"),
         steps=raw.get("steps"),
+        outcome=raw.get("outcome"),
     )
+    if meta.outcome is not None:
+        errors += validate_outcome(meta.outcome)
     if meta.archived is not None and not (
         isinstance(meta.archived, dict)
         and isinstance(meta.archived.get("note"), str)
@@ -295,6 +299,22 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
         if not isinstance(use, str) or not (home_dir() / "general" / use / "meta.json").is_file():
             errors.append(f"uses {use!r} is not a general script")
     return (meta if not errors else None), errors
+
+
+OUTCOME_STATES = ("done", "partial", "abandoned")
+
+
+def validate_outcome(outcome: Any) -> list[str]:
+    """Errors in a task's closing `outcome` (written by `opsquire close`): a state, a note, who and when."""
+    if not isinstance(outcome, dict):
+        return ["outcome must be an object"]
+    errors: list[str] = []
+    if outcome.get("state") not in OUTCOME_STATES:
+        errors.append(f"outcome.state must be one of {OUTCOME_STATES}")
+    for key in ("note", "closed_by", "closed"):
+        if not isinstance(outcome.get(key), str) or not outcome[key].strip():
+            errors.append(f"outcome.{key} missing or empty")
+    return errors
 
 
 STEP_KEYS = {"task": str, "args": list, "on_failure": str, "verify": bool}

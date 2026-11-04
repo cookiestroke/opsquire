@@ -147,7 +147,9 @@ def catalog(tasks: list[Task]) -> str:
         extra = f" (uses {', '.join(uses)})" if uses else ""
         runs = runs_for(t.id)
         stats = stats_text(run_stats(runs, final), final_mode(t))
-        rows.append(f"- {t.id} [{task_status(t, runs)}, {t.kind}; {stats}]: {t.raw.get('purpose', '')}{extra}")
+        closed = t.meta.outcome if t.meta and t.meta.outcome else None
+        closing = f" Closed {closed['state']} by {closed['closed_by']}: {closed['note']}" if closed else ""
+        rows.append(f"- {t.id} [{task_status(t, runs)}, {t.kind}; {stats}]: {t.raw.get('purpose', '')}{extra}{closing}")
     return "\n".join(rows) + "\n"
 
 

@@ -45,6 +45,8 @@ def task_status(task: Task, runs: list[dict[str, Any]]) -> str:
         return "abandoned"
     if task.meta and task.meta.superseded_by:
         return "superseded"
+    if task.meta and task.meta.outcome:
+        return str(task.meta.outcome["state"])
     if task.meta:
         final_mode = "apply" if task.meta.changes_prod else "read"
         if any(r.get("mode") == final_mode and r.get("status") == "ok" for r in runs):
@@ -134,7 +136,7 @@ def find_tasks(query: str, limit: int = 10) -> list[dict[str, Any]]:
             continue
         score *= len(matched) / len(words)
         hits.append(summarize(task) | {"score": round(score, 2), "matched": sorted(matched)})
-    order = {"done": 0, "ready": 1, "draft": 2, "archived": 3, "superseded": 4, "abandoned": 5}
+    order = {"done": 0, "partial": 1, "ready": 1, "draft": 2, "archived": 3, "superseded": 4, "abandoned": 5}
     hits.sort(key=lambda h: (-h["score"], order.get(h["status"], 9), h["id"]))
     return hits[:limit]
 

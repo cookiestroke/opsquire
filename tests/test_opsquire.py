@@ -1329,6 +1329,56 @@ class OpsTest(unittest.TestCase):
             for d in dirs:
                 d.chmod(0o700)
 
+    def test_close_records_outcome_and_shows_in_status_and_catalog(self) -> None:
+        folder = self.new(
+            "finish-by-hand",
+            (ROOT / "src/opsquire/data/templates/main.py").read_text(),
+            "--changes-prod",
+            "--rollback",
+            "undo",
+        )
+        self.assertEqual(self.cli("run", "finish-by-hand").returncode, 0)
+        dry = self.last("finish-by-hand")["run_id"]
+        r = self.cli("close", "finish-by-hand", "--outcome", "done", "--note", "restore finished by hand", "--run", dry)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no design.md", r.stderr)
+        shown = json.loads(self.cli("show", "finish-by-hand", "--json").stdout)
+        self.assertEqual(shown["status"], "done")
+        outcome = shown["meta"]["outcome"]
+        self.assertEqual((outcome["state"], outcome["closed_by"], outcome["run"]), ("done", "test", dry))
+        self.assertEqual(self.cli("docs").returncode, 0)
+        catalog = (self.home / "docs/CATALOG.md").read_text()
+        self.assertIn("Closed done by test: restore finished by hand", catalog)
+        (folder / "design.md").write_text("# d\n\n## Result\n\nlive\n")
+        again = self.cli("close", "finish-by-hand", "--outcome", "partial", "--note", "one bot still down")
+        self.assertNotIn("design.md", again.stderr)
+        self.assertEqual(json.loads(self.cli("show", "finish-by-hand", "--json").stdout)["status"], "partial")
+
+    def test_close_abandoned_sets_reason_and_rejects_bad_input(self) -> None:
+        self.new("gave-up", "print('x')\n")
+        self.assertNotEqual(self.cli("close", "gave-up", "--outcome", "done", "--note", "  ").returncode, 0)
+        self.assertNotEqual(self.cli("close", "gave-up", "--outcome", "finished", "--note", "x").returncode, 0)
+        bad_run = self.cli("close", "gave-up", "--outcome", "done", "--note", "x", "--run", "nope")
+        self.assertNotEqual(bad_run.returncode, 0)
+        self.assertIn("not a run of", bad_run.stderr)
+        self.assertEqual(
+            json.loads(self.cli("show", "gave-up", "--json").stdout)["meta"].get("outcome"),
+            None,
+            "failed closes write nothing",
+        )
+        self.assertEqual(
+            self.cli("close", "gave-up", "--outcome", "abandoned", "--note", "superseded by hand").returncode, 0
+        )
+        shown = json.loads(self.cli("show", "gave-up", "--json").stdout)
+        self.assertEqual(shown["status"], "abandoned")
+        self.assertEqual(shown["meta"]["abandoned_reason"], "superseded by hand")
+
+    def test_close_refuses_general_scripts(self) -> None:
+        self.assertEqual(self.cli("new", "web1", "shared-bit", "--general", "--purpose", "g").returncode, 0)
+        general = self.cli("close", "web1_shared-bit", "--outcome", "done", "--note", "x")
+        self.assertNotEqual(general.returncode, 0)
+        self.assertIn("general scripts are not closed", general.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2 if "-v" in sys.argv else 1)

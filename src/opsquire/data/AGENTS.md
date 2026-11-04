@@ -78,6 +78,10 @@ opsquire locks
    `opsquire run <task-id> --apply`.
 6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the
    operator to paste output.
+7. When a task ends differently from its last run (finished by hand, a later run landed it, given up), record it:
+   `opsquire close <task> --outcome done|partial|abandoned --note "what actually happened" [--run <run-id>]`.
+   It only annotates meta.json (`outcome`: state, note, closed_by, closed, run) and touches no host. Put what ended
+   up live in a `## Result` section of the task's design.md; `close` reminds you when it is missing.
 
 ### Plans: several tasks, one command
 
@@ -256,7 +260,8 @@ local rules protect; otherwise set `"enabled": false` with a `reason`.
 
 Task (derived, never stored): `draft` (lint not passing) → `ready` (lint passes on current files)
 → `done` (an `apply` run, or a `read` run for read-only tasks, finished `ok`); `superseded` /
-`abandoned` / `archived` from meta.
+`abandoned` / `archived` from meta. `opsquire close` records how a task really ended and overrides the run-derived
+status with `done`, `partial` or `abandoned`.
 
 Run: `running`, `ok`, `partial` (some targets failed), `failed`, `aborted` (answered no),
 `interrupted` (Ctrl-C, terminal closed, or runner vanished), `blocked` (lint, lock or missing

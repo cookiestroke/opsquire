@@ -21,6 +21,7 @@ from .lint import lint_task, save_lint
 from .model import (
     DATA_DIR,
     GENERAL_ID_RE,
+    OUTCOME_STATES,
     TASK_ID_RE,
     TEMPLATES_DIR,
     Meta,
@@ -129,6 +130,50 @@ def cmd_lint(a: argparse.Namespace) -> int:
         if note:
             print(note, file=sys.stderr)
     return 0 if result.ok else 1
+
+
+def cmd_close(a: argparse.Namespace) -> int:
+    """Record how a task really ended: done, partial or abandoned, with a note (what was finished by hand, which
+    run landed). Only annotates meta.json; touches no host. The catalog and `ls` show the state from then on."""
+    task = resolve_task(a.task)
+    if task.meta is None:
+        raise OpsquireError("cannot close a task with invalid meta.json: " + "; ".join(task.errors))
+    if task.kind == "general":
+        raise OpsquireError("general scripts are not closed; close the tasks that use them")
+    if task.meta.archived:
+        raise OpsquireError("archived tasks are historical records and stay as they are")
+    note = a.note.strip()
+    if not note:
+        raise OpsquireError("--note is empty: say what actually happened")
+    run_id = None
+    if a.run:
+        found = find_run(a.run)
+        if found is None or found.parent.name != task.id:
+            raise OpsquireError(f"run {a.run!r} is not a run of {task.id}")
+        run_id = found.name
+    outcome: dict[str, Any] = {
+        "state": a.outcome,
+        "note": note,
+        "closed_by": os.environ.get("OPSQUIRE_AUTHOR", "unknown"),
+        "closed": iso(now()),
+    }
+    if run_id:
+        outcome["run"] = run_id
+    raw = dict(task.raw)
+    raw["outcome"] = outcome
+    if a.outcome == "abandoned":
+        raw["abandoned_reason"] = note
+    write_json(task.folder / "meta.json", raw)
+    print(f"{task.id}: closed {a.outcome}")
+    design = task.folder / "design.md"
+    if not design.is_file():
+        print("note: no design.md; the decisions behind this task are not recorded", file=sys.stderr)
+    elif not any(line.startswith("## Result") for line in design.read_text().splitlines()):
+        print("note: design.md has no '## Result' section; add one saying what ended up live", file=sys.stderr)
+    note_commit = commit_quietly(home_dir(), [task.folder], f"closed {a.outcome}: {task.id}")
+    if note_commit:
+        print(note_commit, file=sys.stderr)
+    return 0
 
 
 def cmd_run(a: argparse.Namespace) -> int:
@@ -453,6 +498,13 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("--break-lock", action="store_true", help="offer to override a held lock (asks you to type BREAK)")
     r.add_argument("-v", "--verbose", action="store_true", help="also show the runner's bookkeeping and [data] events")
     r.set_defaults(fn=cmd_run)
+
+    cl = sub.add_parser("close", help="record how a task really ended (done, partial, abandoned) with a note")
+    cl.add_argument("task")
+    cl.add_argument("--outcome", required=True, choices=OUTCOME_STATES)
+    cl.add_argument("--note", required=True, help="what actually happened, e.g. finished by hand, which run landed")
+    cl.add_argument("--run", help="the run that landed it (id or unique part)")
+    cl.set_defaults(fn=cmd_close)
 
     ls = sub.add_parser("ls", help="list tasks with derived status")
     ls.add_argument("--area")
