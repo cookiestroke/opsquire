@@ -1538,6 +1538,24 @@ class OpsTest(unittest.TestCase):
         self.assertIn("no verify check yet; an agent must add one", r.stdout)
         self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"][0]["task_id"], tid)
 
+    def test_inbox_nests_the_waiting_steps_under_their_plan(self) -> None:
+        a = self.new("stop-bots", self.CONFIRM_BODY, "--changes-prod", "--rollback", "start them", "--no-verify")
+        b = self.new("start-bots", self.CONFIRM_BODY, "--changes-prod", "--rollback", "stop them", "--no-verify")
+        plan = self.make_plan(a, b, name="cutover")
+        for name in ("stop-bots", "start-bots", "cutover"):
+            self.assertEqual(self.cli("lint", name).returncode, 0)
+        inbox = json.loads(self.cli("threads", "--json").stdout)["inbox"]
+        self.assertEqual([i["task_id"] for i in inbox], [plan.name])
+        steps = [(s["task_id"], s["next"], s["steps"]) for s in inbox[0]["steps"]]
+        self.assertEqual(steps, [(a.name, "dry", []), (b.name, "dry", [])])
+        self.assertEqual(self.cli("run", "cutover").returncode, 0)
+        inbox = json.loads(self.cli("threads", "--json").stdout)["inbox"]
+        self.assertEqual([(i["task_id"], i["next"]) for i in inbox], [(plan.name, "apply")])
+        self.assertEqual([s["next"] for s in inbox[0]["steps"]], ["apply", "apply"])
+        self.assertEqual(self.cli("close", "cutover", "--outcome", "abandoned", "--note", "by hand").returncode, 0)
+        inbox = json.loads(self.cli("threads", "--json").stdout)["inbox"]
+        self.assertEqual([(i["task_id"], i["steps"]) for i in inbox], [(a.name, []), (b.name, [])])
+
     def test_handover_puts_a_reused_task_in_the_inbox_until_it_runs(self) -> None:
         folder = self.new("count", "print(1)\n")
         self.assertEqual(self.cli("lint", "count").returncode, 0)
@@ -1585,9 +1603,13 @@ class OpsTest(unittest.TestCase):
         meta = json.loads((alpha / "meta.json").read_text())
         self.assertEqual((meta["handover"]["mode"], meta["handover"]["why"]), ("read", "two things"))
         self.assertTrue(meta["handover"]["by"].startswith("ask "))
-        inbox = {i["task_id"]: i for i in json.loads(self.cli("threads", "--json").stdout)["inbox"]}
+        top = json.loads(self.cli("threads", "--json").stdout)["inbox"]
+        plan = next(i for i in top if i["steps"])
+        inbox = {i["task_id"]: i for i in top + plan["steps"]}
         self.assertEqual((inbox[alpha.name]["next"], inbox[alpha.name]["handed"]["why"]), ("read", "two things"))
         self.assertIn(next(self.home.glob("tasks/*/*_web1_beta-task")).name, inbox)
+        self.assertEqual(len(plan["steps"]), 2)
+        self.assertEqual([i["task_id"] for i in top], [plan["task_id"]])
 
     def test_init_builds_a_working_home_from_nothing(self) -> None:
         user = self.tmp / "user"

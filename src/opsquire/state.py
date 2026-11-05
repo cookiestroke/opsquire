@@ -291,6 +291,21 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
     return "dry"
 
 
+def nest_steps(inbox: list[dict[str, Any]], tasks: dict[str, Task]) -> list[dict[str, Any]]:
+    """A plan in the inbox carries its waiting steps under it (in plan order, as `steps`): the operator runs the
+    plan once, so its steps are not separate items. A step whose plan is not waiting stays an item of its own."""
+    by_id = {str(it["task_id"]): it for it in inbox}
+    nested: set[str] = set()
+    for it in inbox:
+        plan = tasks.get(str(it["task_id"]))
+        if plan is None or plan.meta is None or plan.kind != "plan":
+            continue
+        steps = [by_id[sid] for step in plan.meta.steps or [] if (sid := str(step.get("task"))) in by_id]
+        it["steps"] = [dict(st, steps=[]) for st in steps if st["task_id"] not in nested]
+        nested.update(st["task_id"] for st in it["steps"])
+    return [dict(it, steps=it.get("steps") or []) for it in inbox if it["task_id"] not in nested]
+
+
 def run_view(r: dict[str, Any]) -> dict[str, Any]:
     targets = r.get("targets") or {}
     return {
@@ -461,7 +476,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
     return {
         "generated": iso(at),
         "home": str(home),
-        "inbox": inbox,
+        "inbox": nest_steps(inbox, {t.id: t for t in tasks}),
         "threads": sorted(threads.values(), key=lambda th: str(th["updated"] or ""), reverse=True),
         "tasks": task_views,
         "runs": {str(r.get("run_id")): run_view(r) for r in runs},

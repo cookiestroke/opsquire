@@ -248,6 +248,17 @@ html.dev .tile .num { font-size: 1.5rem; }
 .sr { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line2); }
 .sr:first-child { border-top: 0; }
 .sr:hover { background: var(--panel2); }
+.ibgroup { border-top: 1px solid var(--line2); }
+.ibgroup:first-child { border-top: 0; }
+.ibgroup .sr, .ibgroup .ib { border-top: 0; }
+.ibgroup > .sr, .ibgroup > .ib { padding-bottom: 4px; }
+.substeps { margin: 0 0 8px 22px; }
+.sr.sub, .ib.sub { padding-top: 4px; padding-bottom: 4px; font-size: .95em; }
+.sr.sub:hover, .ib.sub:hover { background: var(--panel2); }
+.sr.sub .purpose, .ib.sub .purpose { color: var(--muted); }
+.tree { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); white-space: pre; }
+.stepno { display: inline-block; min-width: 1.5em; height: 1.5em; line-height: 1.5em; text-align: center; border-radius: 50%; background: var(--panel2); border: 1px solid var(--line); color: var(--muted); font-size: .85em; font-weight: 600; }
+.plan { color: var(--muted); font-size: .9em; white-space: nowrap; }
 .sr .purpose { flex: 1 1 240px; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sr .verdict { flex-basis: 100%; color: var(--muted); font-size: .92em; padding-left: 1.6em; white-space: pre-wrap; }
 .sr .verdict.good { color: var(--good); }
@@ -500,7 +511,7 @@ function needsDecision(t, inboxIds, runs) {
   return !!last && last.status !== 'ok' && last.status !== 'running';
 }
 function decisionList(data) {
-  const inboxIds = new Set((data.inbox || []).map(i => i.task_id));
+  const inboxIds = new Set((data.inbox || []).flatMap(i => [i, ...(i.steps || [])]).map(i => i.task_id));
   return Object.values(data.tasks || {}).filter(t => needsDecision(t, inboxIds, data.runs)).sort((a, b) => b.id.localeCompare(a.id));
 }
 function settledDay(t, runs) {
@@ -688,7 +699,9 @@ const S = { data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrol
 const task = id => (S.data && S.data.tasks && S.data.tasks[id]) || null;
 const run = id => (S.data && S.data.runs && S.data.runs[id]) || null;
 const inbox = () => (S.data && S.data.inbox) || [];
-const inboxItem = taskId => inbox().find(i => i.task_id === taskId) || null;
+/* every waiting run, the steps nested under their plan included */
+const inboxAll = () => inbox().flatMap(i => [i, ...(i.steps || [])]);
+const inboxItem = taskId => inboxAll().find(i => i.task_id === taskId) || null;
 const jobs = () => (S.data && S.data.jobs) || [];
 const jobById = id => jobs().find(j => j.job_id === id) || null;
 const activeJobFor = taskId => jobs().find(j => j.task_id === taskId && j.status !== 'done') || null;
@@ -960,7 +973,7 @@ function renderInbox() {
     st.runs ? el('span', {}, 'runs ', el('b', {}, `${st.ok} ok`), st.failed ? [' / ', el('b', { class: 'err' }, `${st.failed} failed`)] : null) : null));
   parts.push(sec('Waiting on you', items.length ? plural(items.length, 'item') : null));
   parts[parts.length - 1].dataset.key = 'sec:inbox';
-  parts.push(el('div', { class: 'block' }, items.length ? items.map(renderInboxItem) : el('div', { class: 'quiet' }, inbox().length ? `Nothing matches "${S.q}".` : 'Nothing waiting on you.')));
+  parts.push(el('div', { class: 'block' }, items.length ? items.map(it => renderInboxItem(it)) : el('div', { class: 'quiet' }, inbox().length ? `Nothing matches "${S.q}".` : 'Nothing waiting on you.')));
   parts.push(sec('Running now', runningRows.length ? String(runningRows.length) : null));
   parts[parts.length - 1].dataset.key = 'sec:running';
   parts.push(el('div', { class: 'block' }, runningRows.length ? runningRows : el('div', { class: 'quiet' }, 'Nothing running.')));
@@ -991,17 +1004,27 @@ function renderRunRow(r, live) {
     S.dev ? modeTag(r.mode) : null, pill(r.status), taskLink(r.task_id || '?'), !S.dev ? areaTag(t) : null, el('span', { class: 'purpose muted' }, (t || {}).purpose || ''),
     live ? [el('span', { class: 'muted small' }, 'since '), when(r.started), btn('Watch', () => openLog(r.run_id, null), 'sm')] : [chipsRow(usageChips(r)), when(r.started)]);
 }
-function renderInboxItem(it) {
-  const id = it.task_id, t = task(id);
+/* a plan's waiting steps hang under it as a tree, numbered in the order the plan runs them */
+function renderInboxItem(it, nested, pos) {
+  const kids = it.steps || [];
+  if (!kids.length) return renderInboxRow(it, nested, pos);
+  const steps = el('div', { class: 'substeps' }, kids.map((st, i) => renderInboxItem(st, true, { n: i + 1, last: i === kids.length - 1 })));
+  return el('div', { class: 'ibgroup', 'data-key': 'g:' + it.task_id }, renderInboxRow(it, false), steps);
+}
+function renderInboxRow(it, nested, pos) {
+  const id = it.task_id, t = task(id), sub = nested ? ' sub' : '';
+  const tree = pos ? el('span', { class: 'tree', 'aria-hidden': 'true' }, pos.last ? '\u2514\u2500' : '\u251c\u2500') : null;
+  const stepNo = pos ? el('span', { class: 'stepno', title: `step ${pos.n} of the plan above, in this order` }, `${pos.n}`) : null;
   const changed = it.changed_since_lint ? el('span', { class: 'muted small', title: 'its files or a script it uses changed after its last lint; the run lints them again first' }, 'changed since lint') : null;
   const handed = it.handed ? el('span', { class: 'muted small', title: `handed over by ${it.handed.by || 'an agent'}: ${it.handed.why || 'no reason given'}` }, it.handed.why ? truncate(it.handed.why, 90) : `handed over by ${it.handed.by || 'an agent'}`) : null;
-  if (S.dev) return el('div', { class: 'ib', 'data-key': 'i:' + id },
-    modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
-    changed, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
-  return el('div', { class: 'sr', 'data-key': 'i:' + id },
-    taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), changed, handed,
+  const stepsNote = (it.steps || []).length ? el('span', { class: 'plan', title: 'a plan: one run does every step below, in this order' }, `plan \u00b7 ${plural(it.steps.length, 'step')} in order`) : null;
+  if (S.dev) return el('div', { class: 'ib' + sub, 'data-key': 'i:' + id },
+    tree, stepNo, modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
+    stepsNote, changed, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+  return el('div', { class: 'sr' + sub, 'data-key': 'i:' + id },
+    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), stepsNote, changed, handed,
     el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}`, title: it.next === 'apply' ? 'the dry run passed; this changes production' : 'a read-only or dry run first; nothing changes' }, nextLabel(it.next)),
-    runButton(id, it.next));
+    runButton(id, it.next, nested ? 'Run this step alone' : undefined));
 }
 function renderDecideRow(t) {
   const s = t.suggestions || [], last = lastRunOf(t, S.data.runs), judge = lastJudgeFor(t.id), it = inboxItem(t.id);
@@ -1076,7 +1099,7 @@ function renderThreadBody(th, taskIds, ids) {
   return parts;
 }
 function renderTaskLine(t) {
-  const sel = selectedTask() === t.id, words = statusWords(t, inboxItem(t.id), needsDecision(t, new Set(inbox().map(i => i.task_id)), S.data.runs));
+  const sel = selectedTask() === t.id, words = statusWords(t, inboxItem(t.id), needsDecision(t, new Set(inboxAll().map(i => i.task_id)), S.data.runs));
   const why = () => { S.pane = { kind: 'task', id: t.id }; S.details.delete(t.id); setHash('task/' + encodeURIComponent(t.id)); render(); };
   return el('div', { class: `tl ${sel ? 'sel' : ''}`, 'data-key': 'k:' + t.id, role: 'button', tabindex: '0', title: t.purpose || '',
     onclick: e => { if (e.target.closest('a, button')) return; selectTask(t.id); }, onkeydown: e => { if (e.key === 'Enter') selectTask(t.id); } },
@@ -1329,7 +1352,7 @@ function backTo(p) {
 }
 function renderTaskPane(t) {
   const parts = [], closable = t.kind !== 'general' && !t.archived;
-  const it = inboxItem(t.id), decide = needsDecision(t, new Set(inbox().map(i => i.task_id)), S.data.runs), words = statusWords(t, it, decide);
+  const it = inboxItem(t.id), decide = needsDecision(t, new Set(inboxAll().map(i => i.task_id)), S.data.runs), words = statusWords(t, it, decide);
   const threadLink = t.thread ? el('a', { class: 'small', href: '#thread/' + encodeURIComponent(t.thread), onclick: e => { e.preventDefault(); focusKey('threads', 't:' + t.thread, 'thread/' + encodeURIComponent(t.thread)); } }, 'thread') : null;
   if (!S.dev) {
     parts.push(el('div', { class: 'pane-name' }, tick(t), ' ', shortName(t.id)));
