@@ -96,6 +96,18 @@ def config_path() -> Path:
     return Path(base) / "opsquire" / "config.json"
 
 
+def update_config(**values: Any) -> None:
+    """Merge values into the config file (home, ask budget), creating it when needed."""
+    try:
+        current = read_json(config_path())
+    except (OSError, ValueError):
+        current = {}
+    if not isinstance(current, dict):
+        current = {}
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    write_json(config_path(), {**current, **values})
+
+
 def home_dir() -> Path:
     env = os.environ.get("OPSQUIRE_HOME")
     if env:
@@ -434,7 +446,7 @@ class Task:
         return h.hexdigest()
 
 
-ANNOTATIONS = ("outcome", "judged")
+ANNOTATIONS = ("outcome", "judged", "handover")
 
 
 def content_for_hash(path: Path) -> bytes:

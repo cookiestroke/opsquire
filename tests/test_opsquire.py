@@ -1538,6 +1538,121 @@ class OpsTest(unittest.TestCase):
         self.assertIn("no verify check yet; an agent must add one", r.stdout)
         self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"][0]["task_id"], tid)
 
+    def test_handover_puts_a_reused_task_in_the_inbox_until_it_runs(self) -> None:
+        folder = self.new("count", "print(1)\n")
+        self.assertEqual(self.cli("lint", "count").returncode, 0)
+        self.assertEqual(self.cli("run", "count").returncode, 0)
+        self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"], [])
+        r = self.cli("handover", "count", "--why", "the host changed since", "--", "web1", "--fast")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"handed over: opsquire run {folder.name} -- web1 --fast", r.stdout)
+        item = json.loads(self.cli("threads", "--json").stdout)["inbox"][0]
+        self.assertEqual(
+            (item["task_id"], item["next"], item["command"]),
+            (folder.name, "read", f"opsquire run {folder.name} -- web1 --fast"),
+        )
+        self.assertEqual((item["handed"]["by"], item["handed"]["why"]), ("test", "the host changed since"))
+        meta = json.loads((folder / "meta.json").read_text())
+        self.assertEqual(meta["handover"]["args"], ["web1", "--fast"])
+        self.assertEqual(json.loads(self.cli("show", "count", "--json").stdout)["status"], "done")
+        self.assertEqual(self.cli("run", "count", "--", "web1", "--fast").returncode, 0)
+        self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"], [])
+        self.assertIn("handover", json.loads((folder / "meta.json").read_text()))
+
+        bad = self.cli("handover", "count", "--apply")
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn("read-only; it has no apply run", bad.stderr)
+        changing = self.new("flip", "print(1)\n", "--changes-prod", "--rollback", "flip back")
+        self.assertEqual(self.cli("lint", "flip").returncode, 0)
+        self.assertEqual(self.cli("run", "flip").returncode, 0)
+        self.assertEqual([i["next"] for i in json.loads(self.cli("threads", "--json").stdout)["inbox"]], ["apply"])
+        self.assertEqual(self.cli("handover", "flip", "--why", "dry again first").returncode, 0)
+        item = json.loads(self.cli("threads", "--json").stdout)["inbox"][0]
+        self.assertEqual(
+            (item["task_id"], item["next"], item["command"]), (changing.name, "dry", f"opsquire run {changing.name}")
+        )
+        self.assertEqual(self.cli("handover", "flip", "--verify").returncode, 0)
+        self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"][0]["next"], "verify")
+        general = self.cli("new", "web1", "lib", "--general", "--purpose", "g")
+        self.assertEqual(general.returncode, 0)
+        self.assertIn("general script", self.cli("handover", "web1_lib").stderr)
+
+    def test_ask_records_a_handover_for_every_run_line(self) -> None:
+        self.split("alpha task", "beta task")
+        r = self.cli("ask", "two", "things")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        alpha = next(self.home.glob("tasks/*/*_web1_alpha-task"))
+        meta = json.loads((alpha / "meta.json").read_text())
+        self.assertEqual((meta["handover"]["mode"], meta["handover"]["why"]), ("read", "two things"))
+        self.assertTrue(meta["handover"]["by"].startswith("ask "))
+        inbox = {i["task_id"]: i for i in json.loads(self.cli("threads", "--json").stdout)["inbox"]}
+        self.assertEqual((inbox[alpha.name]["next"], inbox[alpha.name]["handed"]["why"]), ("read", "two things"))
+        self.assertIn(next(self.home.glob("tasks/*/*_web1_beta-task")).name, inbox)
+
+    def test_init_builds_a_working_home_from_nothing(self) -> None:
+        user = self.tmp / "user"
+        self.env |= {
+            "HOME": str(user),
+            "CLAUDE_CONFIG_DIR": str(self.tmp / "claude"),
+            "XDG_CONFIG_HOME": str(self.tmp / "cfg"),
+        }
+        self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))
+        gitconfig = self.tmp / "gitconfig"
+        gitconfig.write_text("[user]\n\tname = Test\n\temail = test@example.com\n")
+        self.env |= {"GIT_CONFIG_GLOBAL": str(gitconfig), "GIT_CONFIG_NOSYSTEM": "1"}
+        del self.env["OPSQUIRE_HOME"]
+        self.env["OPSQUIRE_CREDS"] = str(self.tmp / "fresh-creds.json")
+        home = self.tmp / "fresh-home"
+        dry = self.cli("init", str(home), "--dry-run")
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        self.assertFalse(home.exists() or (self.tmp / "fresh-creds.json").exists())
+        r = self.cli("init", str(home), "--budget", "5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout
+        for line in (
+            f"home: set to {home}",
+            "tasks/: created",
+            "general/: created",
+            "local rules: written from the template",
+            "ask budget: $5.00 per ask as a reminder;",
+            "credentials: created empty",
+            "tool ruff: found",
+            "claude skill: installed",
+            "home repo: initialized a local git repository",
+            "contract: written",
+            "first task: created and ready (",
+        ):
+            self.assertIn(line, out)
+        config = json.loads((self.tmp / "cfg/opsquire/config.json").read_text())
+        self.assertEqual(config, {"home": str(home), "ask_budget_usd": 5.0})
+        creds = self.tmp / "fresh-creds.json"
+        self.assertEqual((json.loads(creds.read_text()), creds.stat().st_mode & 0o777), ({}, 0o600))
+        self.assertIn("### What is script-shaped here", (home / "LOCAL.md").read_text())
+        self.assertIn("## Local rules for this home", (home / "AGENTS.md").read_text())
+        demo = re.search(r"first task: created and ready \((\S+)\)", out)
+        assert demo
+        run = self.cli("run", demo.group(1))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("hello from demo", run.stdout)
+        self.assertEqual(json.loads(self.cli("last", "--json").stdout)["status"], "ok")
+        (home / "LOCAL.md").write_text("mine\n")
+        again = self.cli("init")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        for line in (
+            "tasks/: present",
+            "local rules: present",
+            "credentials: present (",
+            "claude skill: unchanged",
+            f"first task: present ({demo.group(1)})",
+            "ask budget: $5.00",
+        ):
+            self.assertIn(line, again.stdout)
+        self.assertEqual((home / "LOCAL.md").read_text(), "mine\n")
+        self.agents_file()
+        ask = self.cli("ask", "--no-split", "--strict-budget", "one", "thing")
+        self.assertEqual(ask.returncode, 0, ask.stdout + ask.stderr)
+        self.assertIn('"--max-budget-usd", "5.00"', ask.stdout)
+
     def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
         self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
         self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))

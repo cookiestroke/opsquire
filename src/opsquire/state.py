@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import locks
+from . import handover, locks
 from .docs import final_mode, run_stats
 from .lint import last_lint
 from .model import Task, all_task_folders, home_dir, iso, load_task, now, parse_iso, read_json, var_dir
@@ -20,6 +20,7 @@ from .query import all_runs, task_status
 TASK_ID_RE = re.compile(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b")
 GENERIC_AUTHOR_WORDS = {"claude", "code", "codex", "chat", "opsquire", "ask", "migrated", "by", "unknown", "test"}
 CLOSED = {"done", "partial", "abandoned", "superseded", "archived"}
+HANDOVER_CLOSED = {"draft", "abandoned", "superseded", "archived"}
 STALE_NEVER_RUN_DAYS = 7
 STALE_AFTER_FAILURE_DAYS = 3
 RERUN_HEAVY = 3.0
@@ -435,19 +436,26 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
     for t in sorted(tasks, key=lambda t: t.id, reverse=True):
         v = task_views[t.id]
         relint = changed_since_lint(t, str(v["status"]))
-        nxt = next_mode(t, by_task.get(t.id, []), "ready" if relint else str(v["status"]))
+        status = "ready" if relint else str(v["status"])
+        task_runs = by_task.get(t.id, [])
+        handed = handover.pending(t, task_runs) if status not in HANDOVER_CLOSED else None
+        nxt = str(handed["mode"]) if handed else next_mode(t, task_runs, status)
         if nxt:
+            args = [str(x) for x in handed.get("args") or []] if handed else []
             inbox.append(
                 {
                     "task_id": t.id,
                     "next": nxt,
-                    "command": f"opsquire run {t.id}" + {"apply": " --apply", "verify": " --verify"}.get(nxt, ""),
+                    "command": handover.command(t.id, nxt, args),
                     "created": v["created"],
                     "author": v["author"],
                     "purpose": v["purpose"],
                     "changes_prod": v["changes_prod"],
                     "thread": v["thread"],
                     "changed_since_lint": relint,
+                    "handed": {"at": handed.get("at"), "by": handed.get("by"), "why": handed.get("why")}
+                    if handed
+                    else None,
                 }
             )
     return {

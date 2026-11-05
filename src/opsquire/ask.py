@@ -11,8 +11,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from . import homegit, pinned, repos
-from .model import DATA_DIR, OpsquireError, compact, home_dir, iso, main_home, now, read_json, var_dir, write_json
+from . import handover, homegit, pinned, repos
+from .model import (
+    DATA_DIR,
+    OpsquireError,
+    compact,
+    config_path,
+    home_dir,
+    iso,
+    main_home,
+    now,
+    read_json,
+    var_dir,
+    write_json,
+)
 
 SYSTEM_PROMPT = """You are running inside `opsquire ask` for the operator.
 The operator will run whatever you prepare in their own terminal.
@@ -90,6 +102,16 @@ SPLIT_RE = re.compile(r"^SPLIT:\s*(.+?)\s*$", re.M)
 TASK_ID_IN_TEXT = re.compile(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b")
 MAX_ROUNDS = 15
 DEFAULT_BUDGET_USD = 15.0
+
+
+def configured_budget() -> float:
+    """The ask budget reminder: `opsquire init --budget N` stores it in the config file; else the default."""
+    try:
+        value = read_json(config_path()).get("ask_budget_usd")
+    except (OSError, ValueError, AttributeError):
+        value = None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else DEFAULT_BUDGET_USD
+
 
 Answerer = Callable[[str, str], "str | None"]
 
@@ -435,7 +457,7 @@ def ask(
     budget: Budget | None = None,
     reply_given: bool = False,
 ) -> AskResult:
-    budget = budget or Budget(DEFAULT_BUDGET_USD, strict=False)
+    budget = budget or Budget(configured_budget(), strict=False)
     session = None
     copies = None
     if resume_ask:
@@ -486,6 +508,7 @@ def ask(
     )
     if status == "ok":
         repos.drop(copies)
+        handover.record_run_lines(res.actions, prompt, f"ask {res.ask_id}")
     save_record(
         {
             "ask_id": res.ask_id,

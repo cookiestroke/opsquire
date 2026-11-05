@@ -994,11 +994,12 @@ function renderRunRow(r, live) {
 function renderInboxItem(it) {
   const id = it.task_id, t = task(id);
   const changed = it.changed_since_lint ? el('span', { class: 'muted small', title: 'its files or a script it uses changed after its last lint; the run lints them again first' }, 'changed since lint') : null;
+  const handed = it.handed ? el('span', { class: 'muted small', title: `handed over by ${it.handed.by || 'an agent'}: ${it.handed.why || 'no reason given'}` }, it.handed.why ? truncate(it.handed.why, 90) : `handed over by ${it.handed.by || 'an agent'}`) : null;
   if (S.dev) return el('div', { class: 'ib', 'data-key': 'i:' + id },
     modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
-    changed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+    changed, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
   return el('div', { class: 'sr', 'data-key': 'i:' + id },
-    taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), changed,
+    taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), changed, handed,
     el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}`, title: it.next === 'apply' ? 'the dry run passed; this changes production' : 'a read-only or dry run first; nothing changes' }, nextLabel(it.next)),
     runButton(id, it.next));
 }

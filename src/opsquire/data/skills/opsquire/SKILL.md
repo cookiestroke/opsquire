@@ -18,7 +18,8 @@ The operator runs all tooling through Opsquire. Agents prepare; the operator run
 4. `opsquire lint <task>` must pass (ruff, mypy --strict, shellcheck, and the task's unit tests).
 5. Never run `opsquire run` yourself for work that needs what agents must not reach (production, ssh,
    credentials); hand the operator the exact command, one per step: `opsquire run <task>` first (dry or read),
-   then `opsquire run <task> --apply`.
+   then `opsquire run <task> --apply`. When the task already exists (reused, already run, or closed), also run
+   `opsquire handover <task> [--apply] --why "one line"` so that run reaches the operator's inbox.
 6. Then run `opsquire wait <task> --json` and continue from the run record. Never ask the operator to paste output.
 
 Purely local work (editing code, tests, analysing local files) needs no Opsquire task.

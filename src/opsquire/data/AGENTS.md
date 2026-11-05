@@ -55,6 +55,8 @@ opsquire runs [<task>] [--status failed] [--area x] [--since 2026-10-30]
 opsquire last                        most recent run
 opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, latest run for a task
 opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it
+opsquire handover <task> [--apply|--verify] [--why "..."] [-- args]
+                                     recommend a run of an existing task: in the inbox with your reason until it runs
 opsquire threads [--json]            tasks grouped into threads (the stories they belong to), with suggestions
 opsquire judge <task> [--json]       an agent reads the task's record and closes it (or says what is missing)
 opsquire locks
@@ -80,7 +82,10 @@ opsquire ui [--port N] [--open]      the operator's console in the browser (loca
    started or changed; a test file with no tests fails.
 5. Hand the operator exactly one command per step: `opsquire run <task-id>` (dry/read), then
    `opsquire run <task-id> --apply`. A ready task also appears in the UI's inbox with its next run, where the
-   operator can run it with its prompts; the records are the same.
+   operator can run it with its prompts; the records are the same. A task you reuse (a read task that already ran,
+   a closed task to run again, an existing task with new arguments) owes no run by itself and would never reach the
+   inbox: `opsquire handover <task-id> [--apply|--verify] --why "one line" [-- args]` puts exactly that run there,
+   with your reason, until it starts. `opsquire ask` records one for every RUN line its agent ends with.
 6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the
    operator to paste output.
 7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,

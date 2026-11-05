@@ -12,8 +12,9 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import __version__, locks, piece, repos, runner
-from .ask import DEFAULT_BUDGET_USD, Budget, ask
+from . import __version__, handover, locks, piece, repos, runner
+from .ask import Budget, ask, configured_budget
+from .bootstrap import init
 from .close import auto_close, close_task
 from .docs import write_docs
 from .homegit import commit_quietly
@@ -34,6 +35,7 @@ from .model import (
     iso,
     now,
     resolve_task,
+    update_config,
     write_json,
     write_text,
 )
@@ -184,6 +186,18 @@ def cmd_run(a: argparse.Namespace) -> int:
     return code
 
 
+def cmd_handover(a: argparse.Namespace) -> int:
+    task = resolve_task(a.task)
+    mode = handover.mode_for(task, a.apply, a.verify)
+    entry = handover.record(task, mode, a.script_args, a.why or "", handover.author())
+    cmd = handover.command(task.id, mode, a.script_args)
+    if a.json:
+        emit({"id": task.id, "command": cmd, "handover": entry}, True)
+    else:
+        print(f"handed over: {cmd}\n  in the inbox until it runs" + (f"; why: {entry['why']}" if entry["why"] else ""))
+    return 0
+
+
 def cmd_ls(a: argparse.Namespace) -> int:
     rows = [
         t
@@ -303,7 +317,7 @@ def cmd_ask(a: argparse.Namespace) -> int:
         not a.no_grill,
         split=not a.no_split,
         max_agents=a.max_agents,
-        budget=Budget(a.budget, a.strict_budget),
+        budget=Budget(a.budget if a.budget is not None else configured_budget(), a.strict_budget),
         reply_given=bool(a.request),
     )
     if res.pieces:
@@ -358,11 +372,20 @@ def cmd_wait(a: argparse.Namespace) -> int:
     return EXIT_CODES.get(str(rec.get("status")), 1)
 
 
+def cmd_init(a: argparse.Namespace) -> int:
+    for line in init(a.path, a.budget, a.dry_run):
+        print(line)
+    if not a.dry_run:
+        print(
+            '\nnext: run the first task; then `opsquire ui --open` for the console, or `opsquire ask "<what you want>"`'
+        )
+    return 0
+
+
 def cmd_home(a: argparse.Namespace) -> int:
     if a.path:
         target = Path(a.path).expanduser().resolve()
-        config_path().parent.mkdir(parents=True, exist_ok=True)
-        write_json(config_path(), {"home": str(target)})
+        update_config(home=str(target))
         print(f"home set to {target} (in {config_path()})")
         return 0
     source = "OPSQUIRE_HOME" if os.environ.get("OPSQUIRE_HOME") else str(config_path())
@@ -597,6 +620,17 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("-v", "--verbose", action="store_true", help="also show the runner's bookkeeping and [data] events")
     r.set_defaults(fn=cmd_run)
 
+    ho = sub.add_parser(
+        "handover",
+        help="recommend a run of an existing task: in the inbox with your reason until it runs (args after --)",
+    )
+    ho.add_argument("task")
+    ho.add_argument("--apply", action="store_true", help="hand over the apply run (changing tasks)")
+    ho.add_argument("--verify", action="store_true", help="hand over the verify check")
+    ho.add_argument("--why", help="one line on why this run is needed now; shown in the inbox")
+    ho.add_argument("--json", action="store_true")
+    ho.set_defaults(fn=cmd_handover)
+
     cl = sub.add_parser("close", help="record how a task really ended (done, partial, abandoned) with a note")
     cl.add_argument("task")
     cl.add_argument("--outcome", required=True, choices=OUTCOME_STATES)
@@ -648,9 +682,8 @@ def parser() -> argparse.ArgumentParser:
     ak.add_argument(
         "--budget",
         type=float,
-        default=DEFAULT_BUDGET_USD,
         metavar="USD",
-        help=f"spending reminder for the whole ask, all agents together (default {DEFAULT_BUDGET_USD:g})",
+        help="spending reminder for the whole ask, all agents together (default: from `opsquire init --budget`)",
     )
     ak.add_argument("--strict-budget", action="store_true", help="make --budget a hard cap instead of a reminder")
     ak.set_defaults(fn=cmd_ask)
@@ -665,6 +698,12 @@ def parser() -> argparse.ArgumentParser:
     ct = sub.add_parser("contract", help="print the agent contract (packaged AGENTS.md + the home's LOCAL.md)")
     ct.add_argument("--write", action="store_true", help="write it to the home as AGENTS.md and CLAUDE.md")
     ct.set_defaults(fn=cmd_contract)
+
+    ini = sub.add_parser("init", help="set up a machine: home, local rules, config, credentials, skill, first task")
+    ini.add_argument("path", nargs="?", help="the home to use (default: the configured or default home)")
+    ini.add_argument("--budget", type=float, metavar="USD", help="spending reminder per `opsquire ask`")
+    ini.add_argument("--dry-run", action="store_true")
+    ini.set_defaults(fn=cmd_init)
 
     ig = sub.add_parser(
         "integrate", help="install the opsquire skill for Claude agents; make the home a local-only git repo"

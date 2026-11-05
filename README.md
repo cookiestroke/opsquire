@@ -16,9 +16,15 @@ From the latest release (a wheel attached to the GitHub release; the repo is pri
 ```
 gh release download --repo cookiestroke/opsquire --pattern '*.whl' --dir /tmp/opsquire
 pip install /tmp/opsquire/*.whl          # or: uv tool install /tmp/opsquire/*.whl
-opsquire --version
-opsquire home ~/ops-home                 # where tasks and run records live
+opsquire init ~/ops-home --budget 15     # one command: home, local rules, config, credentials, skill, first task
+opsquire run <the first task it printed>
 ```
+
+`opsquire init` is safe to run again: it never overwrites what exists, and it reports every step. It writes
+`LOCAL.md` in the home from a template: edit it, it is where this home's rules live (who the operator is, what
+counts as a task here, areas, credentials, tools). Credentials go in `~/.creds` (or `$OPSQUIRE_CREDS`) as JSON;
+tasks declare what they need by key and get it as environment variables, and the runner redacts the values from
+every record. Agents never read the file.
 
 From a checkout, for development:
 
@@ -38,7 +44,9 @@ opsquire last                      what just happened
 opsquire runs --status failed      what went wrong, across everything
 opsquire log <task>                full output of the latest run
 opsquire wait <task>               (for agents) block until your next run of a task finishes
+opsquire handover <task> [--apply] --why "..."   (for agents) put a run of an existing task in the inbox, with the reason
 opsquire locks / unlock <target>
+opsquire ui --open                 the console: the inbox of runs waiting on you, threads, runs, locks
 opsquire integrate                 install the opsquire skill for Claude agents; make the home a local git repo
 opsquire ask --no-split "<...>"    one agent only (asks split into parallel pieces by default)
 opsquire ask --max-agents 2 ...    at most 2 agents at once; --budget 20 [--strict-budget] for the spend

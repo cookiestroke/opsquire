@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import homegit, repos
+from . import handover, homegit, repos
 from .ask import (
     PIECE,
     RESOLVE,
@@ -399,6 +399,8 @@ def finish(fan: Fanout, res: AskResult, pieces: list[Piece], started: dt.datetim
     if plan:
         res.actions += [("RUN", cmd) for cmd in run_lines(plan)]
     status = "interrupted" if not ok else "waiting" if res.waiting else "ok" if res.exit_code == 0 else "failed"
+    if status == "ok":
+        handover.record_run_lines(res.actions, fan.whole, f"ask {res.ask_id}")
     save_record(
         {
             "ask_id": res.ask_id,
