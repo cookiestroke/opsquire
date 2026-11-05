@@ -193,6 +193,12 @@ svg.flow, svg.map { display: block; overflow: visible; }
 .map .today { fill: var(--accent-bg); opacity: .55; }
 .map .wk { fill: var(--grey-bg); opacity: .45; }
 .map text { font-size: 11px; fill: var(--fg); }
+.map .grid.strong { stroke: var(--line); }
+.map .ax { fill: var(--muted); font-size: 10px; }
+.map .ax.strong { fill: var(--fg); }
+.map .ax.now { fill: var(--accent); }
+.map .nowline { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.map .blk.side { fill: var(--muted); }
 .map text.lbl { fill: var(--muted); font-size: 11px; }
 .map text.ax { fill: var(--muted); font-size: 10.5px; }
 .map text.blk { font-size: 10.5px; pointer-events: none; }
@@ -472,29 +478,6 @@ function flowLayout(ids, edges, g) {
 }
 /* map: day columns (UTC) and task buckets per area lane */
 function dayKey(iso) { const t = parseTime(iso); if (t === null) return null; const d = new Date(t); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; }
-function dayColumns(nowMs, days) {
-  const out = [], start = Math.floor(nowMs / 86400000) * 86400000 - (days - 1) * 86400000;
-  for (let i = 0; i < days; i++) out.push(dayKey(new Date(start + i * 86400000).toISOString()));
-  return out;
-}
-function mapBuckets(tasks, columns) {
-  const colIdx = new Map(columns.map((c, i) => [c, i]));
-  const lanes = new Map(); let outside = 0;
-  for (const t of tasks) {
-    const k = dayKey(t.created);
-    if (k === null || !colIdx.has(k)) { outside++; continue; }
-    const area = t.area || '(no area)';
-    if (!lanes.has(area)) lanes.set(area, new Map());
-    const m = lanes.get(area), c = colIdx.get(k);
-    if (!m.has(c)) m.set(c, []);
-    m.get(c).push(t.id);
-  }
-  const out = [...lanes.keys()].sort().map(area => {
-    const cells = [...lanes.get(area).entries()].map(([col, ids]) => ({ col, ids: ids.slice().sort() })).sort((a, b) => a.col - b.col);
-    return { area, cells, depth: Math.max(...cells.map(c => c.ids.length)) };
-  });
-  return { lanes: out, outside };
-}
 const LEGEND = { good: 'done', neutral: 'ready', grey: 'draft / retired', bad: 'failed', warn: 'partial' };
 function nextMode(t) { return t.changes_prod ? 'dry' : 'read'; }
 function runCommand(id, mode) { return `opsquire run ${id}${mode === 'apply' ? ' --apply' : mode === 'verify' ? ' --verify' : ''}`; }
@@ -694,7 +677,7 @@ async function api(path, opts) {
 }
 function post(path, body) { return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
 /* ---- state ---- */
-const S = { data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, mapDays: 14,
+const S = { data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, map: { hours: 48, end: null },
   dev: false, details: new Set(), judging: new Map(), judgeText: new Map(), decideAll: null };
 const task = id => (S.data && S.data.tasks && S.data.tasks[id]) || null;
 const run = id => (S.data && S.data.runs && S.data.runs[id]) || null;
@@ -1192,59 +1175,124 @@ function flowSvg(ids, mini) {
   return root;
 }
 /* map: areas x days */
+const MAP_WINDOWS = [[6, '6 hours'], [24, '1 day'], [48, '2 days'], [168, '7 days'], [336, '14 days'], [720, '30 days']];
+/* the map: one lane per story (thread), every task a bar from its creation to its last run, with a dot per run.
+   The window slides: hours or days, back and forward in steps of one window. */
+function taskSpan(t) {
+  const t0 = parseTime(t.created); if (t0 === null) return null;
+  let t1 = t0, runs = [];
+  for (const id of t.runs || []) {
+    const r = run(id); if (!r) continue;
+    const a = parseTime(r.started), b = parseTime(r.ended) || a;
+    if (a === null) continue;
+    runs.push({ at: a, tone: tone(r.status), title: `${r.mode} ${r.status || '?'} ${utc(r.started)}` });
+    if (b > t1) t1 = b;
+  }
+  if (t.outcome && parseTime(t.outcome.closed) > t1) t1 = parseTime(t.outcome.closed);
+  return { t0, t1, runs };
+}
+/* rows inside a lane: a bar and its label (inside, to the right, or to the left when the right edge is near) take one
+   slot; the next bar whose slot starts after that one ends shares the row */
+function placeLabel(it, totalW) {
+  const name = shortName(it.id), fits = Math.floor((it.x1 - it.x0 - 8) / 6.1);
+  if (fits >= 6) { it.label = { text: truncate(name, fits), side: 'in' }; it.px0 = it.x0; it.px1 = it.x1; return; }
+  const text = truncate(name, 28), w = text.length * 6.1 + 10;
+  if (it.x1 + w <= totalW) { it.label = { text, side: 'right' }; it.px0 = it.x0; it.px1 = it.x1 + w; }
+  else { it.label = { text, side: 'left' }; it.px0 = it.x0 - w; it.px1 = it.x1; }
+}
+function packRows(items) {
+  const rows = [];
+  for (const it of items) {
+    let r = rows.findIndex(end => end <= it.px0);
+    if (r < 0) { r = rows.length; rows.push(0); }
+    rows[r] = it.px1 + 6; it.row = r;
+  }
+  return rows.length;
+}
+function mapTicks(start, end, plotW) {
+  const span = end - start, hourly = span <= 48 * 3600e3, step = hourly ? (span <= 6 * 3600e3 ? 1 : span <= 24 * 3600e3 ? 2 : 6) * 3600e3 : 86400e3;
+  const ticks = [];
+  for (let t = Math.ceil(start / step) * step; t <= end; t += step) {
+    const d = new Date(t), dayStart = d.getUTCHours() === 0 && d.getUTCMinutes() === 0;
+    const label = hourly ? (dayStart ? `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` : `${pad(d.getUTCHours())}:00`) : `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    ticks.push({ t, label, strong: dayStart || !hourly, weekend: !hourly && (d.getUTCDay() === 0 || d.getUTCDay() === 6) });
+  }
+  return { ticks, step };
+}
 function renderMap() {
-  const q = S.q;
+  const q = S.q, now = Date.now(), W = S.map;
+  const end = Math.min(W.end || now, now), start = end - W.hours * 3600e3;
   const all = Object.values(S.data.tasks || {}).filter(t => t.kind !== 'general' && (!q || taskMatches(t, q)));
-  const now = Date.now(), cols = dayColumns(now, S.mapDays), B = mapBuckets(all, cols);
+  const spans = new Map(); let outside = 0;
+  for (const t of all) {
+    const sp = taskSpan(t); if (!sp) continue;
+    if (sp.t1 < start || sp.t0 > end) { outside++; continue; }
+    spans.set(t.id, sp);
+  }
+  const setWin = (hours, endMs) => { S.map = { hours, end: endMs }; render(); };
   const ctl = el('div', { class: 'line', style: 'margin-bottom:6px' },
-    el('span', { class: 'muted' }, 'last'),
-    el('select', { 'aria-label': 'days shown', onchange: e => { S.mapDays = Number(e.target.value); render(); } },
-      [14, 30, 60, 90].map(d => el('option', { value: d, selected: S.mapDays === d }, `${d} days`))),
-    B.outside ? el('span', { class: 'muted small' }, `${plural(B.outside, 'task')} outside this range`) : null,
+    el('span', { class: 'muted' }, 'window'),
+    el('select', { 'aria-label': 'window', onchange: e => setWin(Number(e.target.value), W.end) },
+      MAP_WINDOWS.map(([h, label]) => el('option', { value: h, selected: W.hours === h }, label))),
+    btn('◀', () => setWin(W.hours, end - W.hours * 3600e3), 'sm', { title: 'earlier: slide the window back' }),
+    btn('▶', () => setWin(W.hours, Math.min(now, end + W.hours * 3600e3)), 'sm', { title: 'later: slide the window forward', disabled: !W.end }),
+    W.end ? btn('now', () => setWin(W.hours, null), 'sm', { title: 'back to the window ending now' }) : null,
+    el('span', { class: 'muted small' }, `${utc(new Date(start).toISOString()).slice(0, 16)} to ${W.end ? utc(new Date(end).toISOString()).slice(0, 16) : 'now'} (UTC)`),
+    outside ? el('span', { class: 'muted small' }, `${plural(outside, 'task')} outside this window`) : null,
     el('span', { class: 'grow' }),
     el('span', { class: 'legend' }, Object.entries(LEGEND).map(([k, label]) => el('span', {}, el('i', { class: k }), label)),
       el('span', {}, el('i', { class: 'dot good' }), el('i', { class: 'dot bad' }), el('i', { class: 'dot warn' }), el('i', { class: 'dot grey' }), 'runs')));
-  if (!B.lanes.length) return el('div', {}, ctl, empty(all.length ? 'No task created in this range.' : q ? `Nothing matches "${S.q}".` : 'No tasks yet.'));
-  const main = $('#main'), avail = Math.max(320, (main ? main.clientWidth : 900) - 32);
-  const lblW = 112, colW = Math.max(92, Math.floor((avail - lblW) / cols.length)), axH = 22, pitch = 42, boxH = 24, boxW = colW - 10;
+  const caption = el('div', { class: 'muted small', style: 'margin-bottom:8px' },
+    'One lane per story. A bar runs from a task\'s creation to its last run; each dot is a run. Click a bar to open the task.');
+  if (!spans.size) return el('div', {}, ctl, caption, empty(all.length ? 'Nothing happened in this window.' : q ? `Nothing matches "${S.q}".` : 'No tasks yet.'));
+  const main = $('#main'), avail = Math.max(360, (main ? main.clientWidth : 900) - 32);
+  const lblW = 170, plotW = avail - lblW, axH = 24, pitch = 28, barH = 18;
+  const x = t => lblW + Math.max(0, Math.min(1, (t - start) / (end - start))) * plotW;
+  const laneMap = new Map();
+  for (const [id, sp] of spans) {
+    const t = task(id), key = t.thread || id;
+    if (!laneMap.has(key)) laneMap.set(key, { key, title: threadTitle(key, t), items: [], last: 0 });
+    const lane = laneMap.get(key);
+    lane.items.push({ id, sp, x0: x(sp.t0), x1: Math.max(x(sp.t0) + 8, x(sp.t1)) });
+    lane.last = Math.max(lane.last, sp.t1);
+  }
+  const lanes = [...laneMap.values()].sort((a, b) => b.last - a.last), TW = lblW + plotW;
   let y = axH;
-  const lanesY = B.lanes.map(l => { const top = y; y += Math.max(1, l.depth) * pitch + 8; return top; });
-  const H = y, W = lblW + colW * cols.length;
-  const root = svg('svg', { class: 'map', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'tasks by area and day' });
-  const today = dayKey(new Date(now).toISOString());
-  B.lanes.forEach((l, i) => root.append(svg('rect', { class: `lane ${i % 2 ? 'alt' : ''}`, x: 0, y: lanesY[i], width: W, height: (i + 1 < lanesY.length ? lanesY[i + 1] : H) - lanesY[i] })));
-  cols.forEach((c, i) => {
-    const x = lblW + i * colW, wd = new Date(Date.parse(c + 'T00:00:00Z')).getUTCDay();
-    if (c === today) root.append(svg('rect', { class: 'today', x, y: 0, width: colW, height: H }));
-    else if (wd === 0 || wd === 6) root.append(svg('rect', { class: 'wk', x, y: axH, width: colW, height: H - axH }));
-    root.append(svg('line', { class: 'grid', x1: x, y1: 0, x2: x, y2: H }));
-    root.append(svg('text', { class: 'ax', x: x + colW / 2, y: 14, 'text-anchor': 'middle' }, c.slice(5) + (c === today ? ' today' : '')));
+  const lanesY = lanes.map(l => {
+    l.items.forEach(it => placeLabel(it, TW));
+    l.items.sort((a, b) => a.px0 - b.px0 || a.id.localeCompare(b.id));
+    const top = y; y += packRows(l.items) * pitch + 10; return top;
   });
-  B.lanes.forEach((l, i) => root.append(svg('line', { class: 'grid', x1: 0, y1: lanesY[i], x2: W, y2: lanesY[i] }),
-    svg('text', { class: 'lbl', x: 8, y: lanesY[i] + 16 }, truncate(l.area, 16), svg('title', {}, l.area))));
-  const center = new Map();
-  B.lanes.forEach((l, i) => l.cells.forEach(cell => cell.ids.forEach((id, k) => {
-    center.set(id, { x: lblW + cell.col * colW + 5, y: lanesY[i] + 6 + k * pitch });
-  })));
-  const byThread = new Map();
-  for (const t of all) { if (t.thread && center.has(t.id)) { if (!byThread.has(t.thread)) byThread.set(t.thread, []); byThread.get(t.thread).push(t.id); } }
-  for (const [th, ids] of byThread) {
-    if (ids.length < 2) continue;
-    ids.sort();
-    const pts = ids.map(id => { const p = center.get(id); return `${p.x + boxW / 2},${p.y + boxH / 2}`; }).join(' ');
-    root.append(svg('polyline', { class: 'tline', points: pts }, svg('title', {}, `thread ${th}`)));
+  const H = y;
+  const root = svg('svg', { class: 'map', width: TW, height: H, viewBox: `0 0 ${TW} ${H}`, role: 'img', 'aria-label': 'tasks by story over time' });
+  lanes.forEach((l, i) => root.append(svg('rect', { class: `lane ${i % 2 ? 'alt' : ''}`, x: 0, y: lanesY[i], width: TW, height: (i + 1 < lanesY.length ? lanesY[i + 1] : H) - lanesY[i] })));
+  const { ticks, step } = mapTicks(start, end, plotW);
+  for (const tk of ticks) {
+    const tx = x(tk.t), nearNow = !W.end && x(now) - tx < 34;
+    if (tk.weekend) root.append(svg('rect', { class: 'wk', x: tx, y: axH, width: Math.min(plotW + lblW - tx, step / (end - start) * plotW), height: H - axH }));
+    root.append(svg('line', { class: `grid ${tk.strong ? 'strong' : ''}`, x1: tx, y1: 0, x2: tx, y2: H }));
+    if (!nearNow) root.append(svg('text', { class: `ax ${tk.strong ? 'strong' : ''}`, x: tx + 3, y: 15 }, tk.label));
   }
-  const sel = selectedTask(), maxChars = Math.max(6, Math.floor((boxW - 8) / 6.1));
-  for (const [id, p] of center) {
-    const t = task(id), st = tone(t.status);
-    root.append(svg('rect', { class: `box st-${st} ${sel === id ? 'sel' : ''}`, x: p.x, y: p.y, width: boxW, height: boxH, rx: 4, tabindex: '0', role: 'button',
-      onclick: () => selectTask(id), onkeydown: e => { if (e.key === 'Enter') selectTask(id); } },
-      svg('title', {}, `${id}\n${t.status || '?'}${t.purpose ? '\n' + truncate(t.purpose, 140) : ''}`)));
-    root.append(svg('text', { class: `blk st-${st}`, x: p.x + 5, y: p.y + 16 }, truncate(shortName(id), maxChars)));
-    const dots = runDots(t, Math.floor(boxW / 8));
-    dots.forEach((dt, k) => root.append(svg('circle', { class: `dot ${dt.tone}`, cx: p.x + 5 + k * 8, cy: p.y + boxH + 6, r: 3 }, svg('title', {}, dt.title))));
-  }
-  return el('div', {}, ctl, el('div', { class: 'block scroll', style: 'padding:0' }, root));
+  if (!W.end) root.append(svg('line', { class: 'nowline', x1: x(now), y1: 0, x2: x(now), y2: H }), svg('text', { class: 'ax now', x: x(now) - 3, y: 15, 'text-anchor': 'end' }, 'now'));
+  lanes.forEach((l, i) => root.append(svg('line', { class: 'grid', x1: 0, y1: lanesY[i], x2: TW, y2: lanesY[i] }),
+    svg('text', { class: 'lbl', x: 8, y: lanesY[i] + 18 }, truncate(l.title, 26), svg('title', {}, l.title))));
+  const sel = selectedTask();
+  lanes.forEach((l, i) => l.items.forEach(it => {
+    const t = task(it.id), st = tone(t.status), by = lanesY[i] + 6 + it.row * pitch, bw = it.x1 - it.x0;
+    root.append(svg('rect', { class: `box st-${st} ${sel === it.id ? 'sel' : ''}`, x: it.x0, y: by, width: bw, height: barH, rx: 4, tabindex: '0', role: 'button',
+      onclick: () => selectTask(it.id), onkeydown: e => { if (e.key === 'Enter') selectTask(it.id); } },
+      svg('title', {}, `${it.id}\n${t.status || '?'}${t.purpose ? '\n' + truncate(t.purpose, 140) : ''}\n${plural(it.sp.runs.length, 'run')}`)));
+    const lb = it.label;
+    if (lb.side === 'in') root.append(svg('text', { class: `blk st-${st}`, x: it.x0 + 5, y: by + 13 }, lb.text));
+    else if (lb.side === 'right') root.append(svg('text', { class: 'blk side', x: it.x1 + 5, y: by + 13 }, lb.text));
+    else root.append(svg('text', { class: 'blk side', x: it.x0 - 5, y: by + 13, 'text-anchor': 'end' }, lb.text));
+    it.sp.runs.forEach(r => root.append(svg('circle', { class: `dot ${r.tone}`, cx: x(r.at), cy: by + barH + 5, r: 3 }, svg('title', {}, r.title))));
+  }));
+  return el('div', {}, ctl, caption, el('div', { class: 'block scroll', style: 'padding:0' }, root));
+}
+function threadTitle(key, t) {
+  const th = (S.data.threads || []).find(x => x.id === key);
+  return th ? th.title : `${shortName(t.id)} (${t.area || areaOf(t.id)})`;
 }
 /* targets */
 function renderTargets() {
