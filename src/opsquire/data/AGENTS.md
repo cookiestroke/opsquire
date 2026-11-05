@@ -58,6 +58,10 @@ opsquire wait <task> [--timeout s]   block until the operator's next run of <tas
 opsquire handover <task> [--apply|--verify] [--why "..."] [-- args]
                                      recommend a run of an existing task: in the inbox with your reason until it runs
 opsquire threads [--json]            tasks grouped into threads (the stories they belong to), with suggestions
+opsquire milestones [--since 2h|HH:MM|date] [--thread x] [--kind done,failed,result] [--json]
+                                     what others would want to know: changing tasks closed, applies or verifies that
+                                     failed, thread results; never dry/read runs, lint or asks. Read it before any
+                                     handover or post; posting itself happens outside opsquire, with the operator's OK.
 opsquire judge <task> [--json]       an agent reads the task's record and closes it (or says what is missing)
 opsquire locks
 opsquire ui [--port N] [--open]      the operator's console in the browser (localhost): the inbox of handed-over

@@ -21,6 +21,7 @@ from .homegit import commit_quietly
 from .integrate import integrate
 from .judge import judge
 from .lint import lint_task, save_lint
+from .milestones import KINDS, milestones, render, since_arg
 from .model import (
     DATA_DIR,
     GENERAL_ID_RE,
@@ -489,6 +490,20 @@ def cmd_piece(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_milestones(a: argparse.Namespace) -> int:
+    at = now()
+    kinds = tuple(k.strip() for k in a.kind.split(",")) if a.kind else KINDS
+    unknown = [k for k in kinds if k not in KINDS]
+    if unknown:
+        raise OpsquireError(f"--kind: unknown {', '.join(unknown)}; use {', '.join(KINDS)}")
+    items = milestones(since_arg(a.since, at), a.until, a.thread, kinds, at)
+    if a.json:
+        emit(items, True)
+    else:
+        print(render(items, at))
+    return 0
+
+
 def cmd_threads(a: argparse.Namespace) -> int:
     """The home as threads (the stories tasks belong to), with each task's status and suggestions."""
     s = state()
@@ -737,6 +752,17 @@ def parser() -> argparse.ArgumentParser:
     jg.add_argument("--agent", help="agent from retinue.json (default from retinue.json)")
     jg.add_argument("--json", action="store_true")
     jg.set_defaults(fn=cmd_judge)
+
+    ms = sub.add_parser(
+        "milestones",
+        help="what happened that others would want to know: changing tasks closed, applies that failed, thread results",
+    )
+    ms.add_argument("--since", help="date, ISO time, HH:MM (UTC today) or 2h/30m/1d; default: midnight UTC today")
+    ms.add_argument("--until", help="ISO prefix")
+    ms.add_argument("--thread", help="one thread only")
+    ms.add_argument("--kind", help="comma-separated: done, failed, result (default: all)")
+    ms.add_argument("--json", action="store_true")
+    ms.set_defaults(fn=cmd_milestones)
 
     th = sub.add_parser("threads", help="tasks grouped into the threads (stories) they belong to, with suggestions")
     th.add_argument("--json", action="store_true")

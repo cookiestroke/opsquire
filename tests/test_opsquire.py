@@ -1556,6 +1556,89 @@ class OpsTest(unittest.TestCase):
         inbox = json.loads(self.cli("threads", "--json").stdout)["inbox"]
         self.assertEqual([(i["task_id"], i["steps"]) for i in inbox], [(a.name, []), (b.name, [])])
 
+    def milestones(self, *args: str) -> list[dict[str, Any]]:
+        r = self.cli("milestones", "--since", "2020-01-01", "--json", *args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        items: list[dict[str, Any]] = json.loads(r.stdout)
+        return items
+
+    def test_milestones_report_closed_changing_tasks_failed_applies_and_thread_results(self) -> None:
+        self.new("peek", "print(1)\n")
+        good = self.new(
+            "flip", self.CONFIRM_BODY, "--changes-prod", "--rollback", "flip back", "--no-verify", "--thread", "story"
+        )
+        bad = self.new(
+            "boom",
+            "import sys\n\nsys.exit(1)\n",
+            "--changes-prod",
+            "--rollback",
+            "undo",
+            "--no-verify",
+            "--thread",
+            "story",
+        )
+        for name in ("peek", "flip", "boom"):
+            self.assertEqual(self.cli("lint", name).returncode, 0)
+        self.assertEqual(self.cli("run", "peek").returncode, 0)
+        self.assertEqual(self.cli("run", "flip").returncode, 0)
+        self.assertEqual(self.cli("run", "flip", "--apply", answers=[("[y/N]", "y")]).returncode, 0)
+        self.assertEqual(self.cli("run", "boom").returncode, 1)
+        self.assertNotEqual(self.cli("run", "boom", "--apply", answers=[("[y/N]", "y")]).returncode, 0)
+        (self.home / "threads").mkdir(exist_ok=True)
+        (self.home / "threads/story.md").write_text("# story\n\nFirst paragraph.\n\nFlip is live, boom is not.\n")
+        items = self.milestones()
+        self.assertEqual(
+            [(m["kind"], m["task_id"], m["thread"]) for m in items],
+            [("done", good.name, "story"), ("failed", bad.name, "story"), ("result", None, "story")],
+        )
+        done, failed, result = items
+        self.assertEqual((done["state"], done["by"]), ("done", "opsquire run (auto)"))
+        self.assertEqual(done["text"], "done")
+        self.assertEqual((failed["mode"], failed["state"], failed["failed_targets"]), ("apply", "failed", ["web1"]))
+        self.assertEqual(result["text"], "Flip is live, boom is not.")
+        self.assertEqual([m["kind"] for m in self.milestones("--kind", "failed,result")], ["failed", "result"])
+        self.assertEqual(self.milestones("--thread", "other"), [])
+        self.assertEqual(len(self.milestones("--thread", "story")), 3)
+        self.assertEqual(self.cli("milestones", "--since", "2999-01-01").stdout.strip(), "no milestones in that window")
+        text = self.cli("milestones", "--since", "2020-01-01").stdout
+        self.assertIn("story\n", text)
+        self.assertIn("apply failed   boom [web1]", text)
+        self.assertIn("done           flip [web1]: done", text)
+        self.assertIn("result         thread result [web1]: Flip is live, boom is not.", text)
+        self.assertEqual(self.cli("milestones", "--kind", "nope").returncode, 2)
+
+    def test_milestones_report_a_plan_once_and_never_a_dry_or_blocked_run(self) -> None:
+        a = self.new("stop", self.CONFIRM_BODY, "--changes-prod", "--rollback", "start", "--no-verify")
+        b = self.new("start", self.CONFIRM_BODY, "--changes-prod", "--rollback", "stop", "--no-verify")
+        plan = self.make_plan(a, b, name="cutover")
+        for name in ("stop", "start", "cutover"):
+            self.assertEqual(self.cli("lint", name).returncode, 0)
+        self.assertEqual(self.cli("run", "cutover").returncode, 0)
+        self.assertEqual(self.milestones(), [])
+        r = self.cli("run", "cutover", "--apply", answers=[("[y/N]", "y"), ("[y/N]", "y")])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        items = self.milestones()
+        self.assertEqual([(m["kind"], m["task_id"]) for m in items], [("done", plan.name)])
+        for step in (a, b):
+            self.assertTrue(json.loads(self.cli("show", step.name, "--json").stdout)["meta"]["outcome"])
+
+    def test_milestones_since_accepts_durations_clock_times_and_dates(self) -> None:
+        sys.path.insert(0, str(ROOT / "src"))
+        import datetime as dt
+
+        from opsquire.milestones import since_arg
+        from opsquire.model import OpsquireError
+
+        at = dt.datetime(2026, 11, 5, 18, 30, tzinfo=dt.timezone.utc)
+        self.assertEqual(since_arg(None, at), "2026-11-05T00:00")
+        self.assertEqual(since_arg("2h", at), "2026-11-05T16:30:00.000Z")
+        self.assertEqual(since_arg("30m", at), "2026-11-05T18:00:00.000Z")
+        self.assertEqual(since_arg("1d", at), "2026-11-04T18:30:00.000Z")
+        self.assertEqual(since_arg("9:05", at), "2026-11-05T09:05")
+        self.assertEqual(since_arg("2026-11-01", at), "2026-11-01")
+        with self.assertRaises(OpsquireError):
+            since_arg("yesterday", at)
+
     def test_handover_puts_a_reused_task_in_the_inbox_until_it_runs(self) -> None:
         folder = self.new("count", "print(1)\n")
         self.assertEqual(self.cli("lint", "count").returncode, 0)
