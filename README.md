@@ -107,3 +107,7 @@ The [release workflow](.github/workflows/release.yml) runs the full CI on `main`
 `pyproject.toml` with a signed `release: vX.Y.Z` commit, tags it, builds the sdist and wheel from the tag, and
 publishes a GitHub release whose notes list the commits since the previous release grouped by area, with the
 wheel attached. `opsquire --version` shows the installed version. Nothing is published outside GitHub.
+
+## License
+
+[Apache-2.0](LICENSE).
