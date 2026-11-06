@@ -330,7 +330,7 @@ opsquire piece ls                                          open and parked piece
 worktree load this contract when they need tooling, and makes the home a local-only git repository (it refuses one
 with a remote). Opsquire commits in it by itself: when `opsquire lint` passes (the ready version), before every
 `opsquire run`, at the end of an ask, as a snapshot before a parallel ask or a chat piece, and when a piece lands. These commits
-use the operator's name and email but are never signed (the repository cannot leave the machine, so a signature
+use the operator's name and email (a placeholder when git has none) but are never signed (the repository cannot leave the machine, so a signature
 proves nothing and would ask for a passphrase before every run); a commit that cannot be made is skipped with a note
 and picked up by the next one.
 

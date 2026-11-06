@@ -15,12 +15,14 @@ From the latest release (a wheel attached to the GitHub release; the repo is pri
 
 ```
 gh release download --repo cookiestroke/opsquire --pattern '*.whl' --dir /tmp/opsquire
-pip install /tmp/opsquire/*.whl          # or: uv tool install /tmp/opsquire/*.whl
+pip install /tmp/opsquire/*.whl ruff mypy   # or: uv tool install --with ruff --with mypy /tmp/opsquire/*.whl
 opsquire init ~/ops-home --budget 15     # one command: home, local rules, config, credentials, skill, first task
 opsquire run <the first task it printed>
 ```
 
-`opsquire init` is safe to run again: it never overwrites what exists, and it reports every step. It writes
+`ruff` and `mypy` are the lint gate every Python task must pass before it runs (`shellcheck` for shell tasks), so a
+home without them can run nothing. `opsquire init` is safe to run again: it never overwrites what exists, and it
+reports every step, including any tool that is missing. It writes
 `LOCAL.md` in the home from a template: edit it, it is where this home's rules live (who the operator is, what
 counts as a task here, areas, credentials, tools). Credentials go in `~/.creds` (or `$OPSQUIRE_CREDS`) as JSON;
 tasks declare what they need by key and get it as environment variables, and the runner redacts the values from

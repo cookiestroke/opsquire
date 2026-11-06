@@ -1839,6 +1839,71 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(ask.returncode, 0, ask.stdout + ask.stderr)
         self.assertIn('"--max-budget-usd", "5.00"', ask.stdout)
 
+    def test_init_on_a_machine_with_no_git_identity_or_lint_tools(self) -> None:
+        venv = self.tmp / "venv"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True)
+        cli = [str(venv / "bin/python"), "-m", "opsquire"]
+        tools = self.tmp / "tools"
+        tools.mkdir()
+        (tools / "git").symlink_to(shutil.which("git") or "git")
+        gitconfig = self.tmp / "gitconfig"
+        gitconfig.write_text("[user]\n\tuseConfigOnly = true\n")
+        env = {
+            "PATH": str(tools),
+            "HOME": str(self.tmp / "user"),
+            "CLAUDE_CONFIG_DIR": str(self.tmp / "claude"),
+            "XDG_CONFIG_HOME": str(self.tmp / "cfg"),
+            "PYTHONUSERBASE": str(self.tmp / "no-user-packages"),
+            "PYTHONPATH": str(ROOT / "src"),
+            "GIT_CONFIG_GLOBAL": str(gitconfig),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "OPSQUIRE_CREDS": str(self.tmp / "fresh-creds.json"),
+            "TMPDIR": str(self.tmp),
+        }
+
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run([*cli, *args], env=env, capture_output=True, text=True, timeout=120)
+
+        home = self.tmp / "fresh-home"
+        r = run("init", str(home))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("tool ruff: MISSING", r.stdout)
+        self.assertIn("home repo: initialized", r.stdout)
+        self.assertIn("next: install what is MISSING above", r.stdout)
+        self.assertNotIn("next: run the first task", r.stdout)
+        authors = subprocess.run(
+            ["git", "-C", str(home), "log", "--format=%an <%ae>"], capture_output=True, text=True, check=True
+        )
+        self.assertEqual(set(authors.stdout.split("\n")) - {""}, {"opsquire <opsquire@localhost>"})
+        demo = re.search(r"first task: created \((\S+)\) but its lint did not pass", r.stdout)
+        assert demo
+        again = run("init")
+        self.assertIn(f"first task: present ({demo.group(1)}) but its lint did not pass", again.stdout)
+        self.assertNotIn("next: run the first task", again.stdout)
+        blocked = run("run", demo.group(1))
+        self.assertEqual(blocked.returncode, 2, blocked.stdout + blocked.stderr)
+        self.assertIn("ruff and mypy must be installed", blocked.stdout + blocked.stderr)
+
+        for tool in ("ruff", "mypy"):
+            found = shutil.which(tool, path=f"{Path(sys.executable).parent}:{Path.home() / '.local/bin'}")
+            assert found, tool
+            (tools / tool).symlink_to(found)
+        env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))
+        ready = run("init")
+        self.assertIn(f"first task: present ({demo.group(1)}); run it", ready.stdout)
+        self.assertIn("next: run the first task", ready.stdout)
+        ran = run("run", demo.group(1))
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn("hello from demo", ran.stdout)
+
+        (tools / "git").unlink()
+        other = self.tmp / "home-without-git"
+        no_git = run("init", str(other))
+        self.assertEqual(no_git.returncode, 0, no_git.stdout + no_git.stderr)
+        self.assertIn("tool git: MISSING", no_git.stdout)
+        self.assertIn("home repo: skipped, git is not installed", no_git.stdout)
+        self.assertIn("contract: written", no_git.stdout)
+
     def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
         self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
         self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))

@@ -53,6 +53,7 @@ if __name__ == "__main__":
     sq.run(main)
 '''
 TOOLS = (
+    ("git", "the home's history and parallel asks (apt install git)"),
     ("ruff", "lint gate (pip install ruff)"),
     ("mypy", "lint gate (pip install mypy)"),
     ("shellcheck", "lint gate for shell tasks (apt install shellcheck)"),
@@ -112,7 +113,14 @@ def init(path: str | None, budget: float | None, dry: bool) -> list[str]:
         write_text(home / "AGENTS.md", contract_text())
         write_text(home / "CLAUDE.md", "@AGENTS.md\n")
         lines.append(f"contract: written ({home / 'AGENTS.md'})")
-    lines += demo_task(home, dry)
+    first, ready = demo_task(home, dry)
+    lines.append(first)
+    if not dry:
+        lines.append(
+            '\nnext: run the first task; then `opsquire ui --open` for the console, or `opsquire ask "<what you want>"`'
+            if ready
+            else "\nnext: install what is MISSING above, then run the first task"
+        )
     return lines
 
 
@@ -144,16 +152,20 @@ def leaves(node: Any) -> list[Any]:
     return [node]
 
 
-def demo_task(home: Path, dry: bool) -> list[str]:
+def demo_task(home: Path, dry: bool) -> tuple[str, bool]:
+    """The line about the first task, and whether it can run now."""
     existing = [f for f in all_task_folders() if f.name.endswith(f"_{DEMO_NAME}")]
     if existing:
-        return [f"first task: present ({existing[0].name}); run it: opsquire run {existing[0].name}"]
+        name = existing[0].name
+        if lint_task(load_task(existing[0])).ok:
+            return f"first task: present ({name}); run it: opsquire run {name}", True
+        return f"first task: present ({name}) but its lint did not pass; {after_tools(name)}", False
     t = now()
     name = f"{t:%Y%m%d-%H%M}_{DEMO_NAME}"
     assert TASK_ID_RE.match(name)
     folder = home / "tasks" / f"{t:%Y-%m}" / name
     if dry:
-        return [f"first task: would be created ({name})"]
+        return f"first task: would be created ({name})", True
     from .cli import build_task
 
     args = argparse.Namespace(
@@ -186,7 +198,9 @@ def demo_task(home: Path, dry: bool) -> list[str]:
     result = lint_task(task)
     save_lint(task, result)
     if result.ok:
-        return [f"first task: created and ready ({name}); run it: opsquire run {name}"]
-    return [
-        f"first task: created ({name}) but its lint did not pass; install the missing tools, then: opsquire lint {name}"
-    ]
+        return f"first task: created and ready ({name}); run it: opsquire run {name}", True
+    return f"first task: created ({name}) but its lint did not pass; {after_tools(name)}", False
+
+
+def after_tools(name: str) -> str:
+    return f"install the missing tools, then: opsquire lint {name}"

@@ -376,10 +376,6 @@ def cmd_wait(a: argparse.Namespace) -> int:
 def cmd_init(a: argparse.Namespace) -> int:
     for line in init(a.path, a.budget, a.dry_run):
         print(line)
-    if not a.dry_run:
-        print(
-            '\nnext: run the first task; then `opsquire ui --open` for the console, or `opsquire ask "<what you want>"`'
-        )
     return 0
 
 

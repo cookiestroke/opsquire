@@ -2,7 +2,8 @@
 before a parallel ask, and gives each parallel piece its own worktree and branch that merge back when done.
 
 Home commits and merges are never signed, whatever the operator's git config says: the repository cannot have a
-remote, so a signature would prove nothing to anyone, and signing would ask for a passphrase before every run."""
+remote, so a signature would prove nothing to anyone, and signing would ask for a passphrase before every run. They
+use the operator's git identity, or a placeholder when git has none, so a fresh machine is never stopped by it."""
 
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ __pycache__/
 WORKTREES = ".worktrees"
 REPO_COPIES = ".repos"
 EXCLUDE_LOCK = threading.Lock()
+PLACEHOLDER_IDENTITY = ("-c", "user.name=opsquire", "-c", "user.email=opsquire@localhost")
 
 
 class GitError(OpsquireError):
@@ -46,10 +48,19 @@ def git(home: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     exe = shutil.which("git")
     if not exe:
         raise GitError("git is not installed")
-    r = subprocess.run([exe, "-C", str(home), "-c", "commit.gpgsign=false", *args], capture_output=True, text=True)
+    base = [exe, "-C", str(home), "-c", "commit.gpgsign=false"]
+    if args[0] in ("commit", "merge") and not has_identity(base):
+        base += PLACEHOLDER_IDENTITY
+    r = subprocess.run([*base, *args], capture_output=True, text=True)
     if check and r.returncode != 0:
         raise GitError(f"git {' '.join(args[:2])} failed: {(r.stderr or r.stdout).strip()[:400]}")
     return r
+
+
+def has_identity(base: list[str]) -> bool:
+    """Whether git would accept a commit's author and committer here, by whatever means it finds them."""
+    idents = ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT")
+    return all(subprocess.run([*base, "var", i], capture_output=True).returncode == 0 for i in idents)
 
 
 def is_repo(home: Path) -> bool:
@@ -64,6 +75,8 @@ def remotes(home: Path) -> list[str]:
 
 def ensure_repo(home: Path, dry: bool) -> str:
     """Make the home a local-only git repository (init, .gitignore, first commit); refuse one with a remote."""
+    if not shutil.which("git"):
+        return "home repo: skipped, git is not installed; `opsquire integrate` makes it one once it is"
     if is_repo(home):
         found = remotes(home)
         if found:
