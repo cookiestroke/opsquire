@@ -65,11 +65,14 @@ opsquire milestones [--since 2h|HH:MM|date] [--thread x] [--kind done,failed,res
 opsquire judge <task> [--json]       an agent reads the task's record and closes it (or says what is missing)
 opsquire locks
 opsquire ui [--port N] [--open]      the operator's console in the browser (localhost): the inbox of handed-over
-                                     tasks, running them with their prompts, threads, targets, scripts, logs
+                                     tasks, running them with their prompts, threads, targets, scripts, logs; it keeps the
+                                     code it started with, and a banner on the page says to restart it when that is old
 ```
 
 `<task>` may be the full id or any unique part of it. To answer "did it work", read `run.json`:
 `status`, `targets`, `last_error`, `results` (and `usage`: peak memory and CPU time of the script). Read `output.log` only when you need detail.
+`origin` says where the run started: `console` (a job from `opsquire ui`) or `terminal` (any command line); records older
+than the field have none, which means unknown.
 
 ## Writing a task
 
@@ -171,9 +174,9 @@ like any task: `opsquire run <plan>` (every step in its dry/read mode), then `op
 ### What a script gets
 
 Environment: `OPSQUIRE_MODE` (`read`, `dry`, `apply` or `verify`), `OPSQUIRE_RUN_ID`, `OPSQUIRE_TASK_ID`,
-`OPSQUIRE_TARGETS` (space-separated), `OPSQUIRE_GENERAL`, `OPSQUIRE_HELPERS`, plus the declared
-credentials. Arguments after `--` in `opsquire run <task> -- ...` are passed through. A dry run must
-not change anything.
+`OPSQUIRE_TARGETS` (space-separated), `OPSQUIRE_GENERAL`, `OPSQUIRE_HELPERS`, `OPSQUIRE_ORIGIN` (`console` when the
+run was started from the UI, unset otherwise), plus the declared credentials. Arguments after `--` in
+`opsquire run <task> -- ...` are passed through. A dry run must not change anything.
 
 ### Structured events
 

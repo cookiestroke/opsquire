@@ -67,6 +67,7 @@ main#main { padding: 12px 16px 48px; min-width: 0; }
 @media (min-width: 1100px) {
   .app { grid-template-columns: minmax(0, 1fr) 40%; }
   header.top { flex-wrap: nowrap; height: var(--top); padding-block: 0; }
+  .stale { position: sticky; top: calc(var(--top) + env(safe-area-inset-top, 0px)); z-index: 4; }
   #pane { position: sticky; top: calc(var(--top) + env(safe-area-inset-top, 0px)); height: calc(100vh - var(--top) - env(safe-area-inset-top, 0px)); }
 }
 @media (max-width: 1099px) {
@@ -125,6 +126,8 @@ h3.sec .n { font-weight: 500; letter-spacing: 0; text-transform: none; color: va
 .note.good { border-color: var(--good); }
 .note.warn { border-color: var(--warn); }
 .note.bad { border-color: var(--bad); }
+.stale { background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 5px; padding: 8px 12px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; overflow-wrap: anywhere; }
+.stale b { color: var(--warn); }
 .cmds { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; align-items: flex-start; }
 .cmd { display: inline-flex; align-items: center; gap: 8px; background: var(--code-bg); border: 1px solid var(--line2); border-radius: 5px; padding: 3px 4px 3px 8px; max-width: 100%; }
 .cmd span { overflow-wrap: anywhere; }
@@ -748,7 +751,7 @@ function render() {
   const active = document.activeElement;
   const keep = active && active.id && (main.contains(active) || $('#pane').contains(active)) ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
   const views = { inbox: renderInbox, threads: renderThreads, map: renderMap, targets: renderTargets, scripts: renderScripts };
-  main.replaceChildren(renderLive(), (views[S.view] || renderInbox)());
+  main.replaceChildren(...[renderStale(), renderLive(), (views[S.view] || renderInbox)()].filter(Boolean));
   renderPane();
   if (keep) {
     const n = document.getElementById(keep.id);
@@ -760,6 +763,28 @@ function render() {
     if (node) { node.scrollIntoView({ block: 'start' }); return; }
   }
   window.scrollTo(0, y);
+}
+/* The server keeps the code it started with and this tab the page it loaded. A server with no status at all predates
+   the check, and is serving a newer page than itself. */
+function staleCopy() {
+  const c = S.data.code;
+  const command = `opsquire ui --port ${location.port}`;
+  const restart = { command, jobs: (S.data.jobs || []).filter(j => j.status !== 'done').length };
+  if (!c) return { ...restart, title: 'This console is running old code: it is older than this page.', detail: 'What it does may not match the current code until it is restarted.' };
+  if (c.stale) {
+    const names = c.changed.slice(0, 6).join(', ') + (c.changed.length > 6 ? ` and ${c.changed.length - 6} more` : '');
+    const what = [c.changed.length ? `changed since it started: ${names}` : null, c.installed !== c.version ? `installed ${c.installed}, running ${c.version}` : null].filter(Boolean).join('; ');
+    return { ...restart, title: 'This console is running old code.', detail: `On disk, ${what}. It keeps doing what the old code does until it is restarted.` };
+  }
+  if (S.pageCode && c.page !== S.pageCode) return { title: 'This page is out of date.', detail: 'The console has a newer version of it. Reload the page.' };
+  return null;
+}
+function renderStale() {
+  const s = staleCopy();
+  if (!s) return null;
+  return el('div', { class: 'stale', role: 'alert', id: 'stale' }, el('b', {}, s.title), el('span', {}, s.detail),
+    s.command ? el('span', { class: 'cmd' }, el('span', {}, s.command), btn('copy', () => copyText(s.command), 'sm', { title: 'copy to clipboard' })) : null,
+    s.jobs ? el('span', { class: 'small' }, `Stopping the console interrupts ${plural(s.jobs, 'job')} running from it: let ${s.jobs === 1 ? 'it' : 'them'} finish first.`) : null);
 }
 function renderSeg() {
   const n = inbox().length;
@@ -1488,6 +1513,7 @@ function renderTaskDetails(t, closable) {
   parts.push(runs.length ? el('div', { class: 'runs' }, runs.map(r => renderRun(r, t))) : el('div', { class: 'muted' }, 'Never run.'));
   return parts;
 }
+function originLabel(r) { return r.origin ? el('span', { class: 'faint small', title: 'where this run was started' }, `from the ${r.origin}`) : null; }
 function renderRun(r, t) {
   const targets = Object.entries(r.targets || {});
   const open = () => openLog(r.run_id, t ? { kind: 'task', id: t.id } : null);
@@ -1497,6 +1523,7 @@ function renderRun(r, t) {
     r.plan_run ? el('span', { class: 'muted small' }, 'step of plan run ', el('span', { class: 'id' }, r.plan_run)) : null,
     r.steps ? el('span', { class: 'muted small' }, plural(r.steps.length, 'step')) : null,
     r.user ? el('span', { class: 'faint small' }, r.user) : null,
+    originLabel(r),
     el('span', { class: 'grow' }), el('span', { class: 'id' }, r.run_id),
     targets.length ? el('span', { class: 'full line' }, targets.map(([n, st]) => el('span', { class: `pill ${tone(st)} mono` }, `${n} ${st || '?'}`))) : null,
     r.last_error ? el('span', { class: 'full err small' }, r.last_error) : null,
@@ -1548,7 +1575,7 @@ function buildLogPane(d) {
   d.built = true; d.start = null; d.offset = 0; d.first = true; d.loading = false; d.timer = null;
   d.pre = el('pre', {}); d.status = el('span', {});
   d.earlier = btn('load earlier', () => loadEarlier(d), 'sm', { hidden: true });
-  paneShell([el('span', { class: 'id' }, d.run), ' ', r ? [modeTag(r.mode), ' ', taskLink(r.task_id || '')] : null, ' ', d.status],
+  paneShell([el('span', { class: 'id' }, d.run), ' ', r ? [modeTag(r.mode), ' ', taskLink(r.task_id || ''), ' ', originLabel(r)] : null, ' ', d.status],
     el('div', {}, el('div', { class: 'line' }, d.earlier), d.pre), 'log', null, backTo(d));
   pollLog(d);
 }
@@ -1670,7 +1697,7 @@ async function load() {
   loading = true;
   try {
     const data = await api('/api/state');
-    if (data && typeof data === 'object') { S.data = data; S.error = null; }
+    if (data && typeof data === 'object') { S.data = data; S.error = null; S.pageCode = S.pageCode || (data.code && data.code.page); }
     retry = 2000;
     if (S.hash === null) applyHash(); else render();
   } catch (e) {

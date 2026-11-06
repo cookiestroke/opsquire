@@ -1417,6 +1417,167 @@ class OpsTest(unittest.TestCase):
             proc.send_signal(signal.SIGINT)
             self.assertEqual(proc.wait(timeout=15), 0)
 
+    def test_ui_says_when_its_code_is_older_than_what_is_on_disk(self) -> None:
+        import http.client
+
+        code = self.tmp / "code"
+        shutil.copytree(ROOT / "src/opsquire", code / "opsquire", ignore=shutil.ignore_patterns("__pycache__"))
+        self.env["PYTHONPATH"] = str(code)
+        jobs_py = code / "opsquire/jobs.py"
+        original = jobs_py.read_text()
+        port = free_port()
+
+        def start() -> subprocess.Popen[str]:
+            ui = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+            self.assertIn("opsquire ui", ui.stdout.readline() if ui.stdout else "")
+            return ui
+
+        def status() -> Any:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request("GET", "/api/state")
+            code_status = json.loads(conn.getresponse().read())["code"]
+            conn.close()
+            return code_status
+
+        proc = start()
+        try:
+            first = status()
+            self.assertEqual((first["stale"], first["changed"]), (False, []))
+
+            os.utime(jobs_py)
+            (code / "opsquire/data/templates/main.py").write_text("# read fresh by every run\n")
+            (code / "opsquire/data/helpers/opsquire_helpers.py").write_text("# read fresh by every run\n")
+            self.assertFalse(status()["stale"], "same modules, and files the console does not keep")
+
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+            conn.request("GET", "/api/stream")
+            stream = conn.getresponse()
+            self.assertEqual(stream.readline(), b"event: hello\n")
+            stream.readline(), stream.readline()
+            jobs_py.write_text(original + "\n# newer\n")
+            self.assertEqual(stream.readline(), b"event: change\n", "an open page hears about it by itself")
+            conn.close()
+            newer = status()
+            self.assertEqual((newer["stale"], newer["changed"]), (True, ["jobs.py"]))
+
+            page = code / "opsquire/data/ui.html"
+            page.write_text(page.read_text() + "\n")
+            (code / "opsquire/added.py").write_text("")
+            newer = status()
+            self.assertEqual(newer["changed"], ["added.py", "data/ui.html", "jobs.py"])
+            self.assertNotEqual(newer["page"], first["page"], "a tab can tell a reload would give it a newer page")
+
+            (code / "opsquire/added.py").unlink()
+            page.write_text(page.read_text()[:-1])
+            jobs_py.write_text(original)
+            back = status()
+            self.assertEqual((back["stale"], back["changed"]), (False, []), "back on the code it loaded")
+
+            jobs_py.write_text(original + "\n# newer\n")
+            self.assertTrue(status()["stale"])
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+        proc = start()
+        try:
+            self.assertEqual(status()["stale"], False, "a restart picks up the code on disk")
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+
+    def test_ui_code_status_sees_a_newer_install(self) -> None:
+        from opsquire import __version__, ui
+
+        loaded = ui.code_hashes()
+        self.assertIn("jobs.py", loaded)
+        self.assertIn("data/ui.html", loaded)
+        self.assertNotIn("data/templates/main.py", loaded)
+        with mock.patch("opsquire.ui.installed_version", return_value=__version__):
+            self.assertFalse(ui.code_status(loaded)["stale"])
+        with mock.patch("opsquire.ui.installed_version", return_value="99.0.0"):
+            newer = ui.code_status(loaded)
+        self.assertEqual((newer["stale"], newer["changed"], newer["installed"]), (True, [], "99.0.0"))
+        gone = ui.code_status({**loaded, "removed.py": "x"})
+        self.assertEqual((gone["stale"], gone["changed"]), (True, ["removed.py"]))
+
+    def test_ui_page_has_the_restart_banner(self) -> None:
+        from opsquire import ui
+
+        page = ui.page().decode()
+        self.assertIn("function renderStale()", page)
+        self.assertIn("renderStale(), renderLive()", page)
+        self.assertIn("opsquire ui --port ${location.port}", page)
+
+    def test_run_records_whether_the_console_or_a_terminal_started_it(self) -> None:
+        import http.client
+
+        tid = self.new("origin", "import opsquire_helpers as sq\n\nsq.result('ran')\n").name
+        self.assertEqual(self.cli("lint", tid).returncode, 0)
+        plan = self.cli("new", "web1", "both", "--plan", "--purpose", "p", "--step", tid)
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        plan_id = next(p.name for p in self.home.glob("tasks/*/*") if p.name.endswith("_both"))
+
+        self.assertEqual(self.cli("run", tid).returncode, 0)
+        self.assertEqual(self.last(tid)["origin"], "terminal")
+        self.assertEqual(self.cli("run", plan_id).returncode, 0)
+        self.assertEqual(self.last(plan_id)["origin"], "terminal")
+
+        self.env["OPSQUIRE_ORIGIN"] = "made up"
+        self.assertEqual(self.cli("run", tid).returncode, 0)
+        self.assertEqual(self.last(tid)["origin"], "terminal", "only the console's own word counts")
+        del self.env["OPSQUIRE_ORIGIN"]
+
+        self.assertEqual(self.env["OPSQUIRE_AUTHOR"], "test", "the author says nothing about the console here")
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def call(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+                conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
+                return json.loads(conn.getresponse().read())
+
+            def run(task: str) -> None:
+                job = call("POST", "/api/run", {"task": task, "mode": "read"})["job_id"]
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    j = call("GET", f"/api/job?id={job}&offset=0")
+                    if j["status"] == "done":
+                        self.assertEqual(j["exit_code"], 0, j["text"])
+                        return
+                    time.sleep(0.2)
+                self.fail(f"job {job} never finished: {j}")
+
+            run(tid)
+            rec = self.last(tid)
+            self.assertEqual((rec["origin"], rec["cwd"]), ("console", os.getcwd()), "same cwd, different origin")
+            run(plan_id)
+            self.assertEqual(self.last(plan_id)["origin"], "console")
+            self.assertEqual(self.last(tid)["origin"], "console", "a plan's step started where the plan did")
+
+            runs = call("GET", "/api/state")["runs"]
+            self.assertEqual(runs[self.last(tid)["run_id"]]["origin"], "console")
+            self.assertEqual({r["origin"] for r in runs.values()}, {"console", "terminal"})
+            conn.close()
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+
+        self.assertEqual(self.cli("run", tid).returncode, 0)
+        table = self.cli("runs", tid).stdout
+        self.assertIn("ORIGIN", table)
+        self.assertIn("console", table)
+        self.assertIn("terminal", table)
+        self.assertIn("origin=terminal", self.cli("log", tid).stdout)
+        self.assertIn("origin=console", self.cli("log", plan_id).stdout, "a plan's record has no exit code of its own")
+
+        folder = next(self.home.glob(f"var/runs/{tid}/*"))
+        older = json.loads((folder / "run.json").read_text())
+        del older["origin"]
+        (folder / "run.json").write_text(json.dumps(older))
+        self.assertEqual(self.cli("runs", tid).returncode, 0)
+
     def test_run_line_keeps_quoted_args_together(self) -> None:
         tid = self.new("quoted", "print(1)\n").name
         self.assertEqual(self.cli("lint", tid).returncode, 0)

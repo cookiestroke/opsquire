@@ -31,6 +31,7 @@ from .model import (
     now,
     pid_namespace,
     run_alive,
+    run_origin,
     runs_dir,
     write_json,
 )
@@ -220,6 +221,7 @@ class Run:
             "pid": os.getpid(),
             "pid_ns": pid_namespace(),
             "cwd": os.getcwd(),
+            "origin": run_origin(),
             "argv": self.args,
             "entry": self.meta.verify if self.mode == "verify" and self.meta.verify else self.meta.entry,
             "interpreter": self.meta.command(self.task.folder / self.meta.entry)[0],

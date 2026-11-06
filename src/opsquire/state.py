@@ -325,6 +325,7 @@ def run_view(r: dict[str, Any]) -> dict[str, Any]:
         "plan_run": r.get("plan_run"),
         "steps": r.get("steps"),
         "user": r.get("user"),
+        "origin": r.get("origin"),
         "dir": (r.get("paths") or {}).get("dir"),
     }
 

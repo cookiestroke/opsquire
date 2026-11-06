@@ -28,6 +28,9 @@ LOCK_MODES = ("exclusive", "shared", "none")
 INTERPRETERS = {".py": [sys.executable, "-u"], ".sh": ["/bin/bash"]}
 IGNORED_PARTS = {"__pycache__", ".mypy_cache", ".ruff_cache"}
 LINT_FILE = ".lint.json"
+ORIGIN_ENV = "OPSQUIRE_ORIGIN"
+ORIGIN_CONSOLE = "console"
+ORIGIN_TERMINAL = "terminal"
 
 
 class OpsquireError(Exception):
@@ -62,6 +65,12 @@ class Heartbeat:
     def __exit__(self, *_: object) -> None:
         self.stop.set()
         self.thread.join(timeout=2)
+
+
+def run_origin() -> str:
+    """Where this run was started, for its record: the console's jobs say so in the environment; anything else is a
+    command line. OPSQUIRE_AUTHOR cannot tell them apart, since a console started with it set passes it on."""
+    return ORIGIN_CONSOLE if os.environ.get(ORIGIN_ENV) == ORIGIN_CONSOLE else ORIGIN_TERMINAL
 
 
 def pid_namespace() -> str:

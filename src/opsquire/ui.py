@@ -2,7 +2,8 @@
 asks, scripts, locks) from /api/state and follows changes over /api/stream (server-sent events: one watcher thread
 looks at every file of the home's tasks, general scripts, runs, locks, asks and thread results), tails a run's
 output.log and shows a task's design.md or script. Its writes are closing a task (the same code as `opsquire close`)
-and runs started from the page (jobs.py)."""
+and runs started from the page (jobs.py). A running server keeps the Python it started with, so it also compares that
+code with what is on disk and installed now, and the page tells the operator to restart it when they differ."""
 
 from __future__ import annotations
 
@@ -16,13 +17,14 @@ import traceback
 from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib import resources
+from importlib import metadata, resources
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__
 from .close import close_task
 from .jobs import Jobs
-from .model import IGNORED_PARTS, OpsquireError, home_dir, iso, now, runs_dir, task_folder, var_dir
+from .model import IGNORED_PARTS, PACKAGE_DIR, OpsquireError, home_dir, iso, now, runs_dir, task_folder, var_dir
 from .state import state
 
 DEFAULT_PORT = 7771
@@ -30,6 +32,7 @@ WATCH_INTERVAL_S = 1.0
 PING_INTERVAL_S = 15.0
 MAX_LOG_BYTES = 512 * 1024
 VIEWABLE = {"design.md", "main.py", "main.sh", "verify.py", "verify.sh", "meta.json", "test_main.py"}
+PAGE = "data/ui.html"
 
 
 def page() -> bytes:
@@ -55,6 +58,41 @@ def fingerprint() -> str:
             continue
         h.update(f"{path}\0{st.st_mtime_ns}\0{st.st_size}\n".encode())
     return h.hexdigest()
+
+
+def code_hashes() -> dict[str, str]:
+    """The server's code as it is on disk now: the package's modules and the page, by content, so a touch or a checkout
+    that lands back on the same code is no change. Helpers and templates are read fresh by every run, so they never go
+    stale in a running server and are left out."""
+    hashes: dict[str, str] = {}
+    for path in [*PACKAGE_DIR.glob("*.py"), PACKAGE_DIR / PAGE]:
+        try:
+            hashes[path.relative_to(PACKAGE_DIR).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+    return hashes
+
+
+def installed_version() -> str:
+    """The version installed now; __version__ is the one this process read when it started."""
+    try:
+        return metadata.version("opsquire")
+    except metadata.PackageNotFoundError:
+        return __version__
+
+
+def code_status(loaded: dict[str, str]) -> dict[str, Any]:
+    """How the code the server started with (`loaded`) compares with what is there now. `page` is the page a reload
+    would get, so a tab can tell it is older than that."""
+    current, installed = code_hashes(), installed_version()
+    changed = sorted(name for name in loaded.keys() | current.keys() if loaded.get(name) != current.get(name))
+    return {
+        "stale": bool(changed) or installed != __version__,
+        "changed": changed,
+        "version": __version__,
+        "installed": installed,
+        "page": current.get(PAGE),
+    }
 
 
 def log_tail(run_id: str, offset: int | None, until: int | None = None) -> dict[str, Any]:
@@ -125,7 +163,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
             elif url.path == "/api/state":
-                self.send_json({**state(), "jobs": self.jobs.views()})
+                server: UIServer = self.server  # type: ignore[assignment]
+                self.send_json({**state(), "jobs": self.jobs.views(), "code": code_status(server.code)})
             elif url.path == "/api/job":
                 self.send_json(self.jobs.read(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/log":
@@ -213,8 +252,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class UIServer(ThreadingHTTPServer):
-    """Serves the page; one watcher thread notices when the home or a job moved and bumps `generation`, which every
-    open stream waits on, so no stream misses a change another one saw."""
+    """Serves the page; one watcher thread notices when the home, a job or the code on disk moved and bumps
+    `generation`, which every open stream waits on, so no stream misses a change another one saw."""
 
     daemon_threads = True
     allow_reuse_address = True
@@ -223,17 +262,18 @@ class UIServer(ThreadingHTTPServer):
         super().__init__(address, Handler)
         self.stopping = threading.Event()
         self.jobs = Jobs()
+        self.code = code_hashes()
         self.generation = 0
         self.moved = threading.Condition()
         threading.Thread(target=self.watch, daemon=True).start()
 
     def watch(self) -> None:
-        seen = fingerprint()
+        seen = (fingerprint(), code_status(self.code))
         while not self.stopping.is_set():
             job_moved = self.jobs.changed.wait(WATCH_INTERVAL_S)
             self.jobs.changed.clear()
             try:
-                current = fingerprint()
+                current = (fingerprint(), code_status(self.code))
             except Exception:
                 traceback.print_exc(file=sys.stderr)
                 continue

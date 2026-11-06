@@ -1,7 +1,7 @@
 """Runs started from the UI. A job is `opsquire run <task> [--apply] [-- args]` under a pseudo-terminal, so the runner
 and the helpers find a /dev/tty for their confirmations; the page reads the terminal output, answers prompts and can
 interrupt. Arguments come from the task's pending handover, never from the page. The runner writes the real records
-as always; jobs live only in this server process."""
+as always, marked with the console as their origin; jobs live only in this server process."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import handover
-from .model import OpsquireError, iso, now, resolve_task
+from .model import ORIGIN_CONSOLE, ORIGIN_ENV, OpsquireError, iso, now, resolve_task
 from .query import runs_for
 
 MODES = ("read", "dry", "apply", "verify")
@@ -93,7 +93,12 @@ class Jobs:
             argv = [sys.executable, "-m", "opsquire", "run", task.id, *FLAGS.get(mode, [])]
             argv += ["--", *args] if args else []
         master, slave = pty.openpty()
-        env = {**os.environ, "OPSQUIRE_AUTHOR": os.environ.get("OPSQUIRE_AUTHOR", "opsquire ui"), "TERM": "dumb"}
+        env = {
+            **os.environ,
+            "OPSQUIRE_AUTHOR": os.environ.get("OPSQUIRE_AUTHOR", "opsquire ui"),
+            ORIGIN_ENV: ORIGIN_CONSOLE,
+            "TERM": "dumb",
+        }
         try:
             job.proc = subprocess.Popen(
                 argv,

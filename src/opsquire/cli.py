@@ -237,10 +237,11 @@ def cmd_show(a: argparse.Namespace) -> int:
 def run_table(recs: list[dict[str, Any]]) -> list[list[str]]:
     if not recs:
         return []
-    return [["STATUS", "MODE", "STARTED", "TASK", "TARGETS", "LAST ERROR"]] + [
+    return [["STATUS", "MODE", "ORIGIN", "STARTED", "TASK", "TARGETS", "LAST ERROR"]] + [
         [
             str(r.get("status")),
             str(r.get("mode")),
+            str(r.get("origin") or "-"),
             str(r.get("started")),
             str(r.get("task_id")),
             " ".join(f"{k}={v['status']}" for k, v in (r.get("targets") or {}).items()),
@@ -290,7 +291,7 @@ def cmd_log(a: argparse.Namespace) -> int:
         sys.stdout.write(target.read_text())
     if not a.events:
         rec = load_run(path / "run.json")
-        print(f"\n--- status={rec['status']} exit={rec['exit_code']} run={path}")
+        print(f"\n--- status={rec['status']} exit={rec.get('exit_code')} origin={rec.get('origin') or '-'} run={path}")
     return 0
 
 
