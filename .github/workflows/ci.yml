@@ -76,6 +76,15 @@ jobs:
                                  "templates/verify.sh", "skills/opsquire/SKILL.md") if not data.joinpath(f).is_file()]
           assert not missing, f"wheel is missing package data: {missing}"
           PY
+      - name: From the wheel to a first run, with no git identity
+        run: |
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet ruff mypy
+          export HOME="$RUNNER_TEMP/stranger" PATH="$RUNNER_TEMP/venv/bin:$PATH"
+          mkdir -p "$HOME"
+          opsquire init "$HOME/ops-home" --budget 15 | tee "$RUNNER_TEMP/init.log"
+          task=$(sed -n 's/^first task: created and ready (\([^)]*\)).*/\1/p' "$RUNNER_TEMP/init.log")
+          test -n "$task"
+          opsquire run "$task"
       - uses: actions/upload-artifact@v7
         with:
           name: dist

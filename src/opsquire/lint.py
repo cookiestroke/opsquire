@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import sysconfig
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,18 +101,22 @@ def _lint_task(task: Task) -> LintResult:
         if not ruff or not mypy:
             return LintResult(False, content_hash, "ruff and mypy must be installed (pipx inject opsquire ruff mypy)")
         uses = [str(home_dir() / "general" / u) for u in task.meta.uses]
-        env = {**os.environ, "MYPYPATH": os.pathsep.join([str(HELPERS_DIR), *uses])}
         by_folder: dict[str, list[str]] = {}
         for f in py:
             by_folder.setdefault(str(Path(f).parent), []).append(f)
         mypy_cmd = [mypy, "--config-file", str(MYPY_CONFIG)]
-        for cmd in (
-            [ruff, "check", "--no-cache", "--config", str(RUFF_CONFIG), *py],
-            *([*mypy_cmd, *files] for files in by_folder.values()),
-        ):
-            passed, out = _run(cmd, env)
-            ok &= passed
-            parts.append(out)
+        # mypy refuses a MYPYPATH under its own site-packages, which is where an installed opsquire keeps its helpers
+        # when mypy shares its environment, so it reads a copy.
+        with tempfile.TemporaryDirectory(prefix="opsquire-mypy-") as helpers:
+            shutil.copy(HELPERS_DIR / "opsquire_helpers.py", helpers)
+            env = {**os.environ, "MYPYPATH": os.pathsep.join([helpers, *uses])}
+            for cmd in (
+                [ruff, "check", "--no-cache", "--config", str(RUFF_CONFIG), *py],
+                *([*mypy_cmd, *files] for files in by_folder.values()),
+            ):
+                passed, out = _run(cmd, env)
+                ok &= passed
+                parts.append(out)
     if sh:
         shellcheck = find_tool("shellcheck")
         if not shellcheck:

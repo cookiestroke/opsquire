@@ -1904,6 +1904,34 @@ class OpsTest(unittest.TestCase):
         self.assertIn("home repo: skipped, git is not installed", no_git.stdout)
         self.assertIn("contract: written", no_git.stdout)
 
+    def test_a_package_installed_next_to_mypy_can_lint_and_run(self) -> None:
+        venv = self.tmp / "venv"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", "--system-site-packages", str(venv)], check=True)
+        python = str(venv / "bin/python")
+        where = "import site; print(site.getsitepackages()[0])"
+        site = Path(subprocess.run([python, "-c", where], capture_output=True, text=True, check=True).stdout.strip())
+        shutil.copytree(ROOT / "src/opsquire", site / "opsquire", ignore=shutil.ignore_patterns("__pycache__"))
+        (venv / "bin/mypy").write_text(f"#!{python}\nfrom mypy.__main__ import console_entry\nconsole_entry()\n")
+        (venv / "bin/mypy").chmod(0o755)
+        ruff = shutil.which("ruff", path=f"{Path(sys.executable).parent}:{Path.home() / '.local/bin'}")
+        assert ruff
+        (venv / "bin/ruff").symlink_to(ruff)
+        env = {k: v for k, v in self.env.items() if k != "PYTHONPATH"}
+        env["TMPDIR"] = str(self.tmp)
+        made = subprocess.run(
+            [python, "-m", "opsquire", "new", "web1", "installed", "--purpose", "p", "--lang", "py"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(made.returncode, 0, made.stderr)
+        (Path(made.stdout.strip()) / "main.py").write_text("import opsquire_helpers as sq\n\nsq.result(sq.__file__)\n")
+        for args in (["lint", "installed"], ["run", "installed"]):
+            r = subprocess.run([python, "-m", "opsquire", *args], env=env, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.last("installed")["results"], [str(site / "opsquire/data/helpers/opsquire_helpers.py")])
+        self.assertEqual(list(self.tmp.glob("opsquire-mypy-*")), [])
+
     def test_integrate_installs_the_skill_and_makes_the_home_a_local_git_repo(self) -> None:
         self.env |= {"HOME": str(self.tmp / "user"), "CLAUDE_CONFIG_DIR": str(self.tmp / "claude")}
         self.env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE", str(Path.home() / ".local"))
