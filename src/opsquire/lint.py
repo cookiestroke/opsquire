@@ -98,7 +98,7 @@ def _lint_task(task: Task) -> LintResult:
     if py:
         ruff, mypy = find_tool("ruff"), find_tool("mypy")
         if not ruff or not mypy:
-            return LintResult(False, content_hash, "ruff and mypy must be installed (pip install --user ruff mypy)")
+            return LintResult(False, content_hash, "ruff and mypy must be installed (pipx inject opsquire ruff mypy)")
         uses = [str(home_dir() / "general" / u) for u in task.meta.uses]
         env = {**os.environ, "MYPYPATH": os.pathsep.join([str(HELPERS_DIR), *uses])}
         by_folder: dict[str, list[str]] = {}

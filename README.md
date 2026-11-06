@@ -14,11 +14,18 @@ Every run leaves a structured, agent-readable record that agents cannot forge.
 From the latest release (a wheel attached to the GitHub release; the repo is private, so `gh` fetches it):
 
 ```
+sudo apt update && sudo apt install -y pipx gh git shellcheck   # Debian, Ubuntu; needs Python 3.10+
+gh auth login
 gh release download --repo cookiestroke/opsquire --pattern '*.whl' --dir /tmp/opsquire
-pip install /tmp/opsquire/*.whl ruff mypy   # or: uv tool install --with ruff --with mypy /tmp/opsquire/*.whl
+pipx install /tmp/opsquire/*.whl
+pipx inject opsquire ruff mypy
+pipx ensurepath                          # then open a new terminal, so `opsquire` is on PATH
 opsquire init ~/ops-home --budget 15     # one command: home, local rules, config, credentials, skill, first task
 opsquire run <the first task it printed>
 ```
+
+pipx because a fresh Ubuntu has neither pip nor a working `python3 -m venv`, and its Python refuses system-wide
+installs. With uv instead: `uv tool install --with ruff --with mypy /tmp/opsquire/*.whl`.
 
 `ruff` and `mypy` are the lint gate every Python task must pass before it runs (`shellcheck` for shell tasks), so a
 home without them can run nothing. `opsquire init` is safe to run again: it never overwrites what exists, and it

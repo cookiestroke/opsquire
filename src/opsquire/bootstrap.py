@@ -54,8 +54,8 @@ if __name__ == "__main__":
 '''
 TOOLS = (
     ("git", "the home's history and parallel asks (apt install git)"),
-    ("ruff", "lint gate (pip install ruff)"),
-    ("mypy", "lint gate (pip install mypy)"),
+    ("ruff", "lint gate (pipx inject opsquire ruff)"),
+    ("mypy", "lint gate (pipx inject opsquire mypy)"),
     ("shellcheck", "lint gate for shell tasks (apt install shellcheck)"),
     ("gh", "repos and PRs (`opsquire repo`)"),
     ("claude", "`opsquire ask` with the default agent (Claude Code)"),
