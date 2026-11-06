@@ -1,6 +1,7 @@
-"""Runs started from the UI. A job is `opsquire run <task> [--apply]` under a pseudo-terminal, so the runner and the
-helpers find a /dev/tty for their confirmations; the page reads the terminal output, answers prompts and can
-interrupt. The runner writes the real records as always; jobs live only in this server process."""
+"""Runs started from the UI. A job is `opsquire run <task> [--apply] [-- args]` under a pseudo-terminal, so the runner
+and the helpers find a /dev/tty for their confirmations; the page reads the terminal output, answers prompts and can
+interrupt. Arguments come from the task's pending handover, never from the page. The runner writes the real records
+as always; jobs live only in this server process."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import fcntl
 import os
 import pty
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -16,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import handover
 from .model import OpsquireError, iso, now, resolve_task
 from .query import runs_for
 
@@ -38,6 +41,7 @@ class Job:
     exit_code: int | None = None
     run_id: str | None = None
     prompt: str | None = None
+    args: list[str] = field(default_factory=list)
     output: bytearray = field(default_factory=bytearray)
     fd: int = -1
     proc: subprocess.Popen[bytes] | None = None
@@ -49,6 +53,7 @@ class Job:
             "job_id": self.job_id,
             "task_id": self.task_id,
             "mode": self.mode,
+            "args": shlex.join(self.args),
             "started": self.started,
             "ended": self.ended,
             "status": self.status,
@@ -74,17 +79,19 @@ class Jobs:
                 raise OpsquireError("general scripts are not closed; judge the tasks that use them")
         elif mode not in MODES or mode not in task.meta.modes:
             raise OpsquireError(f"{task.id} runs in {', '.join(task.meta.modes)} mode, not {mode}")
+        args = handover.args_for(task, runs_for(task.id), mode)
         with self.lock:
             if any(j.task_id == task.id and j.status != "done" for j in self.jobs.values()):
                 raise OpsquireError(f"{task.id} already has a job running")
             if len([j for j in self.jobs.values() if j.status != "done"]) >= MAX_JOBS:
                 raise OpsquireError("too many jobs running")
-            job = Job(f"{now():%Y%m%dT%H%M%S%f}"[:-3] + "Z", task.id, mode, iso(now()))
+            job = Job(f"{now():%Y%m%dT%H%M%S%f}"[:-3] + "Z", task.id, mode, iso(now()), args=args)
             self.jobs[job.job_id] = job
         if mode == "judge":
             argv = [sys.executable, "-m", "opsquire", "judge", task.id]
         else:
             argv = [sys.executable, "-m", "opsquire", "run", task.id, *FLAGS.get(mode, [])]
+            argv += ["--", *args] if args else []
         master, slave = pty.openpty()
         env = {**os.environ, "OPSQUIRE_AUTHOR": os.environ.get("OPSQUIRE_AUTHOR", "opsquire ui"), "TERM": "dumb"}
         try:

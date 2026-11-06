@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -462,6 +463,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
                     "task_id": t.id,
                     "next": nxt,
                     "command": handover.command(t.id, nxt, args),
+                    "args": shlex.join(args),
                     "created": v["created"],
                     "author": v["author"],
                     "purpose": v["purpose"],

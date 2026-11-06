@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from typing import Any
 
 from .homegit import commit_quietly
@@ -47,7 +48,7 @@ def record(task: Task, mode: str, args: list[str], why: str, by: str) -> dict[st
 
 def command(task_id: str, mode: str, args: list[str]) -> str:
     flag = {"apply": " --apply", "verify": " --verify"}.get(mode, "")
-    return f"opsquire run {task_id}{flag}" + (" -- " + " ".join(args) if args else "")
+    return f"opsquire run {task_id}{flag}" + (" -- " + shlex.join(args) if args else "")
 
 
 def pending(task: Task, runs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -58,6 +59,13 @@ def pending(task: Task, runs: list[dict[str, Any]]) -> dict[str, Any] | None:
     if any(str(r.get("started") or "") >= str(h["at"]) for r in runs):
         return None
     return h
+
+
+def args_for(task: Task, runs: list[dict[str, Any]], mode: str) -> list[str]:
+    """What a run in this mode takes from the console: the arguments of the handed-over run the inbox shows. Any other
+    run of the task (another mode, no handover) has none."""
+    h = pending(task, runs)
+    return [str(x) for x in h.get("args") or []] if h and h.get("mode") == mode else []
 
 
 def record_run_lines(actions: list[tuple[str, str]], why: str, by: str) -> list[str]:
@@ -72,11 +80,12 @@ def record_run_lines(actions: list[tuple[str, str]], why: str, by: str) -> list[
             task = resolve_task(m.group("task"))
             flags = set((m.group("flags") or "").split())
             mode = mode_for(task, "--apply" in flags, "--verify" in flags)
-        except OpsquireError:
+            args = shlex.split(m.group("args") or "")
+        except (OpsquireError, ValueError):
             continue
         if task.id in handed:
             continue
-        record(task, mode, (m.group("args") or "").split(), why, by)
+        record(task, mode, args, why, by)
         handed.append(task.id)
     return handed
 

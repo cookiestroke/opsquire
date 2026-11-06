@@ -1350,6 +1350,87 @@ class OpsTest(unittest.TestCase):
             proc.send_signal(signal.SIGINT)
             self.assertEqual(proc.wait(timeout=15), 0)
 
+    def test_ui_job_runs_the_handed_over_args_the_inbox_shows(self) -> None:
+        import http.client
+
+        show = "import sys\n\nimport opsquire_helpers as sq\n\nsq.result(repr(sys.argv[1:]))\n"
+        read = self.new("reused", show).name
+        change = self.new(
+            "flip",
+            show.replace("sq.result", "sq.confirm('go?') if sq.APPLY else None\nsq.result"),
+            "--changes-prod",
+            "--rollback",
+            "none",
+        ).name
+        for tid in (read, change):
+            self.assertEqual(self.cli("lint", tid).returncode, 0)
+        self.assertEqual(self.cli("run", read).returncode, 0)
+        with_space = ["focus", "two words"]
+        self.assertEqual(self.cli("handover", read, "--", *with_space).returncode, 0)
+        self.assertEqual(self.cli("handover", change, "--apply", "--", "web1").returncode, 0)
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def call(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+                conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
+                return json.loads(conn.getresponse().read())
+
+            def run(tid: str, mode: str, **extra: Any) -> dict[str, Any]:
+                job = call("POST", "/api/run", {"task": tid, "mode": mode, **extra})["job_id"]
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    j: dict[str, Any] = call("GET", f"/api/job?id={job}&offset=0")
+                    if j["status"] == "waiting":
+                        call("POST", "/api/answer", {"job": job, "text": "y"})
+                    if j["status"] == "done":
+                        return j
+                    time.sleep(0.2)
+                self.fail(f"job {job} never finished: {j}")
+
+            inbox = {i["task_id"]: i for i in call("GET", "/api/state")["inbox"]}
+            self.assertEqual(inbox[read]["command"], f"opsquire run {read} -- focus 'two words'")
+            self.assertEqual(inbox[read]["args"], "focus 'two words'")
+
+            j = run(read, "read", args=["from", "the", "page"])
+            self.assertEqual(j["args"], "focus 'two words'")
+            rec = self.last(read)
+            self.assertEqual((rec["argv"], rec["results"]), (with_space, [repr(with_space)]))
+            self.assertNotIn(read, {i["task_id"] for i in call("GET", "/api/state")["inbox"]})
+            self.assertEqual(run(read, "read")["args"], "")
+            self.assertEqual(self.last(read)["argv"], [])
+
+            run(change, "dry")
+            self.assertEqual(self.last(change)["argv"], [], "a dry run is not the handed-over apply")
+            self.assertEqual(self.cli("handover", change, "--apply", "--", "web1").returncode, 0)
+            folder = next(self.home.glob(f"tasks/*/{change}"))
+            (folder / "main.py").write_text((folder / "main.py").read_text() + "\n")
+            self.assertEqual(run(change, "apply")["exit_code"], 0)
+            runs = json.loads(self.cli("runs", change, "--json").stdout)
+            applied = next(r for r in runs if r["mode"] == "apply")
+            self.assertEqual(applied["argv"], ["web1"], "edited after the handover, still the same run")
+
+            conn.close()
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+
+    def test_run_line_keeps_quoted_args_together(self) -> None:
+        tid = self.new("quoted", "print(1)\n").name
+        self.assertEqual(self.cli("lint", tid).returncode, 0)
+        code = (
+            "import sys\nfrom opsquire import handover\n"
+            "print(handover.record_run_lines([('RUN', sys.argv[1]), ('RUN', sys.argv[2])], 'why', 'by'))\n"
+        )
+        run = f"opsquire run {tid} -- focus 'two words'"
+        unbalanced = f"opsquire run {tid} -- 'open"
+        r = subprocess.run([sys.executable, "-c", code, unbalanced, run], env=self.env, capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), repr([tid]), r.stderr)
+        item = json.loads(self.cli("threads", "--json").stdout)["inbox"][0]
+        self.assertEqual((item["command"], item["args"]), (run, "focus 'two words'"))
+
     def test_run_records_usage_and_state_shows_agent_work(self) -> None:
         tid = self.new("usage", "import opsquire_helpers as sq\n\nsq.result('x' * 10)\n").name
         self.assertEqual(self.cli("run", tid).returncode, 0)

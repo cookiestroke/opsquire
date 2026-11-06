@@ -994,6 +994,7 @@ function renderInboxItem(it, nested, pos) {
   const steps = el('div', { class: 'substeps' }, kids.map((st, i) => renderInboxItem(st, true, { n: i + 1, last: i === kids.length - 1 })));
   return el('div', { class: 'ibgroup', 'data-key': 'g:' + it.task_id }, renderInboxRow(it, false), steps);
 }
+const argsTag = args => args ? el('span', { class: 'mono small muted', title: `runs with these arguments: -- ${args}` }, `-- ${truncate(args, 60)}`) : null;
 function renderInboxRow(it, nested, pos) {
   const id = it.task_id, t = task(id), sub = nested ? ' sub' : '';
   const tree = pos ? el('span', { class: 'tree', 'aria-hidden': 'true' }, pos.last ? '\u2514\u2500' : '\u251c\u2500') : null;
@@ -1003,9 +1004,9 @@ function renderInboxRow(it, nested, pos) {
   const stepsNote = (it.steps || []).length ? el('span', { class: 'plan', title: 'a plan: one run does every step below, in this order' }, `plan \u00b7 ${plural(it.steps.length, 'step')} in order`) : null;
   if (S.dev) return el('div', { class: 'ib' + sub, 'data-key': 'i:' + id },
     tree, stepNo, modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
-    stepsNote, changed, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+    argsTag(it.args), stepsNote, changed, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
   return el('div', { class: 'sr' + sub, 'data-key': 'i:' + id },
-    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), stepsNote, changed, handed,
+    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), argsTag(it.args), stepsNote, changed, handed,
     el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}`, title: it.next === 'apply' ? 'the dry run passed; this changes production' : 'a read-only or dry run first; nothing changes' }, nextLabel(it.next)),
     runButton(id, it.next, nested ? 'Run this step alone' : undefined));
 }
@@ -1030,7 +1031,7 @@ function renderJob(j) {
   const open = () => openJob(j.job_id);
   return el('div', { class: 'job', role: 'button', tabindex: '0', 'data-key': 'j:' + j.job_id,
     onclick: e => { if (e.target.closest('a, button, input')) return; open(); }, onkeydown: e => { if (e.key === 'Enter' && e.target.tagName !== 'INPUT') open(); } },
-    el('span', { class: `pill ${jobTone(j)}` }, jobLabel(j)), taskLink(j.task_id || '?'), modeTag(j.mode),
+    el('span', { class: `pill ${jobTone(j)}` }, jobLabel(j)), taskLink(j.task_id || '?'), modeTag(j.mode), argsTag(j.args),
     el('span', { class: 'muted' }, 'started ', when(j.started)), j.ended ? el('span', { class: 'muted' }, 'ended ', when(j.ended)) : null,
     el('span', { class: 'grow' }), j.run_id ? btn('run log', () => openLog(j.run_id, null), 'sm') : null,
     j.status === 'waiting' ? el('span', { class: 'prompt' }, String(j.prompt || '').trim()) : null,
@@ -1617,7 +1618,7 @@ function buildJobPane(d) {
   d.pre = el('pre', {}, d.doneNode, d.tailNode);
   d.pill = el('span', {}, el('span', { class: 'pill grey' }, 'connecting'));
   d.foot = el('div', { class: 'line', style: 'margin:0;width:100%' });
-  paneShell([el('span', { class: 'muted small' }, 'job '), j ? [taskLink(j.task_id || '?'), ' ', modeTag(j.mode), ' '] : [el('span', { class: 'id' }, d.id), ' '], d.pill],
+  paneShell([el('span', { class: 'muted small' }, 'job '), j ? [taskLink(j.task_id || '?'), ' ', modeTag(j.mode), ' ', argsTag(j.args), ' '] : [el('span', { class: 'id' }, d.id), ' '], d.pill],
     d.pre, 'log', d.foot);
   pollJob(d);
 }
