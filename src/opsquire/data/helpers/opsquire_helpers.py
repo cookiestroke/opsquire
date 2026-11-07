@@ -47,18 +47,26 @@ def data(msg: str, **values: Any) -> None:
     emit("data", msg, **values)
 
 
-def _wait_for_echo() -> None:
-    """Make sure everything printed so far is on screen before a prompt (the runner echoes stdout via a pipe)."""
-    fd = os.environ.get("OPSQUIRE_SYNC_FD")
-    if not fd:
+def _announce_prompt(question: str) -> None:
+    """Record that the run now waits for the operator, and hold the prompt until everything printed so far is on
+    screen (the runner echoes stdout via a pipe). A path, not a file descriptor: subprocess closes inherited
+    descriptors by default, and a general script run by a task must get this without the task knowing."""
+    emit("waiting", question)
+    path = os.environ.get("OPSQUIRE_SYNC_PATH")
+    if not path:
         return
-    emit("sync")
     try:
-        ready, _, _ = select.select([int(fd)], [], [], 10)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return
+    try:
+        ready, _, _ = select.select([fd], [], [], 10)
         if ready:
-            os.read(int(fd), 1)
-    except (OSError, ValueError):
+            os.read(fd, 1)
+    except OSError:
         pass
+    finally:
+        os.close(fd)
 
 
 _last_progress = [0.0]
@@ -75,7 +83,7 @@ def progress(label: str, done: float, total: float, unit: str = "") -> None:
 
 
 def confirm(question: str) -> None:
-    _wait_for_echo()
+    _announce_prompt(question)
     try:
         with open("/dev/tty", "w") as out, open("/dev/tty") as inp:
             out.write(f"\n>>> {question} [y/N] ")

@@ -89,6 +89,8 @@ h3.sec .n { font-weight: 500; letter-spacing: 0; text-transform: none; color: va
 .ib .who, .tr .who { color: var(--muted); white-space: nowrap; }
 .job { cursor: pointer; }
 .job .prompt { flex-basis: 100%; color: var(--warn); white-space: pre-wrap; }
+.asking { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 10px 0; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 6px; }
+.warnnote { color: var(--warn); font-size: .86em; }
 .job .answers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .mode { display: inline-block; min-width: 44px; text-align: center; padding: 0 6px; border-radius: 4px; font-size: .82em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--grey-bg); color: var(--grey); white-space: nowrap; }
 .mode.apply { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
@@ -795,7 +797,7 @@ function renderSeg() {
 function renderLive() {
   const d = S.data, items = [];
   const running = (d.running || []).map(run).filter(Boolean);
-  for (const r of running) items.push(el('span', { class: 'live-item' }, pill('running'), taskLink(r.task_id || '?'), modeTag(r.mode), when(r.started),
+  for (const r of running) items.push(el('span', { class: 'live-item', title: r.waiting ? `waiting for your answer: ${r.waiting.question}` : '' }, pill(r.waiting ? 'waiting' : 'running'), taskLink(r.task_id || '?'), modeTag(r.mode), when(r.started),
     btn('tail', () => openLog(r.run_id, null), 'sm')));
   for (const l of d.locks || []) items.push(el('span', { class: 'live-item', title: `run ${l.run_id || '?'}` }, el('span', { class: 'muted' }, 'lock'), tag(l.target || '?'),
     taskLink(l.task_id || '?'), modeTag(l.mode), el('span', { class: 'muted' }, 'since'), when(l.since), pill(l.alive ? 'alive' : 'dead')));
@@ -840,9 +842,9 @@ function runButton(taskId, mode, label, primary) {
   if (active) return btn(active.status, () => openJob(active.job_id), 'sm', { title: 'a job for this task is still running; open it' });
   const cls = 'runbtn' + (primary ? ' primary' : '');
   if (mode !== 'apply') return btn(label || (S.dev ? `Run ${mode}` : 'Run'), () => startRun(taskId, mode), cls, { title: S.dev ? null : `${mode === 'read' ? 'read-only' : mode === 'verify' ? 'read-only check that the change is live' : 'dry'} run: nothing changes` });
-  const key = taskId + ':apply', armed = S.confirm === key;
+  const key = taskId + ':apply', armed = S.confirm === key, already = (task(taskId) || {}).applied_already;
   return btn(armed ? 'Confirm apply' : label || (S.dev ? 'Run apply' : 'Run'), () => { if (armed) { disarm(); startRun(taskId, 'apply'); } else arm(key); },
-    cls + ' apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : 'changes production; asks for a second click' });
+    cls + ' apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : already ? `${already}; this changes production again and asks for a second click` : 'changes production; asks for a second click' });
 }
 /* every run a task supports, the inbox's next step first and primary; one status button while a job runs */
 function runModes(t) {
@@ -957,8 +959,10 @@ function renderInbox() {
   const items = inbox().filter(it => !q || taskMatches(task(it.task_id) || { id: it.task_id, purpose: it.purpose, author: it.author }, q, it.thread));
   const running = (d.running || []).map(run).filter(Boolean);
   const activeJobs = jobs().filter(j => j.status !== 'done');
+  const terminalRuns = running.filter(r => !activeJobs.some(j => j.task_id === r.task_id));
   const runningRows = [...activeJobs.filter(j => match(j.task_id)).map(renderJob),
-    ...running.filter(r => !activeJobs.some(j => j.run_id === r.run_id) && match(r.task_id)).map(r => renderRunRow(r, true))];
+    ...terminalRuns.filter(r => match(r.task_id)).map(r => renderRunRow(r, true))];
+  const asking = activeJobs.filter(j => j.status === 'waiting').length + terminalRuns.filter(r => r.waiting).length;
   const decideAllList = decisionList(d);
   const judged = [...jobs().filter(j => j.mode === 'judge').map(j => j.task_id), ...Object.values(d.tasks || {}).filter(t => t.judged && !t.settled).map(t => t.id)];
   const decideRows = [...new Set([...decideAllList.map(t => t.id), ...judged])].map(task).filter(t => t && match(t.id)).sort((a, b) => b.id.localeCompare(a.id));
@@ -970,7 +974,7 @@ function renderInbox() {
   const da = S.decideAll;
   parts.push(el('div', { class: 'tiles' },
     tile('sec:inbox', inbox().length, 'Waiting on you', 'amber'),
-    tile('sec:running', running.length + activeJobs.filter(j => !j.run_id).length, 'Running now', 'live'),
+    tile('sec:running', terminalRuns.length + activeJobs.length, 'Running now', 'live'),
     tile('sec:decide', decideAllList.length, 'Needs a decision', 'amber', decideAllList.length || (da && da.running) ? el('span', { class: 'act' },
       el('button', { class: 'sm', type: 'button', disabled: !!(da && da.running), onclick: e => { e.stopPropagation(); decideAll(); } }, da && da.running ? [el('span', { class: 'spin' }), `Deciding ${da.done + 1} of ${da.total}`] : 'Decide all')) : null),
     tile('sec:done', doneToday.length, 'Done today', 'good')));
@@ -979,6 +983,7 @@ function renderInbox() {
     el('span', {}, 'agents spent ', el('b', {}, money(st.spend) || '$0.00')),
     el('span', {}, 'your runs ', el('b', {}, st.runs ? duration(st.operator_s) : 'none')),
     st.runs ? el('span', {}, 'runs ', el('b', {}, `${st.ok} ok`), st.failed ? [' / ', el('b', { class: 'err' }, `${st.failed} failed`)] : null) : null));
+  if (asking) parts.push(el('div', { class: 'asking', role: 'status' }, el('b', {}, asking === 1 ? 'A run is waiting for your answer.' : `${asking} runs are waiting for your answer.`), ' It does nothing until you answer it under Running now.', btn('Show', () => scrollToKey('sec:running'), 'sm')));
   parts.push(sec('Waiting on you', items.length ? plural(items.length, 'item') : null));
   parts[parts.length - 1].dataset.key = 'sec:inbox';
   parts.push(el('div', { class: 'block' }, items.length ? items.map(it => renderInboxItem(it)) : el('div', { class: 'quiet' }, inbox().length ? `Nothing matches "${S.q}".` : 'Nothing waiting on you.')));
@@ -1006,10 +1011,10 @@ function renderInbox() {
   return el('div', {}, parts);
 }
 function renderRunRow(r, live) {
-  const t = task(r.task_id);
+  const t = task(r.task_id), asks = r.waiting && r.waiting.question;
   return el('div', { class: 'tr', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`,
     onclick: e => { if (e.target.closest('a, button')) return; openLog(r.run_id, null); }, onkeydown: e => { if (e.key === 'Enter') openLog(r.run_id, null); } },
-    S.dev ? modeTag(r.mode) : null, pill(r.status), taskLink(r.task_id || '?'), !S.dev ? areaTag(t) : null, el('span', { class: 'purpose muted' }, (t || {}).purpose || ''),
+    S.dev ? modeTag(r.mode) : null, pill(asks ? 'waiting' : r.status), taskLink(r.task_id || '?'), !S.dev ? areaTag(t) : null, el('span', { class: 'purpose muted' }, asks ? `Asks in the terminal it runs in: ${asks}` : (t || {}).purpose || ''),
     live ? [el('span', { class: 'muted small' }, 'since '), when(r.started), btn('Watch', () => openLog(r.run_id, null), 'sm')] : [chipsRow(usageChips(r)), when(r.started)]);
 }
 /* a plan's waiting steps hang under it as a tree, numbered in the order the plan runs them */
@@ -1026,12 +1031,14 @@ function renderInboxRow(it, nested, pos) {
   const stepNo = pos ? el('span', { class: 'stepno', title: `step ${pos.n} of the plan above, in this order` }, `${pos.n}`) : null;
   const changed = it.changed_since_lint ? el('span', { class: 'muted small', title: 'its files or a script it uses changed after its last lint; the run lints them again first' }, 'changed since lint') : null;
   const handed = it.handed ? el('span', { class: 'muted small', title: `handed over by ${it.handed.by || 'an agent'}: ${it.handed.why || 'no reason given'}` }, it.handed.why ? truncate(it.handed.why, 90) : `handed over by ${it.handed.by || 'an agent'}`) : null;
+  const again = it.applied_already ? el('span', { class: 'warnnote', title: it.applied_already }, 'already applied ok, same scripts') : null;
+  const shared = (it.same_target || []).length ? el('span', { class: 'muted small', title: `also waiting on the same target: ${it.same_target.join(', ')}. Related runs belong in one plan.` }, `same machine as ${plural(it.same_target.length, 'other item')}`) : null;
   const stepsNote = (it.steps || []).length ? el('span', { class: 'plan', title: 'a plan: one run does every step below, in this order' }, `plan \u00b7 ${plural(it.steps.length, 'step')} in order`) : null;
   if (S.dev) return el('div', { class: 'ib' + sub, 'data-key': 'i:' + id },
     tree, stepNo, modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
-    argsTag(it.args), stepsNote, changed, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+    argsTag(it.args), stepsNote, changed, again, shared, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
   return el('div', { class: 'sr' + sub, 'data-key': 'i:' + id },
-    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), argsTag(it.args), stepsNote, changed, handed,
+    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), argsTag(it.args), stepsNote, changed, again, shared, handed,
     el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}`, title: it.next === 'apply' ? 'the dry run passed; this changes production' : 'a read-only or dry run first; nothing changes' }, nextLabel(it.next)),
     runButton(id, it.next, nested ? 'Run this step alone' : undefined));
 }

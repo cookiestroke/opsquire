@@ -2,7 +2,8 @@
 
 Read this before writing or reading anything in the opsquire home (`opsquire home` prints it).
 It applies to every agent (Claude Code, Codex, or any similar tool) and does not
-depend on any agent's memory. Local rules for this home are at the end.
+depend on any agent's memory. Local rules for this home are at the end. If your shell says `opsquire: command not
+found`, call it as `{{opsquire_command}}`; the commands you hand the operator stay `opsquire ...`.
 
 ## Why this exists
 
@@ -55,7 +56,7 @@ opsquire runs [<task>] [--status failed] [--area x] [--since 2026-10-30]
 opsquire last                        most recent run
 opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, latest run for a task
 opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it
-opsquire handover <task> [--apply|--verify] [--why "..."] [-- args]
+opsquire handover <task> [--apply|--verify] [--why "..."] [--again] [--withdraw] [-- args]
                                      recommend a run of an existing task: in the inbox with your reason until it runs
 opsquire threads [--json]            tasks grouped into threads (the stories they belong to), with suggestions
 opsquire milestones [--since 2h|HH:MM|date] [--thread x] [--kind done,failed,result] [--json]
@@ -71,6 +72,8 @@ opsquire ui [--port N] [--open]      the operator's console in the browser (loca
 
 `<task>` may be the full id or any unique part of it. To answer "did it work", read `run.json`:
 `status`, `targets`, `last_error`, `results` (and `usage`: peak memory and CPU time of the script). Read `output.log` only when you need detail.
+`waiting` (`question`, `since`) says a run is stopped at a prompt until the operator answers; `opsquire runs`, `wait`,
+`log` and the console show it. A run that ended with it set was stopped at that prompt.
 `origin` says where the run started: `console` (a job from `opsquire ui`) or `terminal` (any command line); records older
 than the field have none, which means unknown.
 
@@ -79,8 +82,11 @@ than the field have none, which means unknown.
 1. `opsquire find <keywords>` first; reuse a task or a general script instead of duplicating it.
    The second time a task is needed, move its logic into `general/` with arguments.
 2. Scaffold: `opsquire new <area> <name> --purpose "..." [--changes-prod --rollback "..."]
-   [--target a --target b] [--cred ENV=dotted.key] [--uses <general-id>] [--lang py|sh]`
-   (`--general` for reusable scripts). Set `OPSQUIRE_AUTHOR` (e.g. `claude-code <session id>`).
+   [--target a --target b] [--cred ENV=dotted.key] [--uses <general-id>] [--lang py|sh] [--json]`
+   (`--general` for reusable scripts). Set `OPSQUIRE_AUTHOR` (e.g. `claude-code <session id>`). Without `--json` it
+   prints only the folder. It exits 2 and creates nothing on a bad name, so check its exit code in a script. A host
+   named `db_2` has area `db-2` and `--target db_2`: locks match targets exactly. `new` and `handover` report on stderr
+   what else waits for the same targets.
 3. Edit `main.py` / `main.sh`. Today Python (ruff + `mypy --strict`) and bash (shellcheck) are linted;
    other languages need a linter wired into `opsquire/lint.py` first.
 4. `opsquire lint <task>` must pass: ruff, `mypy --strict`, shellcheck, and every `test_*.py` (unittest) in the
@@ -92,7 +98,10 @@ than the field have none, which means unknown.
    operator can run it with its prompts; the records are the same. A task you reuse (a read task that already ran,
    a closed task to run again, an existing task with new arguments) owes no run by itself and would never reach the
    inbox: `opsquire handover <task-id> [--apply|--verify] --why "one line" [-- args]` puts exactly that run there,
-   with your reason, until it starts. `opsquire ask` records one for every RUN line its agent ends with.
+   with your reason, until it starts. `opsquire ask` records one for every RUN line its agent ends with. An apply that
+   already finished ok or is running, with the same scripts and arguments, is refused: read that record first, and only
+   when production really needs it again pass `--again --why "..."`. `--withdraw` takes a handover back out. A task
+   whose last run failed leaves the inbox until its files change or it is handed over again.
 6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the
    operator to paste output.
 7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,
@@ -204,6 +213,10 @@ Anything that can take more than a few seconds (downloads, waits, loops over man
 `progress`: the operator sees one updating bar with speed and time left instead of a silent terminal (a silent
 download got interrupted twice before this existed). Unit `"B"` means bytes; other units are shown as counts.
 
+A general script run as a child (`subprocess.run([sys.executable, script])`) can call `sq.confirm` as it is, with
+nothing to pass along. Leave its stdout connected: events reach the runner through it, so `capture_output` hides its
+prompt from the record and loses its answer.
+
 Report every target with a `target` event. If a script reports none, all targets inherit the run
 outcome. If it reports some, the unreported ones become `skipped`.
 
@@ -244,6 +257,7 @@ Never edit the operator's own checkout of a repo.
 opsquire repo list                                          registered repos
 opsquire repo checkout <repo>                               a copy of origin/<base> under .repos/; prints its path
 opsquire repo checkout <repo> --base <branch>               a copy of another branch (e.g. a colleague's PR)
+opsquire repo overlap <copy>                                open PRs of others that change the same files
 opsquire repo pr <copy> --title "..." --body-file <file>    GitHub-signed commit of the copy's changes + open the PR
 ```
 
@@ -260,6 +274,10 @@ opsquire repo pr <copy> --title "..." --body-file <file>    GitHub-signed commit
   commit description). Committing onto it only succeeds while its head is still the commit the copy was made from
   (or this copy's last push); if it moved, check out again. Only push onto someone else's branch when the operator
   asked for it. Never onto the repo's own base.
+- Read code from a copy, not the operator's checkout, which may be old: `repo list` shows where each stands against
+  origin, and `repo checkout` warns when it could not fetch and its copy is behind.
+- `opsquire repo overlap <copy>` lists open PRs that change the files your copy changes; read them before building on
+  the same code. `repo pr` warns about the same PRs and never blocks on them.
 - Inside an ask, `repo checkout` reuses the ask's one copy per repo. Outside an ask (a chat session) every
   `repo checkout` makes a new copy and prints its path; use that path, never another session's copy.
 - PRs open ready for review, config repos included; follow the repo's PR conventions (for umm_config, call out

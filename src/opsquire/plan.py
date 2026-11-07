@@ -160,6 +160,7 @@ class PlanRun:
                 "pid": os.getpid(),
                 "pid_ns": pid_namespace(),
                 "origin": run_origin(),
+                "files": self.plan.file_hashes(),
                 "steps": self.steps,
                 "targets": targets,
                 "lock": self.lock_info,

@@ -5,6 +5,7 @@ import contextlib
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -18,7 +19,7 @@ from .bootstrap import init
 from .close import auto_close, close_task
 from .docs import write_docs
 from .homegit import commit_quietly
-from .integrate import integrate
+from .integrate import COMMAND_PLACEHOLDER, integrate, own_command
 from .judge import judge
 from .lint import lint_task, save_lint
 from .milestones import KINDS, milestones, render, since_arg
@@ -31,6 +32,7 @@ from .model import (
     THREAD_RE,
     Meta,
     OpsquireError,
+    code_version,
     config_path,
     home_dir,
     iso,
@@ -43,7 +45,7 @@ from .model import (
 from .plan import plan_meta, run_plan
 from .query import all_runs, find_run, find_tasks, list_tasks, runs_for, summarize, wait_for_run
 from .runner import EXIT_CODES, load_run, run_task, tty_prompt
-from .state import state
+from .state import state, waiting_on
 from .ui import DEFAULT_PORT, serve, url
 
 
@@ -59,11 +61,36 @@ def emit(data: Any, as_json: bool, table: list[list[str]] | None = None) -> None
         print("  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)).rstrip())
 
 
+def kebab(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def report_shared_targets(targets: list[str], exclude: str = "") -> list[dict[str, Any]]:
+    """Tell the agent what else waits for these targets; it is the agent's call whether the work is related."""
+    waiting = waiting_on(targets, exclude)
+    for it in waiting:
+        why = f" ({it['why']})" if it["why"] else ""
+        on = ", ".join(it["targets"])
+        print(f"opsquire: also waiting on {on}: {it['task_id']}, {it['next']} run{why}", file=sys.stderr)
+    if waiting:
+        print(
+            "opsquire: related runs on one machine go in one plan or task; withdraw what it replaces with "
+            "`opsquire handover <task> --withdraw`. Unrelated work stays separate: say so at handover.",
+            file=sys.stderr,
+        )
+    return waiting
+
+
 def cmd_new(a: argparse.Namespace) -> int:
     t = now()
     name = f"{a.area}_{a.name}" if a.general else f"{t:%Y%m%d-%H%M}_{a.area}_{a.name}"
     if not (GENERAL_ID_RE if a.general else TASK_ID_RE).match(name):
-        raise OpsquireError(f"{name!r}: area and name must be lowercase kebab-case")
+        parts = (("area", a.area), ("name", a.name))
+        wrong = [f"{label} {value!r}, use {kebab(value)!r}" for label, value in parts if kebab(value) != value]
+        hint = " A host name with underscores keeps its spelling in --target." if "_" in a.area else ""
+        raise OpsquireError(
+            f"nothing created: area and name must be lowercase kebab-case: {'; '.join(wrong) or name}.{hint}"
+        )
     folder = home_dir() / "general" / name if a.general else home_dir() / "tasks" / f"{t:%Y-%m}" / name
     if folder.exists():
         raise OpsquireError(f"{folder} already exists")
@@ -82,7 +109,11 @@ def cmd_new(a: argparse.Namespace) -> int:
             with contextlib.suppress(OSError):
                 parent.rmdir()
         raise
-    print(folder)
+    if not a.json:
+        print(folder)
+    waiting = report_shared_targets(a.target or [a.area], name)
+    if a.json:
+        emit({"id": name, "path": str(folder), "waiting_on_same_target": waiting}, True)
     return 0
 
 
@@ -152,6 +183,9 @@ def cmd_close(a: argparse.Namespace) -> int:
     """Record how a task really ended: done, partial or abandoned, with a note (what was finished by hand, which
     run landed). Only annotates meta.json; touches no host. The catalog and `ls` show the state from then on."""
     closed = close_task(a.task, a.outcome, a.note, a.run)
+    if a.json:
+        emit({"id": closed["id"], "outcome": a.outcome, "notes": closed["notes"]}, True)
+        return 0
     print(f"{closed['id']}: closed {a.outcome}")
     for note in closed["notes"]:
         print(note, file=sys.stderr)
@@ -189,13 +223,29 @@ def cmd_run(a: argparse.Namespace) -> int:
 
 def cmd_handover(a: argparse.Namespace) -> int:
     task = resolve_task(a.task)
+    if a.withdraw:
+        withdrawn = handover.withdraw(task)
+        if a.json:
+            emit({"id": task.id, "withdrawn": withdrawn}, True)
+        else:
+            print(f"{task.id}: handover withdrawn" if withdrawn else f"{task.id}: no handover to withdraw")
+        return 0
     mode = handover.mode_for(task, a.apply, a.verify)
-    entry = handover.record(task, mode, a.script_args, a.why or "", handover.author())
+    same = handover.same_apply(task, runs_for(task.id), a.script_args) if mode == "apply" else None
+    if same and not (a.again and (a.why or "").strip()):
+        raise OpsquireError(
+            f"not handed over: {handover.applied_text(same)}. Read that record first; if production really needs "
+            f'it again (after a rollback, say), pass --again --why "the reason"'
+        )
+    entry = handover.record(task, mode, a.script_args, a.why or "", handover.author(), again=bool(same))
     cmd = handover.command(task.id, mode, a.script_args)
+    targets = task.meta.targets if task.meta else []
     if a.json:
-        emit({"id": task.id, "command": cmd, "handover": entry}, True)
+        waiting = report_shared_targets(targets, task.id)
+        emit({"id": task.id, "command": cmd, "handover": entry, "waiting_on_same_target": waiting}, True)
     else:
         print(f"handed over: {cmd}\n  in the inbox until it runs" + (f"; why: {entry['why']}" if entry["why"] else ""))
+        report_shared_targets(targets, task.id)
     return 0
 
 
@@ -237,18 +287,24 @@ def cmd_show(a: argparse.Namespace) -> int:
 def run_table(recs: list[dict[str, Any]]) -> list[list[str]]:
     if not recs:
         return []
-    return [["STATUS", "MODE", "ORIGIN", "STARTED", "TASK", "TARGETS", "LAST ERROR"]] + [
+    return [["STATUS", "MODE", "ORIGIN", "STARTED", "SCRIPT", "TASK", "TARGETS", "LAST ERROR"]] + [
         [
-            str(r.get("status")),
+            "waiting" if question(r) else str(r.get("status")),
             str(r.get("mode")),
             str(r.get("origin") or "-"),
             str(r.get("started")),
+            code_version(r.get("files") or {})[:7] or "-",
             str(r.get("task_id")),
             " ".join(f"{k}={v['status']}" for k, v in (r.get("targets") or {}).items()),
-            str(r.get("last_error") or "")[:60],
+            f"asks the operator: {question(r)}"[:80] if question(r) else str(r.get("last_error") or "")[:60],
         ]
         for r in recs
     ]
+
+
+def question(rec: dict[str, Any]) -> str:
+    """What a running run is waiting for the operator to answer, if anything."""
+    return str((rec.get("waiting") or {}).get("question") or "") if rec.get("status") == "running" else ""
 
 
 def cmd_runs(a: argparse.Namespace) -> int:
@@ -292,6 +348,8 @@ def cmd_log(a: argparse.Namespace) -> int:
     if not a.events:
         rec = load_run(path / "run.json")
         print(f"\n--- status={rec['status']} exit={rec.get('exit_code')} origin={rec.get('origin') or '-'} run={path}")
+        if question(rec):
+            print(f"--- waiting for the operator to answer: {question(rec)}")
     return 0
 
 
@@ -392,7 +450,7 @@ def cmd_home(a: argparse.Namespace) -> int:
 
 
 def contract_text() -> str:
-    text = (DATA_DIR / "AGENTS.md").read_text()
+    text = (DATA_DIR / "AGENTS.md").read_text().replace(COMMAND_PLACEHOLDER, own_command())
     local = home_dir() / "LOCAL.md"
     if local.is_file():
         text += "\n## Local rules for this home\n\n" + local.read_text()
@@ -419,16 +477,31 @@ def cmd_integrate(a: argparse.Namespace) -> int:
 def cmd_repo(a: argparse.Namespace) -> int:
     if a.action == "list":
         found = repos.registry()
+        local = {r.name: repos.freshness(r) for r in found.values()}
         emit(
-            [{"name": r.name, "path": str(r.path), "github": r.github, "base": r.base} for r in found.values()],
+            [
+                {"name": r.name, "path": str(r.path), "github": r.github, "base": r.base, "local": local[r.name]}
+                for r in found.values()
+            ],
             a.json,
-            [["NAME", "GITHUB", "BASE", "PATH"]] + [[r.name, r.github, r.base, str(r.path)] for r in found.values()],
+            [["NAME", "GITHUB", "BASE", "PATH", "LOCAL CHECKOUT"]]
+            + [[r.name, r.github, r.base, str(r.path), local[r.name]] for r in found.values()],
         )
         return 0
     if a.action == "checkout":
         if not a.target:
             raise OpsquireError("say which repo: opsquire repo checkout <name>")
-        print(repos.checkout(a.target, a.base))
+        copy = repos.checkout(a.target, a.base)
+        print(copy)
+        stale = repos.stale_copy_note(copy)
+        if stale:
+            print(f"opsquire: WARNING: {stale}", file=sys.stderr)
+        return 0
+    if a.action == "overlap":
+        if not a.target:
+            raise OpsquireError("say which copy: opsquire repo overlap <copy-path>")
+        overlaps = repos.overlapping_prs(Path(a.target).expanduser().resolve())
+        emit(overlaps, a.json, overlap_table(overlaps))
         return 0
     if not a.target or not a.title:
         raise OpsquireError('opsquire repo pr <copy-path> --title "..." --body-file <file>')
@@ -436,6 +509,9 @@ def cmd_repo(a: argparse.Namespace) -> int:
     result = repos.open_pr(Path(a.target).expanduser().resolve(), a.title, body, a.branch)
     if result["auto_deploy_base"]:
         print(f"opsquire: WARNING: {result['base']} auto-deploys; merging this PR deploys it", file=sys.stderr)
+    for other in repos.overlapping_prs(Path(a.target).expanduser().resolve()):
+        files = ", ".join(other["files"][:5])
+        print(f"opsquire: WARNING: {other['url']} ({other['author']}) also changes {files}", file=sys.stderr)
     if a.json:
         emit(result, True)
     else:
@@ -445,6 +521,14 @@ def cmd_repo(a: argparse.Namespace) -> int:
             f"{len(result['changed'])} changed, {len(result['deleted'])} deleted"
         )
     return 0
+
+
+def overlap_table(overlaps: list[dict[str, Any]]) -> list[list[str]]:
+    if not overlaps:
+        return []
+    return [["PR", "AUTHOR", "BRANCH", "SHARED FILES"]] + [
+        [str(o["url"]), str(o["author"]), str(o["branch"]), ", ".join(o["files"])] for o in overlaps
+    ]
 
 
 def cmd_piece(a: argparse.Namespace) -> int:
@@ -598,6 +682,7 @@ def parser() -> argparse.ArgumentParser:
     n.add_argument("--lang", choices=["py", "sh"], default="py")
     n.add_argument("--general", action="store_true")
     n.add_argument("--plan", action="store_true", help="a plan: runs --step tasks in order with one command")
+    n.add_argument("--json", action="store_true")
     n.add_argument("--step", action="append", metavar="TASK", help="plan step, in order (repeat)")
     n.add_argument("--changes-prod", action="store_true")
     n.add_argument(
@@ -640,6 +725,8 @@ def parser() -> argparse.ArgumentParser:
     ho.add_argument("--apply", action="store_true", help="hand over the apply run (changing tasks)")
     ho.add_argument("--verify", action="store_true", help="hand over the verify check")
     ho.add_argument("--why", help="one line on why this run is needed now; shown in the inbox")
+    ho.add_argument("--again", action="store_true", help="an apply that already ran the same way must run again")
+    ho.add_argument("--withdraw", action="store_true", help="take the task's handover out of the inbox")
     ho.add_argument("--json", action="store_true")
     ho.set_defaults(fn=cmd_handover)
 
@@ -648,6 +735,7 @@ def parser() -> argparse.ArgumentParser:
     cl.add_argument("--outcome", required=True, choices=OUTCOME_STATES)
     cl.add_argument("--note", required=True, help="what actually happened, e.g. finished by hand, which run landed")
     cl.add_argument("--run", help="the run that landed it (id or unique part)")
+    cl.add_argument("--json", action="store_true")
     cl.set_defaults(fn=cmd_close)
 
     ls = sub.add_parser("ls", help="list tasks with derived status")
@@ -723,9 +811,11 @@ def parser() -> argparse.ArgumentParser:
     ig.add_argument("--dry-run", action="store_true")
     ig.set_defaults(fn=cmd_integrate)
 
-    rp = sub.add_parser("repo", help="change a code/config repo as a GitHub PR: list, checkout <repo>, pr <copy>")
-    rp.add_argument("action", choices=["list", "checkout", "pr"])
-    rp.add_argument("target", nargs="?", help="repo name (checkout) or copy path (pr)")
+    rp = sub.add_parser(
+        "repo", help="change a code/config repo as a GitHub PR: list, checkout <repo>, overlap <copy>, pr <copy>"
+    )
+    rp.add_argument("action", choices=["list", "checkout", "overlap", "pr"])
+    rp.add_argument("target", nargs="?", help="repo name (checkout) or copy path (overlap, pr)")
     rp.add_argument("--title", help="PR title (first line) and commit message")
     rp.add_argument("--body-file", help="PR description, markdown")
     rp.add_argument("--branch", help="branch name (default: <branch_prefix><title words>)")

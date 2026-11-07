@@ -26,6 +26,8 @@ MODES = ("read", "dry", "apply", "verify")
 FLAGS = {"apply": ["--apply"], "verify": ["--verify"]}
 PROMPT_RE = re.compile(r"(\[y/N\] ?|Type BREAK to take the lock anyway: ?)$")
 PROMPT_QUIET_S = 0.3
+HELPER_PROMPT_RE = re.compile(rb"\n>>> ((?:(?!\n>>> ).)*?) \[y/N\] ", re.DOTALL)
+HELPER_PROMPT_SCAN_BYTES = 256 * 1024
 MAX_JOBS = 50
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -46,6 +48,8 @@ class Job:
     fd: int = -1
     proc: subprocess.Popen[bytes] | None = None
     last_read: float = 0.0
+    answered: int = 0
+    prompt_end: int = -1
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def view(self) -> dict[str, Any]:
@@ -132,9 +136,10 @@ class Jobs:
                 with job.lock:
                     job.output += chunk
                     job.last_read = time.monotonic()
-                    if job.prompt:
+                    if job.prompt and job.prompt_end < 0:
                         job.prompt, job.status = None, "running"
                         self.changed.set()
+                self.detect_helper_prompt(job)
             elif chunk is None or proc.poll() is not None:
                 if proc.poll() is None:
                     time.sleep(0.05)
@@ -144,6 +149,25 @@ class Jobs:
                 self.detect_prompt(job)
                 time.sleep(0.05)
         self.finish(job)
+
+    def detect_helper_prompt(self, job: Job) -> None:
+        """A helper's prompt stands until it is answered, wherever it landed in the output: a script's own prompt
+        can overtake lines the runner is still echoing, or be followed by another process's output."""
+        with job.lock:
+            if job.prompt_end >= 0:
+                return
+            start = max(job.answered, len(job.output) - HELPER_PROMPT_SCAN_BYTES)
+            found = HELPER_PROMPT_RE.search(job.output, start)
+            if not found:
+                return
+            question = found.group(1).decode("utf-8", "replace").replace("\r", "")
+            job.prompt, job.status, job.prompt_end = f">>> {question} [y/N]", "waiting", found.end()
+        self.changed.set()
+
+    def clear_prompt(self, job: Job) -> None:
+        with job.lock:
+            job.answered = job.prompt_end if job.prompt_end >= 0 else len(job.output)
+            job.prompt, job.status, job.prompt_end = None, "running", -1
 
     def detect_prompt(self, job: Job) -> None:
         with job.lock:
@@ -163,7 +187,7 @@ class Jobs:
         code = proc.wait()
         with job.lock:
             job.exit_code = code
-            job.status, job.prompt = "done", None
+            job.status, job.prompt, job.prompt_end = "done", None, -1
             job.ended = iso(now())
             try:
                 os.close(job.fd)
@@ -191,14 +215,15 @@ class Jobs:
         if job.status == "done":
             raise OpsquireError(f"job {job_id} has finished")
         os.write(job.fd, (text.strip() + "\n").encode())
-        with job.lock:
-            job.prompt, job.status = None, "running"
+        self.clear_prompt(job)
+        self.detect_helper_prompt(job)
         self.changed.set()
 
     def interrupt(self, job_id: str) -> None:
         job = self.get(job_id)
         if job.status == "done" or job.proc is None:
             raise OpsquireError(f"job {job_id} has finished")
+        self.clear_prompt(job)
         os.killpg(job.proc.pid, signal.SIGINT)
 
     def stop_all(self) -> None:

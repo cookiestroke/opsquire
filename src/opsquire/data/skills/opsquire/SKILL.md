@@ -4,6 +4,8 @@ description: Use for ANY tooling need: a script, check, query, deploy, restart, 
 ---
 
 The operator runs all tooling through Opsquire. Agents prepare; the operator runs; every run is recorded.
+If your shell says `opsquire: command not found`, call it as `{{opsquire_command}}`; the commands you hand the operator
+stay `opsquire ...`.
 
 1. Run `opsquire home` to find the home, then read `<home>/AGENTS.md` (the contract, including the operator's local
    rules) and `<home>/docs/CATALOG.md` (everything that already exists). Follow the contract exactly; it wins over

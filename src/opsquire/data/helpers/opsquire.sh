@@ -25,16 +25,16 @@ sq_error() { sq_emit event error msg "$*"; }
 sq_progress() { sq_emit event progress msg "$1" "done" "$2" total "$3" unit "${4:-}"; }
 sq_target() { sq_emit event target target "$1" status "$2" msg "${3:-}"; }
 
-sq__wait_for_echo() {
-  if [[ -n "${OPSQUIRE_SYNC_FD:-}" ]]; then
-    sq_emit event sync
-    read -r -t 10 -n 1 -u "$OPSQUIRE_SYNC_FD" _ 2>/dev/null || true
+sq__announce_prompt() {
+  sq_emit event waiting msg "$*"
+  if [[ -n "${OPSQUIRE_SYNC_PATH:-}" ]]; then
+    read -r -t 10 -n 1 _ <>"$OPSQUIRE_SYNC_PATH" 2>/dev/null || true
   fi
 }
 
 sq_confirm() {
   local answer=""
-  sq__wait_for_echo
+  sq__announce_prompt "$*"
   if { printf '\n>>> %s [y/N] ' "$*" >/dev/tty; } 2>/dev/null; then
     read -r answer </dev/tty || answer=""
   fi

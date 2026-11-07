@@ -148,7 +148,7 @@ def wait_for_run(
     baseline = since or (str(existing[-1]["started"]) if existing else "")
     progress(f"waiting for a run of {task_id} started after {baseline or 'now'} (Ctrl-C to stop)")
     deadline = time.monotonic() + timeout
-    announced = ""
+    announced = asked = ""
     while True:
         fresh = [r for r in runs_for(task_id) if str(r.get("started")) > baseline]
         if fresh:
@@ -158,6 +158,11 @@ def wait_for_run(
             if rec["run_id"] != announced:
                 announced = str(rec["run_id"])
                 progress(f"run {announced} started, waiting for it to finish")
+            question = str((rec.get("waiting") or {}).get("question") or "")
+            if question != asked:
+                asked = question
+                if question:
+                    progress(f"run {announced} is waiting for the operator to answer: {question}")
         if time.monotonic() >= deadline:
             return None
         time.sleep(poll)

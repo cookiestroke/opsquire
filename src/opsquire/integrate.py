@@ -5,12 +5,26 @@ Idempotent."""
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 from .homegit import ensure_repo
 from .model import DATA_DIR, home_dir, write_text
 
 SKILL_SRC = DATA_DIR / "skills" / "opsquire" / "SKILL.md"
+COMMAND_PLACEHOLDER = "{{opsquire_command}}"
+
+
+def own_command() -> str:
+    """How to call this opsquire from a shell that does not have it on PATH, as agents' non-login shells often do."""
+    found = shutil.which("opsquire")
+    if found:
+        return str(Path(found).resolve())
+    script = Path(sys.argv[0])
+    if script.name == "opsquire" and script.is_file():
+        return str(script.resolve())
+    return f"{sys.executable} -m opsquire"
 
 
 def claude_skill_files() -> list[Path]:
@@ -23,7 +37,7 @@ def claude_skill_files() -> list[Path]:
 
 def install_skill(dry: bool) -> list[str]:
     """Install or update the opsquire skill in each Claude config dir; one line per dir."""
-    want = SKILL_SRC.read_text()
+    want = SKILL_SRC.read_text().replace(COMMAND_PLACEHOLDER, own_command())
     lines = []
     for dest in claude_skill_files():
         if dest.is_file() and dest.read_text() == want:

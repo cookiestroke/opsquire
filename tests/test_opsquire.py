@@ -2106,8 +2106,8 @@ class OpsTest(unittest.TestCase):
         self.assertFalse(any(s.exists() for s in skills) or (self.home / ".git").exists())
         r = self.cli("integrate")
         self.assertEqual(r.stdout.count("claude skill: installed"), 2)
-        want = (ROOT / "src/opsquire/data/skills/opsquire/SKILL.md").read_text()
-        self.assertTrue(all(s.read_text() == want for s in skills))
+        want = (ROOT / "src/opsquire/data/skills/opsquire/SKILL.md").read_text().split("If your shell")[0]
+        self.assertTrue(all(s.read_text().startswith(want) and "{{" not in s.read_text() for s in skills))
         self.assertIn("var/", (self.home / ".gitignore").read_text())
         self.assertEqual(len(self.git("log", "--oneline").splitlines()), 1)
         r = self.cli("integrate")
@@ -2548,6 +2548,374 @@ class OpsTest(unittest.TestCase):
         general = self.cli("close", "web1_shared-bit", "--outcome", "done", "--note", "x")
         self.assertNotEqual(general.returncode, 0)
         self.assertIn("general scripts are not closed", general.stderr)
+
+    def console(self) -> tuple[subprocess.Popen[str], Any]:
+        """A real `opsquire ui` on this home and a function that calls its API."""
+        import http.client
+
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+
+        def call(path: str, body: dict[str, Any] | None = None) -> Any:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+            conn.request("POST" if body else "GET", path, json.dumps(body) if body else None)
+            data = json.loads(conn.getresponse().read())
+            conn.close()
+            return data
+
+        return proc, call
+
+    def await_job(self, call: Any, job: str, status: str) -> dict[str, Any]:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            j: dict[str, Any] = call(f"/api/job?id={job}&offset=0")
+            if j["status"] == status:
+                return j
+            time.sleep(0.1)
+        self.fail(f"job {job} never reached {status}: {j}")
+
+    def nested_task(self, child: str, lang: str) -> str:
+        """A changing task that runs a general script as a plain child, knowing nothing about the prompt handshake."""
+        made = self.cli("new", "web1", "child", "--general", "--purpose", "asks", "--lang", lang)
+        self.assertEqual(made.returncode, 0, made.stderr)
+        (Path(made.stdout.strip()) / f"main.{lang}").write_text(child)
+        interpreter = "sys.executable" if lang == "py" else '"bash"'
+        folder = self.new(
+            "parent",
+            "import os\nimport subprocess\nimport sys\n\n"
+            f'child = os.environ["OPSQUIRE_GENERAL"] + "/web1_child/main.{lang}"\n'
+            f"sys.exit(subprocess.run([{interpreter}, child], check=False).returncode)\n",
+            "--changes-prod",
+            "--rollback",
+            "none",
+            "--no-verify",
+            "--uses",
+            "web1_child",
+        )
+        lint = self.cli("lint", "parent")
+        self.assertEqual(lint.returncode, 0, lint.stdout)
+        return folder.name
+
+    def test_a_nested_scripts_prompt_reaches_the_console_and_the_record(self) -> None:
+        lines = "x" * 100
+        children = {
+            "py": "import opsquire_helpers as sq\n\n"
+            f"for i in range(1, 41):\n    print(i, '{lines}')\nsq.confirm('Deploy web1?')\nsq.result('deployed')\n",
+            "sh": BASH_HEADER + f'for i in $(seq 40); do echo "$i {lines}"; done\n'
+            'sq_confirm "Deploy web1?"\nsq_result deployed\n',
+        }
+        for lang, child in children.items():
+            with self.subTest(lang=lang):
+                tid = self.nested_task(child, lang)
+                proc, call = self.console()
+                try:
+                    job = call("/api/run", {"task": tid, "mode": "apply"})["job_id"]
+                    j = self.await_job(call, job, "waiting")
+                    self.assertEqual(j["prompt"], ">>> Deploy web1? [y/N]")
+                    self.assertTrue(j["text"].endswith("[y/N] "), j["text"][-200:])
+                    self.assertIn(f"40 {lines}", j["text"])
+                    rec = self.last(tid)
+                    self.assertEqual((rec["status"], rec["waiting"]["question"]), ("running", "Deploy web1?"))
+                    self.assertIn("waiting for the operator: Deploy web1?", Path(rec["paths"]["output"]).read_text())
+                    self.assertIn('"event": "waiting"', Path(rec["paths"]["events"]).read_text())
+                    table = self.cli("runs", tid).stdout.splitlines()[-1]
+                    self.assertTrue(table.startswith("waiting"), table)
+                    self.assertIn("asks the operator: Deploy web1?", table)
+                    self.assertIn("waiting for the operator to answer", self.cli("log", tid).stdout)
+                    view = call("/api/state")["runs"][rec["run_id"]]
+                    self.assertEqual(view["waiting"]["question"], "Deploy web1?")
+                    call("/api/answer", {"job": job, "text": "y"})
+                    self.assertEqual(self.await_job(call, job, "done")["exit_code"], 0)
+                    rec = self.last(tid)
+                    self.assertEqual((rec["status"], rec["waiting"], rec["results"]), ("ok", None, ["deployed"]))
+                finally:
+                    proc.send_signal(signal.SIGINT)
+                    self.assertEqual(proc.wait(timeout=15), 0)
+                shutil.rmtree(next(self.home.glob(f"tasks/*/{tid}")))
+                shutil.rmtree(self.home / "general/web1_child")
+                shutil.rmtree(self.home / "var/runs" / tid)
+
+    def test_console_keeps_a_prompt_that_output_landed_behind(self) -> None:
+        from opsquire.jobs import Job, Jobs
+
+        jobs, master_slave = Jobs(), os.pipe()
+        job = Job(
+            "j1", "t", "apply", "now", output=bytearray(b"plan 1\r\n\r\n>>> Deploy?\r\nnow [y/N] plan 2\r\nplan 3\r\n")
+        )
+        job.fd = master_slave[1]
+        jobs.jobs[job.job_id] = job
+        try:
+            jobs.detect_helper_prompt(job)
+            self.assertEqual((job.status, job.prompt), ("waiting", ">>> Deploy?\nnow [y/N]"))
+            job.output += b"more output\r\n"
+            jobs.detect_helper_prompt(job)
+            self.assertEqual(job.status, "waiting")
+            job.output += b"\r\n>>> Second? [y/N] "
+            jobs.answer("j1", "y")
+            self.assertEqual(os.read(master_slave[0], 10), b"y\n")
+            self.assertEqual((job.status, job.prompt), ("waiting", ">>> Second? [y/N]"))
+            jobs.answer("j1", "n")
+            self.assertEqual((job.status, job.prompt), ("running", None))
+            jobs.detect_helper_prompt(job)
+            self.assertEqual(job.status, "running")
+        finally:
+            os.close(master_slave[0])
+            os.close(master_slave[1])
+
+    def test_a_run_stopped_at_its_prompt_says_so_and_leaves_nothing(self) -> None:
+        tmpdir = self.tmp / "scratch"
+        tmpdir.mkdir()
+        self.env["TMPDIR"] = str(tmpdir)
+        tid = self.nested_task("import opsquire_helpers as sq\n\nsq.run(lambda: sq.confirm('Deploy web1?'))\n", "py")
+        r = self.cli("run", tid, "--apply", answers=[("[y/N]", "\x03")])
+        self.assertEqual(r.returncode, 130, r.stdout)
+        rec = self.last(tid)
+        self.assertEqual((rec["status"], rec["waiting"]["question"]), ("interrupted", "Deploy web1?"))
+        self.assertIn("waiting for the operator to answer: Deploy web1?", rec["last_error"])
+        self.assertEqual([p.name for p in tmpdir.glob("opsquire-sync-*")], [])
+
+    def test_handover_refuses_an_apply_that_already_ran_the_same_way(self) -> None:
+        folder = self.new(
+            "flip",
+            "import sys\n\nimport opsquire_helpers as sq\n\nsq.result(' '.join(sys.argv[1:]))\n",
+            "--changes-prod",
+            "--rollback",
+            "flip back",
+            "--no-verify",
+        )
+        (folder / "design.md").write_text("# flip\n")
+        self.assertEqual(self.cli("lint", "flip").returncode, 0)
+        self.assertEqual(self.cli("run", "flip").returncode, 0)
+        self.assertEqual(self.cli("handover", "flip", "--apply", "--why", "dry ok").returncode, 0)
+        self.assertEqual(self.cli("run", "flip", "--apply").returncode, 0)
+        applied = self.last("flip")
+        self.assertIn("## Result", (folder / "design.md").read_text(), "closing changes the task's content hash")
+
+        refused = self.cli("handover", "flip", "--apply", "--why", "dry ok")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn(applied["run_id"], refused.stderr)
+        self.assertIn("--again", refused.stderr)
+        self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"], [])
+        self.assertEqual(self.cli("handover", "flip", "--apply", "--again").returncode, 2, "--again needs a reason")
+
+        again = self.cli("handover", "flip", "--apply", "--again", "--why", "rolled back at 09:00")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        item = json.loads(self.cli("threads", "--json").stdout)["inbox"][0]
+        self.assertIn(applied["run_id"], item["applied_already"])
+        self.assertEqual(
+            self.cli("handover", "flip", "--withdraw").stdout.strip(), f"{folder.name}: handover withdrawn"
+        )
+        self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"], [])
+        self.assertIn("no handover", self.cli("handover", "flip", "--withdraw").stdout)
+
+        self.assertEqual(self.cli("handover", "flip", "--apply", "--", "other").returncode, 0, "other arguments")
+        repeated = self.cli("run", "flip", "--apply")
+        self.assertEqual(repeated.returncode, 0)
+        self.assertIn("this apply runs it again", repeated.stderr, "a typed command still says so")
+        (folder / "main.py").write_text((folder / "main.py").read_text() + "\n")
+        self.assertEqual(self.cli("handover", "flip", "--apply").returncode, 0, "other scripts")
+
+    def test_a_failed_apply_does_not_count_as_already_applied(self) -> None:
+        self.new(
+            "boom",
+            "import sys\n\nsys.exit(1)\n",
+            "--changes-prod",
+            "--rollback",
+            "none",
+            "--no-verify",
+            "--target",
+            "web1",
+        )
+        self.assertEqual(self.cli("lint", "boom").returncode, 0)
+        self.assertEqual(self.cli("run", "boom", "--apply").returncode, 1)
+        self.assertEqual(self.cli("handover", "boom", "--apply", "--why", "the host is back").returncode, 0)
+
+    def test_an_ask_keeps_a_repeated_apply_out_of_the_inbox(self) -> None:
+        self.new("flip", "print(1)\n", "--changes-prod", "--rollback", "flip back", "--no-verify")
+        self.assertEqual(self.cli("lint", "flip").returncode, 0)
+        self.assertEqual(self.cli("run", "flip", "--apply").returncode, 0)
+        from opsquire import handover
+
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"OPSQUIRE_HOME": str(self.home)}),
+            mock.patch("sys.stdout", out),
+            mock.patch("sys.stderr", err),
+        ):
+            handed = handover.record_run_lines([("RUN", "opsquire run flip --apply")], "again", "ask 1")
+        self.assertEqual(handed, [])
+        self.assertIn("not put in the inbox", err.getvalue())
+
+    def test_a_plan_that_applied_ok_is_not_handed_over_again(self) -> None:
+        self.new("step", "print(1)\n", "--changes-prod", "--rollback", "none", "--no-verify")
+        step = next(self.home.glob("tasks/*/*_web1_step")).name
+        made = self.cli("new", "web1", "bundle", "--plan", "--step", step, "--purpose", "p", "--changes-prod")
+        self.assertEqual(made.returncode, 0, made.stderr)
+        self.assertEqual(self.cli("lint", "bundle").returncode, 0)
+        self.assertEqual(self.cli("run", "bundle", "--apply").returncode, 0)
+        refused = self.cli("handover", "bundle", "--apply", "--why", "again")
+        self.assertEqual(refused.returncode, 2, refused.stdout)
+
+    def test_new_and_handover_say_what_else_waits_on_the_target(self) -> None:
+        waiting = self.new("replay", "print(1)\n", "--target", "db", "--target", "db_2", area="data")
+        self.assertEqual(self.cli("lint", "replay").returncode, 0)
+        new = self.cli("new", "db-2", "canary", "--purpose", "p", "--changes-prod", "--rollback", "none")
+        self.assertEqual(new.returncode, 0)
+        self.assertEqual(len(new.stdout.strip().splitlines()), 1, "stdout stays one path for scripts")
+        self.assertIn(f"also waiting on db_2: {waiting.name}, read run", new.stderr)
+        self.assertIn("one plan or task", new.stderr)
+        canary = Path(new.stdout.strip())
+        self.assertEqual(self.cli("lint", "canary").returncode, 0)
+        handed = self.cli("handover", "canary", "--why", "go")
+        self.assertIn(waiting.name, handed.stderr)
+        as_json = json.loads(self.cli("handover", "canary", "--why", "go", "--json").stdout)
+        self.assertEqual(as_json["waiting_on_same_target"][0]["task_id"], waiting.name)
+        self.assertEqual(self.cli("new", "other-host", "x", "--purpose", "p").stderr, "", "nothing else waits there")
+        inbox = {i["task_id"]: i for i in json.loads(self.cli("threads", "--json").stdout)["inbox"]}
+        self.assertEqual(inbox[canary.name]["same_target"], [waiting.name])
+        self.assertEqual(inbox[waiting.name]["same_target"], [canary.name])
+
+    def test_a_failed_changing_task_leaves_the_inbox_until_it_changes(self) -> None:
+        folder = self.new(
+            "canary", "import sys\n\nsys.exit(1)\n", "--changes-prod", "--rollback", "none", "--no-verify"
+        )
+        self.assertEqual(self.cli("lint", "canary").returncode, 0)
+        self.assertEqual(self.cli("run", "canary").returncode, 1)
+        self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"], [])
+        (folder / "main.py").write_text("print(1)\n")
+        self.assertEqual(self.cli("lint", "canary").returncode, 0)
+        inbox = json.loads(self.cli("threads", "--json").stdout)["inbox"]
+        self.assertEqual([i["next"] for i in inbox], ["dry"])
+        (folder / "main.py").write_text("import sys\n\nsys.exit(1)\n")
+        self.assertEqual(self.cli("lint", "canary").returncode, 0)
+        self.assertEqual(self.cli("run", "canary").returncode, 1)
+        self.assertEqual(self.cli("handover", "canary", "--why", "the host is back").returncode, 0)
+        inbox = json.loads(self.cli("threads", "--json").stdout)["inbox"]
+        self.assertEqual([i["next"] for i in inbox], ["dry"], "a handover brings it back")
+
+    def test_new_takes_json_and_explains_a_bad_area(self) -> None:
+        made = self.cli("new", "web1", "thing", "--purpose", "p", "--json")
+        self.assertEqual(made.returncode, 0, made.stderr)
+        data = json.loads(made.stdout)
+        self.assertTrue((Path(data["path"]) / "meta.json").is_file())
+        self.assertEqual((data["id"], data["waiting_on_same_target"]), (Path(data["path"]).name, []))
+        closed = json.loads(self.cli("close", "thing", "--outcome", "abandoned", "--note", "n", "--json").stdout)
+        self.assertEqual(closed["outcome"], "abandoned")
+
+        bad = self.cli("new", "db_2", "Other_Name", "--purpose", "p")
+        self.assertEqual((bad.returncode, bad.stdout), (2, ""))
+        self.assertIn("nothing created", bad.stderr)
+        self.assertIn("area 'db_2', use 'db-2'", bad.stderr)
+        self.assertIn("name 'Other_Name', use 'other-name'", bad.stderr)
+        self.assertIn("--target", bad.stderr)
+        self.assertEqual(len(list(self.home.glob("tasks/*/*"))), 1)
+
+    def test_contract_and_skill_say_how_to_call_opsquire_off_path(self) -> None:
+        self.env["PATH"] = "/usr/bin:/bin"
+        contract = self.cli("contract").stdout
+        self.assertNotIn("{{", contract.split("## Local rules")[0])
+        self.assertIn("-m opsquire", contract.split("## Layout")[0])
+        self.env["CLAUDE_CONFIG_DIR"] = str(self.tmp / "claude")
+        self.env["HOME"] = str(self.tmp)
+        self.assertEqual(self.cli("integrate").returncode, 0)
+        skill = (self.tmp / "claude/skills/opsquire/SKILL.md").read_text()
+        self.assertNotIn("{{", skill)
+        self.assertIn("-m opsquire", skill)
+
+    def test_catalog_and_suggestions_count_script_versions(self) -> None:
+        folder = self.new("replay", "print(1)\n")
+        (folder / "design.md").write_text("# replay\n")
+        for n in range(3):
+            (folder / "main.py").write_text(f"print({n})\n")
+            self.assertEqual(self.cli("lint", "replay").returncode, 0)
+            self.assertEqual(self.cli("run", "replay").returncode, 0)
+        (folder / "design.md").write_text("# replay\n\nnotes\n")
+        self.assertEqual(self.cli("lint", "replay").returncode, 0)
+        self.assertEqual(self.cli("run", "replay").returncode, 0)
+        self.assertEqual(self.cli("docs").returncode, 0)
+        catalog = (self.home / "docs/CATALOG.md").read_text()
+        self.assertIn("runs 4, 4 ok read, 3 script versions", catalog, "design notes are not a version")
+        view = json.loads(self.cli("threads", "--json").stdout)["tasks"][folder.name]
+        self.assertEqual(view["stats"]["versions"], 3)
+        self.assertIn("4 runs over 3 script versions", " ".join(s["text"] for s in view["suggestions"]))
+        scripts = [line.split()[4] for line in self.cli("show", "replay").stdout.splitlines()[-4:]]
+        self.assertEqual((len(set(scripts)), scripts[2] == scripts[3]), (3, True))
+
+    def test_repo_warns_about_a_stale_copy_and_open_prs_on_the_same_files(self) -> None:
+        repo = self.code_repo()
+        origin = self.tmp / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], env=self.env, check=True)
+        for cmd in (["remote", "add", "origin", str(origin)], ["push", "-q", "origin", "HEAD:refs/heads/main"]):
+            subprocess.run(["git", "-C", str(repo), *cmd], env=self.env, check=True, capture_output=True)
+        listed = json.loads(self.cli("repo", "list", "--json").stdout)[0]
+        self.assertIn("up to date", listed["local"])
+        fresh = self.cli("repo", "checkout", "umm")
+        self.assertEqual(fresh.stderr, "", "origin matches")
+        copy = Path(fresh.stdout.strip())
+
+        other = self.tmp / "other"
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(other)], cwd=repo, env=self.env, check=True)
+        (other / "moved.txt").write_text("x\n")
+        for cmd in (
+            ["add", "-A"],
+            ["commit", "-q", "-m", "moved"],
+            ["push", "-q", "origin", "HEAD:refs/heads/main"],
+        ):
+            subprocess.run(["git", "-C", str(other), *cmd], env=self.env, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", "HEAD~0"], env=self.env, check=True
+        )
+        listed = json.loads(self.cli("repo", "list", "--json").stdout)[0]
+        self.assertRegex(listed["local"], r"1 behind origin/main")
+        with mock.patch.dict(os.environ, {"OPSQUIRE_HOME": str(self.home)}):
+            from opsquire import repos
+
+            note = repos.stale_copy_note(copy)
+        self.assertIn("could not fetch", note)
+        self.assertIn(f"git -C {repo} fetch origin main", note)
+
+        (copy / "src/app.py").write_text("x = 3\n")
+        (self.tmp / "gh.json").write_text(
+            json.dumps(
+                {
+                    "refs": {},
+                    "commits": [],
+                    "prs": [],
+                    "open_prs": [
+                        {
+                            "url": "https://github.com/acme/umm/pull/9",
+                            "author": {"login": "colleague"},
+                            "headRefName": "their-fix",
+                            "files": [{"path": "src/app.py"}, {"path": "unrelated.py"}],
+                        },
+                        {
+                            "url": "https://github.com/acme/umm/pull/10",
+                            "author": {"login": "other"},
+                            "headRefName": "elsewhere",
+                            "files": [{"path": "unrelated.py"}],
+                        },
+                    ],
+                }
+            )
+        )
+        found = json.loads(self.cli("repo", "overlap", str(copy), "--json").stdout)
+        self.assertEqual(
+            found,
+            [
+                {
+                    "url": "https://github.com/acme/umm/pull/9",
+                    "author": "colleague",
+                    "branch": "their-fix",
+                    "files": ["src/app.py"],
+                }
+            ],
+        )
+        body = self.tmp / "body.md"
+        body.write_text("why\n")
+        opened = self.cli("repo", "pr", str(copy), "--title", "fix app", "--body-file", str(body))
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        self.assertIn("pull/9 (colleague) also changes src/app.py", opened.stderr)
 
 
 class ReleaseScripts(unittest.TestCase):

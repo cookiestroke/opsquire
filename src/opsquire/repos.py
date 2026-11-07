@@ -328,6 +328,72 @@ def branch_head(repo: Repo, branch: str) -> str | None:
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
 
+def remote_tip(repo: Repo, base: str) -> str | None:
+    """The branch's commit on origin right now, read without writing anything; None when origin cannot be reached."""
+    exe = shutil.which("git")
+    if not exe or not repo.path.is_dir():
+        return None
+    r = subprocess.run(
+        [exe, "-C", str(repo.path), "ls-remote", "origin", f"refs/heads/{base}"], capture_output=True, text=True
+    )
+    return r.stdout.split()[0] if r.returncode == 0 and r.stdout.strip() else None
+
+
+def stale_copy_note(copy: Path) -> str:
+    """`checkout` exports the last fetched origin/<base>, and a fetch fails quietly in an agent's sandbox."""
+    state = copy_state(copy)
+    repo = get_repo(state["repo"])
+    tip = remote_tip(repo, state["base"])
+    if not tip or tip == state["base_sha"]:
+        return ""
+    return (
+        f"{copy} is {state['base']} at {state['base_sha'][:10]} but origin is at {tip[:10]}: this machine could not "
+        f"fetch, so its code is old. Have the operator run `git -C {repo.path} fetch origin {state['base']}`, "
+        "then check out again"
+    )
+
+
+def freshness(repo: Repo) -> str:
+    """Where the operator's own checkout stands against origin, for anyone tempted to read code from it."""
+    try:
+        branch = git(repo.path, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    except OpsquireError:
+        return "unknown"
+    tip = remote_tip(repo, repo.base)
+    if not tip:
+        return f"{branch}, origin not reachable"
+    if git(repo.path, "rev-parse", "HEAD").strip() == tip:
+        return f"{branch}, up to date"
+    try:
+        behind = git(repo.path, "rev-list", "--count", f"HEAD..{tip}").strip()
+    except OpsquireError:
+        return f"{branch}, behind origin/{repo.base}: not fetched"
+    return f"{branch}, {behind} behind origin/{repo.base}"
+
+
+def overlapping_prs(copy: Path) -> list[dict[str, Any]]:
+    """Open PRs of others that change a file this copy changes: read them before building on the same code. Advice
+    only; if GitHub cannot be asked, nothing is reported."""
+    state = copy_state(copy)
+    repo = get_repo(state["repo"])
+    changed, deleted = changes(copy)
+    mine = {*changed, *deleted}
+    if not mine:
+        return []
+    fields = "number,url,author,headRefName,files"
+    try:
+        prs = json.loads(gh("pr", "list", "--repo", repo.github, "--state", "open", "--limit", "200", "--json", fields))
+    except (OpsquireError, ValueError):
+        return []
+    out = []
+    for pr in prs:
+        shared = sorted(mine & {str(f.get("path")) for f in pr.get("files") or []})
+        if shared and pr.get("headRefName") != state.get("branch"):
+            author = (pr.get("author") or {}).get("login", "")
+            out.append({"url": pr.get("url"), "author": author, "branch": pr.get("headRefName"), "files": shared})
+    return out
+
+
 def drop(owner: str) -> None:
     """Remove every repo copy of an ask (when the ask is finished)."""
     shutil.rmtree(copies_dir(owner), ignore_errors=True)

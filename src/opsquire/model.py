@@ -458,6 +458,15 @@ class Task:
 ANNOTATIONS = ("outcome", "judged", "handover")
 
 
+def code_version(files: dict[str, str]) -> str:
+    """What a task's run record or current files do, for comparing runs: the hashes of `file_hashes` without the
+    Markdown, since closing a task appends its `## Result` to design.md. "" when the record has no files."""
+    code = {name: digest for name, digest in files.items() if not name.endswith(".md")}
+    if not code:
+        return ""
+    return hashlib.sha256(json.dumps(code, sort_keys=True).encode()).hexdigest()
+
+
 def content_for_hash(path: Path) -> bytes:
     data = path.read_bytes()
     if path.name != "meta.json":

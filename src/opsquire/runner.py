@@ -10,12 +10,13 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from types import FrameType
 from typing import IO, Any
 
-from . import locks
+from . import handover, locks
 from .creds import Redactor, Secrets
 from .lint import lint_task, save_lint
 from .model import (
@@ -103,6 +104,7 @@ class Run:
         self.tests = 0
         self.usage: dict[str, float] | None = None
         self.bar = ProgressBar(sys.stdout)
+        self.waiting: dict[str, str] | None = None
 
     def event(self, event: str, msg: str = "", level: str = "info", src: str = "runner", **extra: Any) -> None:
         self.seq += 1
@@ -145,10 +147,10 @@ class Run:
             self.event("warn", f"unparseable @@OPSQUIRE line: {payload[:200]}", level="warn")
             return
         kind = str(data.pop("event", ""))
-        if kind == "sync":
-            self.release_prompt()
-            return
         msg = str(data.pop("msg", ""))
+        if kind == "waiting":
+            self.wait_for_operator(msg, stream)
+            return
         level = str(data.pop("level", "error" if kind == "error" else "warn" if kind == "warn" else "info"))
         if kind not in SCRIPT_EVENTS:
             self.event("warn", f"unknown script event {kind!r}", level="warn")
@@ -167,6 +169,9 @@ class Run:
                     level = "error"
         if kind == "confirm" and str(data.get("answer", "")) != "y":
             self.declined = True
+        if kind == "confirm" and self.waiting:
+            self.waiting = None
+            self.write_record("running", None)
         if kind == "result":
             self.results.append(self.redact(msg))
         if level == "error":
@@ -183,6 +188,14 @@ class Run:
             sys.stdout.write(f"{style(f'[{kind}]', '1', sys.stdout)} {self.redact(shown)}\n")
             sys.stdout.flush()
             self.bar.resume()
+
+    def wait_for_operator(self, question: str, stream: str) -> None:
+        """A prompt is about to appear: the record says so while it is unanswered, then the script may ask."""
+        self.waiting = {"question": self.redact(question), "since": iso(now())}
+        self.event("waiting", question, src="script")
+        self.line(stream, f"{OPSQUIRE_PREFIX}waiting for the operator: {question}", echo=None)
+        self.write_record("running", None)
+        self.release_prompt()
 
     def show_progress(self, label: str, data: dict[str, Any], stream: str) -> None:
         try:
@@ -237,6 +250,7 @@ class Run:
             "counts": self.counts,
             "results": self.results,
             "usage": self.usage,
+            "waiting": self.waiting,
             "last_error": self.last_error,
             "paths": {
                 "dir": str(self.dir),
@@ -352,6 +366,8 @@ class Run:
             return self.blocked("lint or tests failed on the exact files being run")
         if self.task.content_hash() != result.content_hash:
             return self.blocked("files changed while linting")
+        if self.mode == "apply":
+            self.warn_if_applied_already()
 
         holders: list[str] = self.meta.targets if self.meta.lock != "none" else []
         lock_kind = "shared" if self.mode == "verify" else self.meta.lock
@@ -395,7 +411,24 @@ class Run:
 
         return self._spawn(env_creds)
 
+    def warn_if_applied_already(self) -> None:
+        records = []
+        for path in sorted(self.dir.parent.glob("*/run.json")):
+            if path.parent != self.dir:
+                with contextlib.suppress(OSError, ValueError):
+                    records.append(load_run(path))
+        same = handover.same_apply(self.task, records, self.args)
+        if same:
+            self.event("warn", f"{handover.applied_text(same)}; this apply runs it again", level="warn")
+
     def _spawn(self, env_creds: dict[str, str]) -> int:
+        sync_dir = tempfile.mkdtemp(prefix="opsquire-sync-")
+        try:
+            return self._spawn_with_sync(env_creds, os.path.join(sync_dir, "sync"))
+        finally:
+            shutil.rmtree(sync_dir, ignore_errors=True)
+
+    def _spawn_with_sync(self, env_creds: dict[str, str], sync_path: str) -> int:
         entry = self.task.folder / (self.meta.verify if self.mode == "verify" and self.meta.verify else self.meta.entry)
         cmd = [*self.meta.command(entry), str(entry), *self.args]
         env = {
@@ -413,14 +446,14 @@ class Run:
             "PYTHONPATH": os.pathsep.join(filter(None, [str(HELPERS_DIR), os.environ.get("PYTHONPATH", "")])),
         }
         self.event("spawn", " ".join(cmd))
-        sync_r, self.sync_w = os.pipe()
-        env["OPSQUIRE_SYNC_FD"] = str(sync_r)
         try:
-            proc = subprocess.Popen(
-                cmd, cwd=self.task.folder, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=(sync_r,)
-            )
-        finally:
-            os.close(sync_r)
+            os.mkfifo(sync_path, 0o600)
+            # Read-write, so a script opening the other end never blocks and never sees end of file.
+            self.sync_w = os.open(sync_path, os.O_RDWR | os.O_NONBLOCK)
+            env["OPSQUIRE_SYNC_PATH"] = sync_path
+        except OSError as e:
+            self.event("warn", f"prompts may appear above earlier output: no sync pipe ({e.strerror})", level="warn")
+        proc = subprocess.Popen(cmd, cwd=self.task.folder, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         lines: queue.Queue[tuple[str, str | None]] = queue.Queue()
 
         def pump(pipe: IO[bytes], name: str) -> None:
@@ -460,10 +493,13 @@ class Run:
             self.bar.close()
             for s, h in previous.items():
                 signal.signal(s, h)
-            os.close(self.sync_w)
+            if self.sync_w >= 0:
+                os.close(self.sync_w)
             self.sync_w = -1
 
         status = self.classify(code)
+        if self.waiting and not self.last_error:
+            self.last_error = f"stopped while waiting for the operator to answer: {self.waiting['question']}"
         self.finish_targets(status)
         self.write_record(status, code)
         self.event("run_end", f"status={status} exit={code}", level="info" if status == "ok" else "error")

@@ -15,8 +15,19 @@ from typing import Any
 from . import handover, locks
 from .docs import final_mode, run_stats
 from .lint import last_lint
-from .model import Task, all_task_folders, home_dir, iso, load_task, now, parse_iso, read_json, var_dir
-from .query import all_runs, task_status
+from .model import (
+    Task,
+    all_task_folders,
+    code_version,
+    home_dir,
+    iso,
+    load_task,
+    now,
+    parse_iso,
+    read_json,
+    var_dir,
+)
+from .query import all_runs, runs_for, task_status
 
 TASK_ID_RE = re.compile(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b")
 GENERIC_AUTHOR_WORDS = {"claude", "code", "codex", "chat", "opsquire", "ask", "migrated", "by", "unknown", "test"}
@@ -25,6 +36,7 @@ HANDOVER_CLOSED = {"draft", "abandoned", "superseded", "archived"}
 STALE_NEVER_RUN_DAYS = 7
 STALE_AFTER_FAILURE_DAYS = 3
 RERUN_HEAVY = 3.0
+READ_VERSIONS_HEAVY = 3
 
 
 def author_key(author: str) -> str:
@@ -232,6 +244,14 @@ def suggestions(
         )
     elif not stats["ok"] and len(runs) >= RERUN_HEAVY:
         out.append({"kind": "rerun-heavy", "text": f"{len(runs)} runs, none ok in {final} mode"})
+    elif not m.changes_prod and stats["versions"] >= READ_VERSIONS_HEAVY:
+        out.append(
+            {
+                "kind": "rerun-heavy",
+                "text": f"{len(runs)} runs over {stats['versions']} script versions: a read task should gather "
+                "everything in one run",
+            }
+        )
     return out
 
 
@@ -289,7 +309,53 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
         return None
     if last.get("mode") == "apply" and last.get("status") != "aborted" and m.verify:
         return "verify"
+    if last.get("status") in ("failed", "partial") and code_version(last.get("files") or {}) == code_version(
+        task.file_hashes()
+    ):
+        return None
     return "dry"
+
+
+def same_target(a: str, b: str) -> bool:
+    """Areas are kebab-case and hosts often are not: db-2 and db_2 are one machine."""
+    return a.replace("_", "-") == b.replace("_", "-")
+
+
+def waiting_run(task: Task, runs: list[dict[str, Any]], status: str) -> tuple[str | None, dict[str, Any] | None]:
+    """The run this task has waiting in the inbox, and the handover that put it there if one did."""
+    handed = handover.pending(task, runs) if status not in HANDOVER_CLOSED else None
+    return (str(handed["mode"]), handed) if handed else (next_mode(task, runs, status), None)
+
+
+def waiting_on(targets: list[str], exclude: str = "") -> list[dict[str, Any]]:
+    """What else waits for these targets in the inbox: related runs on one machine belong in one plan or task."""
+    out = []
+    for folder in all_task_folders():
+        task = load_task(folder)
+        if task.id == exclude or task.meta is None or task.kind == "general":
+            continue
+        shared = [t for t in task.meta.targets if any(same_target(t, want) for want in targets)]
+        if not shared:
+            continue
+        runs = runs_for(task.id)
+        status = task_status(task, runs)
+        relint = changed_since_lint(task, status)
+        nxt, handed = waiting_run(task, runs, "ready" if relint else status)
+        if nxt:
+            why = str(handed.get("why") or "") if handed else ""
+            out.append({"task_id": task.id, "next": nxt, "targets": shared, "why": why})
+    return sorted(out, key=lambda it: str(it["task_id"]))
+
+
+def note_shared_inbox(item: dict[str, Any], items: list[dict[str, Any]]) -> list[str]:
+    """The other inbox items that touch one of this item's targets (a plan's own steps do not count)."""
+    own = {str(item["task_id"]), *(str(s["task_id"]) for s in item.get("steps") or [])}
+    return [
+        str(other["task_id"])
+        for other in items
+        if str(other["task_id"]) not in own
+        and any(same_target(a, b) for a in item["targets"] for b in other["targets"])
+    ]
 
 
 def nest_steps(inbox: list[dict[str, Any]], tasks: dict[str, Task]) -> list[dict[str, Any]]:
@@ -307,6 +373,17 @@ def nest_steps(inbox: list[dict[str, Any]], tasks: dict[str, Task]) -> list[dict
     return [dict(it, steps=it.get("steps") or []) for it in inbox if it["task_id"] not in nested]
 
 
+def applied_already(task: Task, runs: list[dict[str, Any]]) -> str | None:
+    if task.meta is None or not task.meta.changes_prod or task.kind == "general":
+        return None
+    same = handover.same_apply(task, runs, [])
+    return handover.applied_text(same) if same else None
+
+
+def with_shared_targets(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [dict(it, same_target=note_shared_inbox(it, items)) for it in items]
+
+
 def run_view(r: dict[str, Any]) -> dict[str, Any]:
     targets = r.get("targets") or {}
     return {
@@ -321,6 +398,7 @@ def run_view(r: dict[str, Any]) -> dict[str, Any]:
         "last_error": r.get("last_error"),
         "results": r.get("results") or [],
         "usage": r.get("usage"),
+        "waiting": r.get("waiting") if r.get("status") == "running" else None,
         "warnings": r.get("warnings") or [],
         "plan_run": r.get("plan_run"),
         "steps": r.get("steps"),
@@ -393,6 +471,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
             "has_design": (t.folder / "design.md").is_file(),
             "has_result": has_result(t.folder),
             "suggestions": suggestions(t, status, trs, tasks, at),
+            "applied_already": applied_already(t, trs),
             "settled": False,
             "agents": agents_of.get(t.id, {"asks": 0, "pieces": 0, "cost_usd": 0.0, "operator_s": 0.0}),
             "path": str(t.folder),
@@ -455,10 +534,10 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
         relint = changed_since_lint(t, str(v["status"]))
         status = "ready" if relint else str(v["status"])
         task_runs = by_task.get(t.id, [])
-        handed = handover.pending(t, task_runs) if status not in HANDOVER_CLOSED else None
-        nxt = str(handed["mode"]) if handed else next_mode(t, task_runs, status)
+        nxt, handed = waiting_run(t, task_runs, status)
         if nxt:
             args = [str(x) for x in handed.get("args") or []] if handed else []
+            same = handover.same_apply(t, task_runs, args) if nxt == "apply" else None
             inbox.append(
                 {
                     "task_id": t.id,
@@ -471,6 +550,8 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
                     "changes_prod": v["changes_prod"],
                     "thread": v["thread"],
                     "changed_since_lint": relint,
+                    "targets": v["targets"],
+                    "applied_already": handover.applied_text(same) if same else None,
                     "handed": {"at": handed.get("at"), "by": handed.get("by"), "why": handed.get("why")}
                     if handed
                     else None,
@@ -479,7 +560,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
     return {
         "generated": iso(at),
         "home": str(home),
-        "inbox": nest_steps(inbox, {t.id: t for t in tasks}),
+        "inbox": with_shared_targets(nest_steps(inbox, {t.id: t for t in tasks})),
         "threads": sorted(threads.values(), key=lambda th: str(th["updated"] or ""), reverse=True),
         "tasks": task_views,
         "runs": {str(r.get("run_id")): run_view(r) for r in runs},

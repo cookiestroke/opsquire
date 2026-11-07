@@ -73,6 +73,8 @@ elif args[:2] == ["api", "graphql"]:
     state["refs"][branch] = oid
     save()
     print(json.dumps({"data": {"createCommitOnBranch": {"commit": {"oid": oid}}}}))
+elif args[:2] == ["pr", "list"] and "--head" not in args:
+    print(json.dumps(state.get("open_prs", [])))
 elif args[:2] == ["pr", "list"]:
     head = args[args.index("--head") + 1]
     print(json.dumps([{"url": p["url"]} for p in state["prs"] if p["head"] == head]))

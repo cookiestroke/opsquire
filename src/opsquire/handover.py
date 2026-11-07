@@ -10,10 +10,11 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import sys
 from typing import Any
 
 from .homegit import commit_quietly
-from .model import OpsquireError, Task, home_dir, iso, now, resolve_task, write_json
+from .model import OpsquireError, Task, code_version, home_dir, iso, now, resolve_task, write_json
 
 RUN_LINE_RE = re.compile(r"^opsquire run (?P<task>\S+)(?P<flags>(?:\s+--\w[\w-]*)*)(?:\s+--\s+(?P<args>.*))?\s*$")
 
@@ -37,13 +38,45 @@ def mode_for(task: Task, apply: bool, verify: bool) -> str:
     return "dry" if m.changes_prod else "read"
 
 
-def record(task: Task, mode: str, args: list[str], why: str, by: str) -> dict[str, Any]:
-    entry = {"at": iso(now()), "by": by, "mode": mode, "args": list(args), "why": why.strip()}
+def record(task: Task, mode: str, args: list[str], why: str, by: str, again: bool = False) -> dict[str, Any]:
+    entry: dict[str, Any] = {"at": iso(now()), "by": by, "mode": mode, "args": list(args), "why": why.strip()}
+    if again:
+        entry["again"] = True
     raw = dict(task.raw)
     raw["handover"] = entry
     write_json(task.folder / "meta.json", raw)
     commit_quietly(home_dir(), [task.folder], f"handover: {task.id}")
     return entry
+
+
+def withdraw(task: Task) -> bool:
+    """Take the task's handover out of the inbox; False when there was none."""
+    if "handover" not in task.raw:
+        return False
+    raw = {k: v for k, v in task.raw.items() if k != "handover"}
+    write_json(task.folder / "meta.json", raw)
+    commit_quietly(home_dir(), [task.folder], f"handover withdrawn: {task.id}")
+    return True
+
+
+def same_apply(task: Task, runs: list[dict[str, Any]], args: list[str]) -> dict[str, Any] | None:
+    """The latest apply, finished ok or still running, with these arguments and the task's current scripts: running
+    it again changes production a second time for no new reason. Interrupted, failed and aborted applies do not
+    count."""
+    applies = [
+        r
+        for r in runs
+        if r.get("mode") == "apply" and r.get("status") in ("ok", "running") and list(r.get("argv") or []) == list(args)
+    ]
+    if not applies:
+        return None
+    current = code_version(task.file_hashes())
+    return next((r for r in reversed(applies) if code_version(r.get("files") or {}) == current), None)
+
+
+def applied_text(run: dict[str, Any]) -> str:
+    verb = "is running" if run.get("status") == "running" else "finished ok"
+    return f"apply {run.get('run_id')}, started {run.get('started')}, {verb} with the same scripts and arguments"
 
 
 def command(task_id: str, mode: str, args: list[str]) -> str:
@@ -70,7 +103,10 @@ def args_for(task: Task, runs: list[dict[str, Any]], mode: str) -> list[str]:
 
 def record_run_lines(actions: list[tuple[str, str]], why: str, by: str) -> list[str]:
     """Record a handover for every `RUN: opsquire run ...` line an agent ended with; lines that are not such a
-    command, or name no task, are left alone (they are the agent's text, not a contract)."""
+    command, or name no task, are left alone (they are the agent's text, not a contract). An apply that already ran
+    the same way stays out of the inbox and is reported."""
+    from .query import runs_for
+
     handed: list[str] = []
     for kind, text in actions:
         m = RUN_LINE_RE.match(text.strip()) if kind == "RUN" else None
@@ -84,6 +120,10 @@ def record_run_lines(actions: list[tuple[str, str]], why: str, by: str) -> list[
         except (OpsquireError, ValueError):
             continue
         if task.id in handed:
+            continue
+        same = same_apply(task, runs_for(task.id), args) if mode == "apply" else None
+        if same:
+            print(f"opsquire: {task.id} not put in the inbox: {applied_text(same)}", file=sys.stderr)
             continue
         record(task, mode, args, why, by)
         handed.append(task.id)
