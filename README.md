@@ -72,7 +72,8 @@ Ctrl-C is always safe: the run is recorded as `interrupted`, scratch work is und
 released, and nothing else is left behind.
 
 The full contract agents follow is in [src/opsquire/data/AGENTS.md](src/opsquire/data/AGENTS.md);
-`opsquire contract --write` installs it, plus the home's `LOCAL.md` rules, as the home's `AGENTS.md`.
+`opsquire contract --write` installs it, plus the home's `LOCAL.md` rules, as the home's `AGENTS.md`, and opsquire
+keeps that file current afterwards; it never overwrites an edit made in it by hand (it says to move it into `LOCAL.md`).
 
 ## Development
 

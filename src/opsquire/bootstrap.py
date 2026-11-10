@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from . import contract
 from .ask import DEFAULT_BUDGET_USD, configured_budget
 from .integrate import integrate
 from .lint import find_tool, lint_task, save_lint
@@ -117,11 +118,11 @@ def init(path: str | None, budget: float | None, dry: bool, offboard_days: float
     if dry:
         lines.append(f"contract: would be written ({home / 'AGENTS.md'})")
     else:
-        from .cli import contract_text
-
-        write_text(home / "AGENTS.md", contract_text())
-        write_text(home / "CLAUDE.md", "@AGENTS.md\n")
-        lines.append(f"contract: written ({home / 'AGENTS.md'})")
+        if contract.state(home) == "edited":
+            lines.append(f"contract: not written: {contract.EDITED}")
+        else:
+            contract.write_contract(home)
+            lines.append(f"contract: written ({home / 'AGENTS.md'})")
     first, ready = demo_task(home, dry)
     lines.append(first)
     if not dry:

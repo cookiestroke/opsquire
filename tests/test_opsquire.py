@@ -3515,6 +3515,32 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(json.loads((folder / "meta.json").read_text())["outcome"]["state"], "done")
         self.assertIsNone(self.inbox_item(folder.name))
 
+    def test_the_homes_contract_follows_local_rules_and_keeps_a_hand_edit(self) -> None:
+        agents, local = self.home / "AGENTS.md", self.home / "LOCAL.md"
+        local.write_text("### Rule: first\n")
+        self.assertEqual(self.cli("contract", "--write").returncode, 0)
+        self.assertIn("### Rule: first", agents.read_text())
+        self.assertTrue(agents.read_text().rstrip().endswith("-->"))
+        self.new("one", "print(1)\n")
+        local.write_text("### Rule: first\n\n### Rule: second\n")
+        r = self.cli("lint", "one")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("AGENTS.md rewritten", r.stderr)
+        self.assertIn("### Rule: second", agents.read_text())
+        self.assertNotIn("AGENTS.md", self.cli("lint", "one").stderr, "quiet when current")
+
+        agents.write_text(agents.read_text().replace("### Rule: second", "### Rule: second\n\nonly here"))
+        local.write_text("### Rule: first\n\n### Rule: third\n")
+        r = self.cli("lint", "one")
+        self.assertIn("edited by hand since opsquire wrote it: move the edit into LOCAL.md", r.stderr)
+        self.assertIn("only here", agents.read_text())
+        r = self.cli("contract", "--write")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("only here", agents.read_text())
+        self.assertEqual(self.cli("contract", "--write", "--force").returncode, 0)
+        self.assertNotIn("only here", agents.read_text())
+        self.assertIn("### Rule: third", agents.read_text())
+
 
 class ReleaseScripts(unittest.TestCase):
     """scripts/release.py and scripts/signed_commit.py: what the release workflow and every push to main rely on."""

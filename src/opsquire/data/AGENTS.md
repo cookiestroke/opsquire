@@ -33,6 +33,8 @@ repos.json                                    optional: repos agents may change 
 .repos/<ask-id>/<repo>/                       an ask's copies of those repos (not versioned)
 .repos/chat/<repo>-<id>/                      a copy made outside an ask, one per checkout (not versioned)
 LOCAL.md                                      local rules, appended to this contract
+AGENTS.md                                     this contract, written by opsquire: never edit it; a new rule goes in
+                                              LOCAL.md, and opsquire rewrites AGENTS.md on the next new, lint or run
 retinue.json                                  optional: this home's agents (overrides the packaged one)
 ```
 

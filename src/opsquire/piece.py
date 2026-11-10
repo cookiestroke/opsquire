@@ -113,7 +113,7 @@ def open_piece(name: str, group: str | None, request: str) -> PieceInfo:
     else:
         info.request = request_of(home, branch)
     env = {**os.environ, **info.env}
-    for cmd in (["contract", "--write"], ["docs"]):
+    for cmd in (["contract", "--write", "--force"], ["docs"]):
         subprocess.run([sys.executable, "-m", "opsquire", *cmd], env=env, capture_output=True, check=False)
     return info
 

@@ -120,7 +120,7 @@ class Fanout:
         wt = Path(piece.worktree)
         homegit.add_worktree(self.home, wt, piece.branch)
         env = {**self.env(), "OPSQUIRE_HOME": str(wt)}
-        for cmd in (["contract", "--write"], ["docs"]):
+        for cmd in (["contract", "--write", "--force"], ["docs"]):
             subprocess.run([sys.executable, "-m", "opsquire", *cmd], env=env, capture_output=True, check=False)
 
     def env(self) -> dict[str, str]:

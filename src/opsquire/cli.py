@@ -13,19 +13,18 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import __version__, handover, locks, piece, repos, runner
+from . import __version__, contract, handover, locks, piece, repos, runner
 from .ageing import EXPIRE_DAYS, expire_unrun, reminder, told
 from .ask import Budget, ask, configured_budget
 from .bootstrap import init
 from .close import auto_close, close_task, reopen_task, supersede_task
 from .docs import write_docs
 from .homegit import commit_quietly
-from .integrate import COMMAND_PLACEHOLDER, integrate, own_command
+from .integrate import integrate
 from .judge import judge
 from .lint import lint_changed_scripts, lint_task, save_lint
 from .milestones import KINDS, milestones, render, since_arg
 from .model import (
-    DATA_DIR,
     GENERAL_ID_RE,
     OFFBOARDED,
     OUTCOME_STATES,
@@ -48,7 +47,6 @@ from .model import (
     stage_of,
     update_config,
     write_json,
-    write_text,
 )
 from .offboard import daily_sweep, days_text, keep_days, offboard_due, offboard_named, restore, sweep_is_due_here
 from .plan import plan_meta, run_plan
@@ -610,22 +608,12 @@ def cmd_home(a: argparse.Namespace) -> int:
     return 0
 
 
-def contract_text() -> str:
-    text = (DATA_DIR / "AGENTS.md").read_text().replace(COMMAND_PLACEHOLDER, own_command())
-    local = home_dir() / "LOCAL.md"
-    if local.is_file():
-        text += "\n## Local rules for this home\n\n" + local.read_text()
-    return text
-
-
 def cmd_contract(a: argparse.Namespace) -> int:
     if not a.write:
-        sys.stdout.write(contract_text())
+        sys.stdout.write(contract.stamped(contract.contract_text(home_dir())))
         return 0
-    home = home_dir()
-    write_text(home / "AGENTS.md", contract_text())
-    write_text(home / "CLAUDE.md", "@AGENTS.md\n")
-    print(f"wrote {home / 'AGENTS.md'} and {home / 'CLAUDE.md'}")
+    contract.write_contract(home_dir(), a.force)
+    print(f"wrote {home_dir() / 'AGENTS.md'} and {home_dir() / 'CLAUDE.md'}")
     return 0
 
 
@@ -803,6 +791,15 @@ def cmd_docs(a: argparse.Namespace) -> int:
     out = write_docs()
     print(f"wrote {out / 'CATALOG.md'} and one page per general script in {out}")
     return 0
+
+
+def sync_contract() -> None:
+    try:
+        note = contract.sync(home_dir())
+    except (OpsquireError, OSError) as e:
+        note = f"AGENTS.md not refreshed: {str(e).splitlines()[0]}"
+    if note:
+        print(f"opsquire: {note}", file=sys.stderr)
 
 
 def refresh_docs() -> None:
@@ -997,6 +994,7 @@ def parser() -> argparse.ArgumentParser:
 
     ct = sub.add_parser("contract", help="print the agent contract (packaged AGENTS.md + the home's LOCAL.md)")
     ct.add_argument("--write", action="store_true", help="write it to the home as AGENTS.md and CLAUDE.md")
+    ct.add_argument("--force", action="store_true", help="overwrite an AGENTS.md that was edited by hand")
     ct.set_defaults(fn=cmd_contract)
 
     ini = sub.add_parser("init", help="set up a machine: home, local rules, config, credentials, skill, first task")
@@ -1100,6 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
             sweep_after_command()
         if a.cmd in ("new", "lint", "run", "offboard", "restore"):
             refresh_docs()
+            sync_contract()
         return code
     except OpsquireError as e:
         print(f"opsquire: {e}", file=sys.stderr)
