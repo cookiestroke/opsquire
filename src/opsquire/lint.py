@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -79,6 +80,32 @@ def lint_task(task: Task) -> LintResult:
         return LintResult(False, task.content_hash(), f"interrupted: {e} was stopped by Ctrl-C", interrupted=True)
 
 
+PY_CONFIRM = re.compile(r"(?<!def )(?<![\w.])(?:sq\.)?confirm\(")
+SH_CONFIRM = re.compile(r"^[^#\n]*\bsq_confirm\b(?!\s*\(\))", re.M)
+
+
+def asks_first(task: Task) -> bool:
+    """Whether the task's scripts, or the general scripts it uses, ask the operator for a yes somewhere. Tests and
+    the verify check (read-only) do not count."""
+    if task.meta is None or task.kind != "task":
+        return False
+    folders = [task.folder, *(home_dir() / "general" / u for u in task.meta.uses)]
+    for folder in folders:
+        for f in sorted(folder.glob("*.py")) + sorted(folder.glob("*.sh")):
+            if f.name.startswith("test_") or (folder == task.folder and f.name == task.meta.verify):
+                continue
+            with contextlib.suppress(OSError, UnicodeDecodeError):
+                if (PY_CONFIRM if f.suffix == ".py" else SH_CONFIRM).search(f.read_text()):
+                    return True
+    return False
+
+
+def asking_note(task: Task) -> str:
+    if task.meta is None or task.kind != "task" or not task.meta.changes_prod or asks_first(task):
+        return ""
+    return "note: the scripts never ask before changing production; the console asks for a second click instead"
+
+
 def _lint_task(task: Task) -> LintResult:
     content_hash = task.content_hash()
     if task.errors or task.meta is None:
@@ -128,6 +155,9 @@ def _lint_task(task: Task) -> LintResult:
     ok &= tests_ok
     if tests_out:
         parts.append(tests_out)
+    note = asking_note(task)
+    if note:
+        parts.append(note)
     return LintResult(ok, content_hash, "\n\n".join(parts), tests)
 
 

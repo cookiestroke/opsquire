@@ -831,7 +831,7 @@ function chipsRow(pairs, cls) { return pairs.length ? el('span', { class: `chips
 function scrollToKey(key) { const n = $('#main').querySelector(`[data-key="${CSS.escape(key)}"]`); if (n) n.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
 function prodMarker(t) { return t.changes_prod ? tag('changes production', 'warn') : tag('read-only'); }
 function sec(title, extra, more) { return el('h3', { class: 'sec' }, title, extra ? el('span', { class: 'n' }, extra) : null, more || null); }
-/* run buttons: apply needs a second click within 5 s */
+/* run buttons: an apply whose script asks first starts on one click; one that never asks, or ran ok already, needs a second click within 5 s */
 function arm(key) {
   S.confirm = key; clearTimeout(S.confirmTimer);
   S.confirmTimer = setTimeout(() => { S.confirm = null; render(); }, 5000);
@@ -843,9 +843,10 @@ function runButton(taskId, mode, label, primary) {
   if (active) return btn(active.status, () => openJob(active.job_id), 'sm', { title: 'a job for this task is still running; open it' });
   const cls = 'runbtn' + (primary ? ' primary' : '');
   if (mode !== 'apply') return btn(label || (S.dev ? `Run ${mode}` : 'Run'), () => startRun(taskId, mode), cls, { title: S.dev ? null : `${mode === 'read' ? 'read-only' : mode === 'verify' ? 'read-only check that the change is live' : 'dry'} run: nothing changes` });
-  const key = taskId + ':apply', armed = S.confirm === key, already = (task(taskId) || {}).applied_already;
+  const t = task(taskId) || {}, key = taskId + ':apply', armed = S.confirm === key, already = t.applied_already;
+  if (!already && t.asks_first) return btn(label || (S.dev ? 'Run apply' : 'Run'), () => startRun(taskId, 'apply'), cls + ' apply', { title: 'changes production; the script asks for your yes before the first change' });
   return btn(armed ? 'Confirm apply' : label || (S.dev ? 'Run apply' : 'Run'), () => { if (armed) { disarm(); startRun(taskId, 'apply'); } else arm(key); },
-    cls + ' apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : already ? `${already}; this changes production again and asks for a second click` : 'changes production; asks for a second click' });
+    cls + ' apply' + (armed ? ' armed' : ''), { title: armed ? 'click again within 5 s to start the apply run' : already ? `${already}; this changes production again and asks for a second click` : 'changes production and the script never asks first; asks for a second click' });
 }
 /* every run a task supports, the inbox's next step first and primary; one status button while a job runs */
 function runModes(t) {

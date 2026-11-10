@@ -14,7 +14,7 @@ from typing import Any
 
 from . import handover, locks
 from .docs import final_mode, run_stats
-from .lint import last_lint
+from .lint import asks_first, last_lint
 from .model import (
     Task,
     all_task_folders,
@@ -507,6 +507,7 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
             "has_result": has_result(t.folder),
             "suggestions": suggestions(t, status, trs, tasks, at),
             "applied_already": applied_already(t, trs),
+            "asks_first": bool(m and m.changes_prod and asks_first(t)),
             "settled": False,
             "agents": agents_of.get(t.id, {"asks": 0, "pieces": 0, "cost_usd": 0.0, "operator_s": 0.0}),
             "path": str(t.folder),

@@ -103,6 +103,7 @@ class Run:
         self.counts = {"lines": 0, "events": 0, "warn": 0, "error": 0}
         self.last_error = ""
         self.declined = False
+        self.confirms = 0
         self.interrupted = False
         self.lock_info: dict[str, Any] = {
             "mode": "shared" if mode == "verify" else meta.lock,
@@ -183,6 +184,14 @@ class Run:
                     self.script_error = ""
         if kind == "confirm" and str(data.get("answer", "")) != "y":
             self.declined = True
+        if kind == "confirm":
+            self.confirms += 1
+            if self.confirms == 2:
+                self.event(
+                    "warn",
+                    "the script asked for a second yes in one run: gather every change and ask once, before the first",
+                    level="warn",
+                )
         if kind == "confirm" and self.waiting:
             self.waiting = None
             self.write_record("running", None)

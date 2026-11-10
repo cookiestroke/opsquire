@@ -231,6 +231,12 @@ Anything that can take more than a few seconds (downloads, waits, loops over man
 `progress`: the operator sees one updating bar with speed and time left instead of a silent terminal (a silent
 download got interrupted twice before this existed). Unit `"B"` means bytes; other units are shown as counts.
 
+Ask once per run. Work out every change first (read the hosts, build the plan, print it), then one
+`confirm` before the first change that lists them all ("web1: restart api, web2: restart api and worker"), then
+change without asking again. Never confirm per host or per item inside a loop: a run that asks twice gets a warn
+event in its record. A changing task whose scripts ask first starts on one click in the console; one that never
+asks needs a second click there, and lint says so.
+
 A general script run as a child (`subprocess.run([sys.executable, script])`) can call `sq.confirm` as it is, with
 nothing to pass along. Leave its stdout connected: events reach the runner through it, so `capture_output` hides its
 prompt from the record and loses its answer.

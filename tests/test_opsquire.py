@@ -3431,6 +3431,41 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 4, r.stderr)
         self.assertIn("no run is coming", r.stderr)
 
+    def task_view(self, task_id: str) -> dict[str, Any]:
+        code = f"import json\nfrom opsquire.state import state\nprint(json.dumps(state()['tasks'][{task_id!r}]))"
+        r = subprocess.run([sys.executable, "-c", code], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        view: dict[str, Any] = json.loads(r.stdout)
+        return view
+
+    def test_a_changing_task_should_ask_once_and_the_record_says_when_it_asked_twice(self) -> None:
+        head = "import opsquire_helpers as sq\n\n"
+        twice = self.new(
+            "twice",
+            head + "if sq.APPLY:\n    sq.confirm('web1?')\n    sq.confirm('web2?')\n",
+            "--changes-prod",
+            "--rollback",
+            "none",
+            "--no-verify",
+        )
+        silent = self.new(
+            "silent", head + "sq.step('changing')\n", "--changes-prod", "--rollback", "none", "--no-verify"
+        )
+        self.new("reader", head + "sq.step('looking')\n")
+        r = self.cli("lint", "silent")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("never ask before changing production", r.stdout)
+        for name in ("twice", "reader"):
+            r = self.cli("lint", name)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertNotIn("never ask", r.stdout)
+        self.assertTrue(self.task_view(twice.name)["asks_first"])
+        self.assertFalse(self.task_view(silent.name)["asks_first"])
+        r = self.cli("run", "twice", "--apply", *self.NO_DRY, answers=[("web1? [y/N]", "y"), ("web2? [y/N]", "y")])
+        self.assertEqual(r.returncode, 0, r.stdout)
+        warns = [e["msg"] for e in self.events(self.last("twice")) if e["event"] == "warn"]
+        self.assertEqual(len([w for w in warns if "second yes in one run" in w]), 1)
+
 
 class ReleaseScripts(unittest.TestCase):
     """scripts/release.py and scripts/signed_commit.py: what the release workflow and every push to main rely on."""
