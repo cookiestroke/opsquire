@@ -78,6 +78,8 @@ opsquire ui [--port N] [--open]      the operator's console in the browser (loca
 
 `<task>` may be the full id or any unique part of it. To answer "did it work", read `run.json`:
 `status`, `targets`, `last_error`, `results` (and `usage`: peak memory and CPU time of the script). Read `output.log` only when you need detail.
+`last_error` names the cause: the exception line of a traceback your script reported with `sq.error`, joined to the
+failed target's message when one follows it. `dry` says which dry run covered an apply, or why it went without one.
 `waiting` (`question`, `since`) says a run is stopped at a prompt until the operator answers; `opsquire runs`, `wait`,
 `log` and the console show it. A run that ended with it set was stopped at that prompt.
 `origin` says where the run started: `console` (a job from `opsquire ui`) or `terminal` (any command line); records older
@@ -108,6 +110,13 @@ than the field have none, which means unknown.
    already finished ok or is running, with the same scripts and arguments, is refused: read that record first, and only
    when production really needs it again pass `--again --why "..."`. `--withdraw` takes a handover back out. A task
    whose last run failed leaves the inbox until its files change or it is handed over again.
+   An apply needs a dry run that finished ok with the same scripts and the same arguments: without one
+   `opsquire run <task-id> --apply` is refused (status `blocked`, nothing ran) and `opsquire handover --apply` is not
+   recorded, both naming the dry run to do first. So after any edit, and for every argument set (each stage of a
+   staged task), the dry run comes again. A plan is checked before its first step: every changing step needs its
+   dry run, which the plan's own dry run gives. Only the operator can go without, by typing
+   `opsquire run <task-id> --apply --skip-dry "why"`; the reason is recorded in `run.json` (`dry`). Never hand them
+   that command to get past a dry run that failed.
 6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the
    operator to paste output.
 7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,

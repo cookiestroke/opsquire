@@ -12,6 +12,7 @@ from typing import IO, Any
 
 from . import locks, runner
 from .creds import Redactor, Secrets
+from .handover import covering_dry
 from .lint import lint_task
 from .model import (
     SCHEMA,
@@ -30,6 +31,7 @@ from .model import (
     task_folder,
     write_json,
 )
+from .query import runs_for
 from .runner import EXIT_CODES, Run, style, tty_prompt
 
 
@@ -90,11 +92,12 @@ def lock_mode(steps: list[Task]) -> str:
 
 
 class PlanRun:
-    def __init__(self, plan: Task, meta: Meta, apply: bool, break_lock: bool) -> None:
+    def __init__(self, plan: Task, meta: Meta, apply: bool, break_lock: bool, skip_dry: str = "") -> None:
         self.plan = plan
         self.meta = meta
         self.apply = apply
         self.break_lock = break_lock
+        self.skip_dry = skip_dry
         self.mode = "apply" if apply else meta.modes[0]
         self.started = now()
         self.run_id = f"{compact(self.started)}_{self.mode}"
@@ -245,6 +248,19 @@ class PlanRun:
             if not lint_task(task).ok:
                 return self.finish("blocked", f"step {task.id} fails lint; run opsquire lint {task.id}")
 
+        if self.apply and not self.skip_dry:
+            for spec, task in zip(specs, tasks, strict=True):
+                assert task.meta
+                if not task.meta.changes_prod:
+                    continue
+                covered, why = covering_dry(task, runs_for(task.id), list(spec.get("args", [])))
+                if not covered:
+                    return self.finish(
+                        "blocked",
+                        f"no dry run covers the apply of step {task.id}: {why}. Run `opsquire run {self.plan.id}` "
+                        'first, or pass --skip-dry "why" to apply without one',
+                    )
+
         mode = lock_mode(tasks)
         self.lock_info["mode"] = mode
         if mode != "none":
@@ -288,7 +304,9 @@ class PlanRun:
         assert task.meta
         mode = "apply" if self.apply and task.meta.changes_prod else task.meta.modes[0]
         self.event("step_start", f"step {i}/{len(self.meta.steps or [])}: {task.id} mode={mode}")
-        run = Run(task, task.meta, mode, list(spec.get("args", [])), False, plan_run=self.run_id)
+        run = Run(
+            task, task.meta, mode, list(spec.get("args", [])), False, plan_run=self.run_id, skip_dry=self.skip_dry
+        )
         try:
             run.execute()
         except OpsquireError as e:
@@ -319,7 +337,8 @@ class PlanRun:
             return
         self.event("rollback", f"step {i} failed: running its rollback task {task_id}", "warn")
         mode = "apply" if task.meta.changes_prod else task.meta.modes[0]
-        run = Run(task, task.meta, mode, [], False, plan_run=self.run_id)
+        why = f"rollback of step {i} of {self.plan.id}"
+        run = Run(task, task.meta, mode, [], False, plan_run=self.run_id, skip_dry=why)
         try:
             run.execute()
         except OpsquireError as e:
@@ -332,11 +351,11 @@ class PlanRun:
         }
 
 
-def run_plan(plan: Task, apply: bool, break_lock: bool) -> int:
+def run_plan(plan: Task, apply: bool, break_lock: bool, skip_dry: str = "") -> int:
     if plan.meta is None:
         raise OpsquireError(f"{plan.id} has invalid meta.json:\n  " + "\n  ".join(plan.errors))
     if plan.meta.archived or plan.meta.superseded_by or plan.meta.abandoned_reason:
         raise OpsquireError(f"{plan.id} is retired; see its meta.json")
     if apply and not plan.meta.changes_prod:
         raise OpsquireError(f"{plan.id} only reads (no step changes prod); run it without --apply")
-    return PlanRun(plan, plan.meta, apply, break_lock).execute()
+    return PlanRun(plan, plan.meta, apply, break_lock, skip_dry).execute()

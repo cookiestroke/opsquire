@@ -74,6 +74,36 @@ def same_apply(task: Task, runs: list[dict[str, Any]], args: list[str]) -> dict[
     return next((r for r in reversed(applies) if code_version(r.get("files") or {}) == current), None)
 
 
+def covering_dry(task: Task, runs: list[dict[str, Any]], args: list[str]) -> tuple[dict[str, Any] | None, str]:
+    """The dry run that covers an apply now: finished ok with these arguments and the task's current scripts. Without
+    one, why: an apply of scripts no dry run has seen is a first try on production."""
+    current = code_version(task.file_hashes())
+    dries = [r for r in runs if r.get("mode") == "dry"]
+    same_args = [r for r in dries if list(r.get("argv") or []) == list(args)]
+    same = [r for r in same_args if code_version(r.get("files") or {}) == current]
+    ok = next((r for r in reversed(same) if r.get("status") == "ok"), None)
+    if ok:
+        return ok, ""
+    if same:
+        return None, f"its dry run {same[-1].get('run_id')} of these scripts ended {same[-1].get('status')}"
+    if same_args:
+        return None, f"the scripts changed since its last dry run, {same_args[-1].get('run_id')}"
+    if dries:
+        return None, f"its last dry run, {dries[-1].get('run_id')}, had other arguments"
+    return None, "it never had a dry run"
+
+
+def needs_dry(task: Task, runs: list[dict[str, Any]], args: list[str]) -> str | None:
+    """Why an apply of this task cannot be handed over yet, None when a dry run covers it. A plan is checked step by
+    step when it runs."""
+    if task.kind == "plan":
+        return None
+    covered, why = covering_dry(task, runs, args)
+    if covered:
+        return None
+    return f"no dry run covers this apply ({why}); the dry run comes first: `{command(task.id, 'dry', args)}`"
+
+
 def applied_text(run: dict[str, Any]) -> str:
     verb = "is running" if run.get("status") == "running" else "finished ok"
     return f"apply {run.get('run_id')}, started {run.get('started')}, {verb} with the same scripts and arguments"
@@ -85,20 +115,27 @@ def command(task_id: str, mode: str, args: list[str]) -> str:
 
 
 def pending(task: Task, runs: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The task's handover while no run of it has started since; runs are the task's run records."""
+    """The task's handover while no run of it has started since; runs are the task's run records. A blocked run
+    started nothing, so the handover outlives it."""
     h = task.raw.get("handover")
     if not isinstance(h, dict) or not isinstance(h.get("at"), str):
         return None
-    if any(str(r.get("started") or "") >= str(h["at"]) for r in runs):
+    if any(str(r.get("started") or "") >= str(h["at"]) for r in runs if r.get("status") != "blocked"):
         return None
     return h
 
 
 def args_for(task: Task, runs: list[dict[str, Any]], mode: str) -> list[str]:
-    """What a run in this mode takes from the console: the arguments of the handed-over run the inbox shows. Any other
-    run of the task (another mode, no handover) has none."""
+    """What a run in this mode takes from the inbox: the arguments of the handed-over run it shows, and for an apply
+    nobody handed over those of the dry run it follows (an apply is covered only by a dry run with its arguments).
+    Any other run of the task has none."""
     h = pending(task, runs)
-    return [str(x) for x in h.get("args") or []] if h and h.get("mode") == mode else []
+    if h:
+        return [str(x) for x in h.get("args") or []] if h.get("mode") == mode else []
+    ran = [r for r in runs if r.get("status") != "blocked"]
+    if mode == "apply" and ran and ran[-1].get("mode") == "dry":
+        return [str(x) for x in ran[-1].get("argv") or []]
+    return []
 
 
 def record_run_lines(actions: list[tuple[str, str]], why: str, by: str) -> list[str]:
@@ -124,6 +161,10 @@ def record_run_lines(actions: list[tuple[str, str]], why: str, by: str) -> list[
         same = same_apply(task, runs_for(task.id), args) if mode == "apply" else None
         if same:
             print(f"opsquire: {task.id} not put in the inbox: {applied_text(same)}", file=sys.stderr)
+            continue
+        uncovered = needs_dry(task, runs_for(task.id), args) if mode == "apply" else None
+        if uncovered:
+            print(f"opsquire: {task.id} not put in the inbox: {uncovered}", file=sys.stderr)
             continue
         record(task, mode, args, why, by)
         handed.append(task.id)

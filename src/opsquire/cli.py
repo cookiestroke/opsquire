@@ -219,6 +219,9 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.verbose:
         runner.VERBOSE = True
     task = resolve_task(a.task)
+    skip_dry = (a.skip_dry or "").strip()
+    if a.skip_dry is not None and not (a.apply and skip_dry):
+        raise OpsquireError('--skip-dry goes with --apply and needs the reason: --skip-dry "why no dry run"')
     versioned = [home_dir() / sub for sub in ("tasks", "general", OFFBOARDED)]
     note = commit_quietly(home_dir(), versioned, f"before running {task.id}")
     if note:
@@ -229,9 +232,9 @@ def cmd_run(a: argparse.Namespace) -> int:
             raise OpsquireError("plans take no arguments after --; put them on the steps in meta.json")
         if a.verify:
             raise OpsquireError("plans have no verify check; verify their steps")
-        code = run_plan(task, a.apply, a.break_lock)
+        code = run_plan(task, a.apply, a.break_lock, skip_dry)
     else:
-        code = run_task(task, a.apply, a.script_args, a.break_lock, a.verify)
+        code = run_task(task, a.apply, a.script_args, a.break_lock, a.verify, skip_dry)
     if a.apply and code == 0 and task.kind != "plan" and task.meta and task.meta.verify:
         # A staged task (build, then deploy) ends ok after every stage; only its verify check knows the end state.
         print(f"opsquire: apply ok; running the verify check of {task.id} before closing it")
@@ -261,6 +264,9 @@ def cmd_handover(a: argparse.Namespace) -> int:
             f"not handed over: {handover.applied_text(same)}. Read that record first; if production really needs "
             f'it again (after a rollback, say), pass --again --why "the reason"'
         )
+    uncovered = handover.needs_dry(task, runs_for(task.id), a.script_args) if mode == "apply" else None
+    if uncovered:
+        raise OpsquireError(f"not handed over: {uncovered}")
     entry = handover.record(task, mode, a.script_args, a.why or "", handover.author(), again=bool(same))
     cmd = handover.command(task.id, mode, a.script_args)
     targets = task.meta.targets if task.meta else []
@@ -796,6 +802,11 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("--apply", action="store_true", help="really change things (prod-changing tasks only)")
     r.add_argument("--verify", action="store_true", help="run the task's verify check: is its intended state live?")
     r.add_argument("--break-lock", action="store_true", help="offer to override a held lock (asks you to type BREAK)")
+    r.add_argument(
+        "--skip-dry",
+        metavar="WHY",
+        help="with --apply: go ahead although no ok dry run covers these scripts and arguments; the reason is recorded",
+    )
     r.add_argument("-v", "--verbose", action="store_true", help="also show the runner's bookkeeping and [data] events")
     r.set_defaults(fn=cmd_run)
 

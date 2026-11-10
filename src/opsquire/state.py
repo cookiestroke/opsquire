@@ -301,6 +301,7 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
     m = task.meta
     if m is None or task.kind == "general" or status in CLOSED or status == "draft":
         return None
+    runs = [r for r in runs if r.get("status") != "blocked"]
     if not runs:
         return "dry" if m.changes_prod else "read"
     if not m.changes_prod:
@@ -556,7 +557,7 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
         task_runs = by_task.get(t.id, [])
         nxt, handed = waiting_run(t, task_runs, status)
         if nxt:
-            args = [str(x) for x in handed.get("args") or []] if handed else []
+            args = handover.args_for(t, task_runs, nxt)
             same = handover.same_apply(t, task_runs, args) if nxt == "apply" else None
             inbox.append(
                 {

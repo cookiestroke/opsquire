@@ -107,6 +107,8 @@ class OpsTest(unittest.TestCase):
             self.assertEqual(alive, [], "locks left held by live processes")
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    NO_DRY = ("--skip-dry", "the dry run is not what this test is about")
+
     def cli(self, *args: str, answers: list[tuple[str, str]] | None = None) -> subprocess.CompletedProcess[str]:
         if answers is None:
             return subprocess.run([*CLI, *args], env=self.env, capture_output=True, text=True, timeout=120)
@@ -423,7 +425,7 @@ class OpsTest(unittest.TestCase):
             "sq.run(main, cleanup=lambda: SCRATCH.unlink(missing_ok=True))\n"
         )
         folder = self.new("prompt", body, "--changes-prod", "--rollback", "x")
-        r = self.cli("run", "prompt", "--apply", answers=[("[y/N]", "\x03")])
+        r = self.cli("run", "prompt", "--apply", *self.NO_DRY, answers=[("[y/N]", "\x03")])
         self.assertEqual(r.returncode, 130, r.stdout)
         self.assertNotIn("Traceback", r.stdout)
         rec = self.last("prompt")
@@ -436,7 +438,7 @@ class OpsTest(unittest.TestCase):
     def test_ctrl_c_at_bash_prompt_runs_sq_cleanup(self) -> None:
         body = BASH_HEADER + 'sq_cleanup() { rm -f scratch.txt; }\ntouch scratch.txt\nsq_confirm "Go?"\n'
         folder = self.new("bashprompt", body, "--changes-prod", "--rollback", "x", lang="sh")
-        r = self.cli("run", "bashprompt", "--apply", answers=[("[y/N]", "\x03")])
+        r = self.cli("run", "bashprompt", "--apply", *self.NO_DRY, answers=[("[y/N]", "\x03")])
         self.assertEqual(r.returncode, 130, r.stdout)
         self.assertEqual(self.last("bashprompt")["status"], "interrupted")
         self.assertFalse((folder / "scratch.txt").exists())
@@ -602,6 +604,10 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("run", plan.name).returncode, 1)
         self.assertFalse(marker.exists())
         r = self.cli("run", plan.name, "--apply")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("no dry run covers the apply of step", self.plan_rec(plan)["last_error"])
+        self.assertFalse(marker.exists(), "a refused plan runs no step and no rollback")
+        r = self.cli("run", plan.name, "--apply", "--skip-dry", "its dry run fails the same way")
         self.assertEqual(r.returncode, 1, r.stderr)
         rec = self.plan_rec(plan)
         self.assertEqual(rec["status"], "failed")
@@ -614,7 +620,7 @@ class OpsTest(unittest.TestCase):
         change = self.new("change", self.CONFIRM_BODY, "--changes-prod", "--rollback", "undo")
         verify = self.new("verify", "print(1)\n")
         plan = self.make_plan(change, verify)
-        r = self.cli("run", plan.name, "--apply", answers=[("[y/N]", "n")])
+        r = self.cli("run", plan.name, "--apply", *self.NO_DRY, answers=[("[y/N]", "n")])
         self.assertEqual(r.returncode, 3, r.stdout)
         self.assertEqual([s["status"] for s in self.plan_rec(plan)["steps"]], ["aborted", "skipped"])
 
@@ -737,7 +743,7 @@ class OpsTest(unittest.TestCase):
         sh = BASH_HEADER + 'for i in $(seq 0 299); do echo "plan line $i"; done\nsq_confirm "Go?"\n'
         for name, body, lang in (("order-py", py, "py"), ("order-sh", sh, "sh")):
             self.new(name, body, "--changes-prod", "--rollback", "x", lang=lang)
-            r = self.cli("run", name, "--apply", answers=[("[y/N]", "y")])
+            r = self.cli("run", name, "--apply", *self.NO_DRY, answers=[("[y/N]", "y")])
             self.assertEqual(r.returncode, 0, r.stdout)
             self.assertLess(r.stdout.index("plan line 299"), r.stdout.index(">>> Go? [y/N]"), name)
 
@@ -1325,6 +1331,7 @@ class OpsTest(unittest.TestCase):
             _, state = call("GET", "/api/state")
             self.assertEqual([(i["task_id"], i["next"]) for i in state["inbox"]], [(tid, "dry")])
             self.assertEqual(state["jobs"], [])
+            self.assertEqual(self.cli("run", tid).returncode, 0)
             status, started = call("POST", "/api/run", {"task": tid, "mode": "apply"})
             self.assertEqual(status, 200, started)
             j = wait_job(started["job_id"], "waiting")
@@ -1377,6 +1384,7 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("run", read).returncode, 0)
         with_space = ["focus", "two words"]
         self.assertEqual(self.cli("handover", read, "--", *with_space).returncode, 0)
+        self.assertEqual(self.cli("run", change, "--", "web1").returncode, 0)
         self.assertEqual(self.cli("handover", change, "--apply", "--", "web1").returncode, 0)
         port = free_port()
         proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
@@ -1417,10 +1425,21 @@ class OpsTest(unittest.TestCase):
             self.assertEqual(self.cli("handover", change, "--apply", "--", "web1").returncode, 0)
             folder = next(self.home.glob(f"tasks/*/{change}"))
             (folder / "main.py").write_text((folder / "main.py").read_text() + "\n")
+            self.assertEqual(run(change, "apply")["exit_code"], 2, "edited after its dry run: refused")
+            refused = self.last(change)
+            self.assertEqual((refused["status"], refused["argv"]), ("blocked", ["web1"]))
+            self.assertIn("the scripts changed since its last dry run", refused["last_error"])
+            waiting = next(i for i in call("GET", "/api/state")["inbox"] if i["task_id"] == change)
+            self.assertEqual((waiting["next"], waiting["args"]), ("apply", "web1"), "a refused run keeps the handover")
+            self.assertEqual(self.cli("run", change, "--", "web1").returncode, 0)
+            waiting = next(i for i in call("GET", "/api/state")["inbox"] if i["task_id"] == change)
+            self.assertEqual((waiting["next"], waiting["args"], waiting["handed"]), ("apply", "web1", None))
             self.assertEqual(run(change, "apply")["exit_code"], 0)
             runs = json.loads(self.cli("runs", change, "--json").stdout)
-            applied = next(r for r in runs if r["mode"] == "apply")
-            self.assertEqual(applied["argv"], ["web1"], "edited after the handover, still the same run")
+            applied = next(r for r in reversed(runs) if r["mode"] == "apply")
+            self.assertEqual(
+                (applied["status"], applied["argv"]), ("ok", ["web1"]), "the apply takes the arguments of its dry run"
+            )
 
             conn.close()
         finally:
@@ -1631,7 +1650,7 @@ class OpsTest(unittest.TestCase):
         body = "import opsquire_helpers as sq\n\nsq.target('web1', 'failed', 'refused')\n"
         tid = self.new("judged", body, "--changes-prod", "--rollback", "none").name
         (self.home / f"tasks/{tid[:4]}-{tid[4:6]}/{tid}/design.md").write_text("# why\n\nbecause\n")
-        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 1)
+        self.assertEqual(self.cli("run", tid, "--apply", *self.NO_DRY, answers=[("", "y")]).returncode, 1)
         self.env["FAKE_JUDGE"] = "KEEP: no evidence that web1 came back"
         r = self.cli("judge", tid)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
@@ -1662,7 +1681,7 @@ class OpsTest(unittest.TestCase):
             "--rollback",
             "none",
         ).name
-        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 1)
+        self.assertEqual(self.cli("run", tid, "--apply", *self.NO_DRY, answers=[("", "y")]).returncode, 1)
         port = free_port()
         proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
         try:
@@ -1703,7 +1722,7 @@ class OpsTest(unittest.TestCase):
         self.assertTrue((folder / "verify.py").is_file())
         self.assertEqual(json.loads((folder / "meta.json").read_text())["verify"], "verify.py")
         self.assertEqual(self.cli("lint", tid).returncode, 0)
-        r = self.cli("run", tid, "--apply", answers=[("", "y")])
+        r = self.cli("run", tid, "--apply", *self.NO_DRY, answers=[("", "y")])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.last(tid)["mode"], "verify")
         self.assertIn("closed done", r.stdout)
@@ -1752,6 +1771,8 @@ class OpsTest(unittest.TestCase):
             "sq.target('web1', 'ok' if live else 'failed', 'v2 live' if live else 'still v1')\n"
         )
         self.assertEqual(self.cli("lint", tid).returncode, 0)
+        for stage in ("build", "deploy"):
+            self.assertEqual(self.cli("run", tid, "--", stage).returncode, 0)
         r = self.cli("run", tid, "--apply", "--", "build", answers=[("", "y")])
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("running the verify check", r.stdout)
@@ -1768,7 +1789,7 @@ class OpsTest(unittest.TestCase):
         body = "import opsquire_helpers as sq\n\nsq.target('web1', 'failed', 'refused')\n"
         folder = self.new("needs-check", body, "--changes-prod", "--rollback", "none")
         tid = folder.name
-        self.assertEqual(self.cli("run", tid, "--apply", answers=[("", "y")]).returncode, 1)
+        self.assertEqual(self.cli("run", tid, "--apply", *self.NO_DRY, answers=[("", "y")]).returncode, 1)
         state = json.loads(self.cli("threads", "--json").stdout)
         self.assertEqual(
             [(i["next"], i["command"]) for i in state["inbox"]], [("verify", f"opsquire run {tid} --verify")]
@@ -1835,7 +1856,7 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("run", "flip").returncode, 0)
         self.assertEqual(self.cli("run", "flip", "--apply", answers=[("[y/N]", "y")]).returncode, 0)
         self.assertEqual(self.cli("run", "boom").returncode, 1)
-        self.assertNotEqual(self.cli("run", "boom", "--apply", answers=[("[y/N]", "y")]).returncode, 0)
+        self.assertNotEqual(self.cli("run", "boom", "--apply", *self.NO_DRY, answers=[("[y/N]", "y")]).returncode, 0)
         (self.home / "threads").mkdir(exist_ok=True)
         (self.home / "threads/story.md").write_text("# story\n\nFirst paragraph.\n\nFlip is live, boom is not.\n")
         items = self.milestones()
@@ -2627,6 +2648,7 @@ class OpsTest(unittest.TestCase):
         for lang, child in children.items():
             with self.subTest(lang=lang):
                 tid = self.nested_task(child, lang)
+                self.assertEqual(self.cli("run", tid, answers=[("[y/N]", "y")]).returncode, 0)
                 proc, call = self.console()
                 try:
                     job = call("/api/run", {"task": tid, "mode": "apply"})["job_id"]
@@ -2687,7 +2709,7 @@ class OpsTest(unittest.TestCase):
         tmpdir.mkdir()
         self.env["TMPDIR"] = str(tmpdir)
         tid = self.nested_task("import opsquire_helpers as sq\n\nsq.run(lambda: sq.confirm('Deploy web1?'))\n", "py")
-        r = self.cli("run", tid, "--apply", answers=[("[y/N]", "\x03")])
+        r = self.cli("run", tid, "--apply", *self.NO_DRY, answers=[("[y/N]", "\x03")])
         self.assertEqual(r.returncode, 130, r.stdout)
         rec = self.last(tid)
         self.assertEqual((rec["status"], rec["waiting"]["question"]), ("interrupted", "Deploy web1?"))
@@ -2728,17 +2750,23 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(json.loads(self.cli("threads", "--json").stdout)["inbox"], [])
         self.assertIn("no handover", self.cli("handover", "flip", "--withdraw").stdout)
 
+        uncovered = self.cli("handover", "flip", "--apply", "--", "other")
+        self.assertEqual(uncovered.returncode, 2, "other arguments need their own dry run")
+        self.assertIn(f"opsquire run {folder.name} -- other", uncovered.stderr)
+        self.assertEqual(self.cli("run", "flip", "--", "other").returncode, 0)
         self.assertEqual(self.cli("handover", "flip", "--apply", "--", "other").returncode, 0, "other arguments")
         repeated = self.cli("run", "flip", "--apply")
         self.assertEqual(repeated.returncode, 0)
         self.assertIn("this apply runs it again", repeated.stderr, "a typed command still says so")
         (folder / "main.py").write_text((folder / "main.py").read_text() + "\n")
+        self.assertEqual(self.cli("handover", "flip", "--apply").returncode, 2, "other scripts need a dry run")
+        self.assertEqual(self.cli("run", "flip").returncode, 0)
         self.assertEqual(self.cli("handover", "flip", "--apply").returncode, 0, "other scripts")
 
     def test_a_failed_apply_does_not_count_as_already_applied(self) -> None:
         self.new(
             "boom",
-            "import sys\n\nsys.exit(1)\n",
+            "import sys\n\nimport opsquire_helpers as sq\n\nsys.exit(1 if sq.APPLY else 0)\n",
             "--changes-prod",
             "--rollback",
             "none",
@@ -2747,13 +2775,14 @@ class OpsTest(unittest.TestCase):
             "web1",
         )
         self.assertEqual(self.cli("lint", "boom").returncode, 0)
+        self.assertEqual(self.cli("run", "boom").returncode, 0)
         self.assertEqual(self.cli("run", "boom", "--apply").returncode, 1)
         self.assertEqual(self.cli("handover", "boom", "--apply", "--why", "the host is back").returncode, 0)
 
     def test_an_ask_keeps_a_repeated_apply_out_of_the_inbox(self) -> None:
         self.new("flip", "print(1)\n", "--changes-prod", "--rollback", "flip back", "--no-verify")
         self.assertEqual(self.cli("lint", "flip").returncode, 0)
-        self.assertEqual(self.cli("run", "flip", "--apply").returncode, 0)
+        self.assertEqual(self.cli("run", "flip", "--apply", *self.NO_DRY).returncode, 0)
         from opsquire import handover
 
         out, err = io.StringIO(), io.StringIO()
@@ -2772,7 +2801,7 @@ class OpsTest(unittest.TestCase):
         made = self.cli("new", "web1", "bundle", "--plan", "--step", step, "--purpose", "p", "--changes-prod")
         self.assertEqual(made.returncode, 0, made.stderr)
         self.assertEqual(self.cli("lint", "bundle").returncode, 0)
-        self.assertEqual(self.cli("run", "bundle", "--apply").returncode, 0)
+        self.assertEqual(self.cli("run", "bundle", "--apply", *self.NO_DRY).returncode, 0)
         refused = self.cli("handover", "bundle", "--apply", "--why", "again")
         self.assertEqual(refused.returncode, 2, refused.stdout)
 
@@ -3235,6 +3264,103 @@ class OpsTest(unittest.TestCase):
         self.assertFalse(plan.parent.exists(), "an emptied month folder goes too")
         self.assertEqual(self.cli("restore", plan.name).stdout, f"restored: {second.name}, {first.name}, {plan.name}\n")
         self.assertEqual(self.cli("run", plan.name).returncode, 0)
+
+    def test_an_apply_needs_an_ok_dry_run_of_the_same_scripts_and_arguments(self) -> None:
+        body = "import sys\n\nimport opsquire_helpers as sq\n\nsq.target('web1', 'ok', ' '.join(sys.argv[1:]))\n"
+        folder = self.new("guarded", body, "--changes-prod", "--rollback", "none", "--no-verify")
+        tid = folder.name
+        self.assertEqual(self.cli("lint", tid).returncode, 0)
+
+        def refused(*args: str) -> str:
+            r = self.cli("run", tid, "--apply", *args)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            rec = self.last(tid)
+            self.assertEqual(
+                (rec["status"], rec["mode"], rec["targets"]["web1"]["status"]), ("blocked", "apply", "skipped")
+            )
+            return str(rec["last_error"])
+
+        never = refused()
+        self.assertIn("it never had a dry run", never)
+        self.assertIn(f"`opsquire run {tid}`", never)
+        self.assertIn("--skip-dry", never)
+        self.assertEqual(self.cli("handover", tid, "--apply").returncode, 2, "nor is it handed over")
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual(
+            [(i["task_id"], i["next"]) for i in state["inbox"]], [(tid, "dry")], "a refused run ran nothing"
+        )
+
+        self.assertEqual(self.cli("run", tid, "--", "one").returncode, 0)
+        dry = self.last(tid)
+        self.assertIn("had other arguments", refused())
+        self.assertIn(f"`opsquire run {tid} -- two`", refused("--", "two"))
+        item = json.loads(self.cli("threads", "--json").stdout)["inbox"][0]
+        self.assertEqual((item["next"], item["command"]), ("apply", f"opsquire run {tid} --apply -- one"))
+        self.assertEqual(self.cli("run", tid, "--apply", "--", "one").returncode, 0)
+        self.assertEqual(self.last(tid)["dry"], {"run_id": dry["run_id"]})
+
+        (folder / "main.py").write_text(body + "sq.step('new')\n")
+        changed = refused("--", "one")
+        self.assertIn("the scripts changed since its last dry run", changed)
+        self.assertIn(dry["run_id"], changed)
+
+        self.assertEqual(self.cli("run", tid, "--skip-dry", "why").returncode, 2, "only with --apply")
+        self.assertEqual(self.cli("run", tid, "--apply", "--skip-dry", " ").returncode, 2, "the reason is required")
+        r = self.cli("run", tid, "--apply", "--skip-dry", "hotfix, the host is down", "--", "one")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rec = self.last(tid)
+        self.assertEqual((rec["status"], rec["dry"]), ("ok", {"skipped": "hotfix, the host is down"}))
+        warned = [e["msg"] for e in self.events(rec) if e.get("level") == "warn"]
+        self.assertTrue(any("applying without a dry run" in m and "hotfix" in m for m in warned), warned)
+
+    def test_a_dry_run_that_failed_does_not_cover_an_apply(self) -> None:
+        body = "import opsquire_helpers as sq\n\nsq.target('web1', 'failed', 'cannot reach it')\n"
+        tid = self.new("shaky", body, "--changes-prod", "--rollback", "none", "--no-verify").name
+        self.assertEqual(self.cli("run", tid).returncode, 1)
+        dry = self.last(tid)
+        r = self.cli("run", tid, "--apply")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn(f"its dry run {dry['run_id']} of these scripts ended failed", self.last(tid)["last_error"])
+
+    def test_a_plan_is_refused_whole_when_a_step_has_no_dry_run(self) -> None:
+        marker = self.tmp / "applied"
+        body = (
+            "from pathlib import Path\n\nimport opsquire_helpers as sq\n\n"
+            f"if sq.APPLY:\n    Path({str(marker)!r}).touch()\n"
+        )
+        first = self.new("first", body, "--changes-prod", "--rollback", "none", "--no-verify")
+        second = self.new("second", "print(1)\n", "--changes-prod", "--rollback", "none", "--no-verify")
+        plan = self.make_plan(first, second, name="both")
+        self.assertEqual(self.cli("run", first.name).returncode, 0)
+        r = self.cli("run", plan.name, "--apply")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        rec = self.plan_rec(plan)
+        self.assertEqual(rec["status"], "blocked")
+        self.assertIn(f"no dry run covers the apply of step {second.name}: it never had a dry run", rec["last_error"])
+        self.assertFalse(marker.exists(), "the covered first step did not run either")
+        self.assertEqual(self.cli("run", plan.name).returncode, 0)
+        self.assertEqual(self.cli("run", plan.name, "--apply").returncode, 0)
+        self.assertTrue(marker.exists())
+
+    def test_last_error_names_the_cause_not_where_to_look(self) -> None:
+        body = (
+            "import traceback\n\nimport opsquire_helpers as sq\n\n"
+            "try:\n    raise RuntimeError('no finished build of abc123')\n"
+            "except RuntimeError:\n    sq.error(traceback.format_exc())\n"
+            "sq.target('web1', 'failed', 'deploy failed, see the error')\n"
+        )
+        tid = self.new("cause", body).name
+        self.assertEqual(self.cli("run", tid).returncode, 1)
+        self.assertEqual(
+            self.last(tid)["last_error"], "deploy failed, see the error: RuntimeError: no finished build of abc123"
+        )
+        two = (
+            "import opsquire_helpers as sq\n\nsq.error('web1 answered slowly')\nsq.target('web1', 'ok', 'fine')\n"
+            "sq.target('web2', 'failed', 'refused the config')\n"
+        )
+        tid = self.new("unrelated", two, "--target", "web1", "--target", "web2").name
+        self.assertEqual(self.cli("run", tid).returncode, 1)
+        self.assertEqual(self.last(tid)["last_error"], "refused the config", "an error before an ok target is not it")
 
 
 class ReleaseScripts(unittest.TestCase):

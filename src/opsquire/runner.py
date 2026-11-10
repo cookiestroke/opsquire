@@ -70,7 +70,14 @@ def tty_prompt(question: str) -> str:
 
 class Run:
     def __init__(
-        self, task: Task, meta: Meta, mode: str, args: list[str], break_lock: bool, plan_run: str | None = None
+        self,
+        task: Task,
+        meta: Meta,
+        mode: str,
+        args: list[str],
+        break_lock: bool,
+        plan_run: str | None = None,
+        skip_dry: str = "",
     ) -> None:
         self.plan_run = plan_run
         self.task = task
@@ -78,6 +85,9 @@ class Run:
         self.mode = mode
         self.args = args
         self.break_lock = break_lock
+        self.skip_dry = skip_dry
+        self.dry: dict[str, Any] | None = None
+        self.script_error = ""
         self.started = now()
         self.run_id = f"{compact(self.started)}_{mode}"
         self.dir = runs_dir() / task.id / self.run_id
@@ -167,6 +177,8 @@ class Run:
                 self.targets[name] = {"status": status, "msg": self.redact(msg)}
                 if status == "failed":
                     level = "error"
+                else:
+                    self.script_error = ""
         if kind == "confirm" and str(data.get("answer", "")) != "y":
             self.declined = True
         if kind == "confirm" and self.waiting:
@@ -175,7 +187,7 @@ class Run:
         if kind == "result":
             self.results.append(self.redact(msg))
         if level == "error":
-            self.last_error = self.redact(msg)
+            self.note_error(kind, self.redact(msg))
         self.event(kind, msg, level=level, src="script", **data)
         shown = msg
         if kind == "target":
@@ -251,6 +263,7 @@ class Run:
             "results": self.results,
             "usage": self.usage,
             "waiting": self.waiting,
+            "dry": self.dry,
             "last_error": self.last_error,
             "paths": {
                 "dir": str(self.dir),
@@ -367,6 +380,9 @@ class Run:
         if self.task.content_hash() != result.content_hash:
             return self.blocked("files changed while linting")
         if self.mode == "apply":
+            refusal = self.check_dry()
+            if refusal:
+                return self.blocked(refusal)
             self.warn_if_applied_already()
 
         holders: list[str] = self.meta.targets if self.meta.lock != "none" else []
@@ -411,12 +427,42 @@ class Run:
 
         return self._spawn(env_creds)
 
-    def warn_if_applied_already(self) -> None:
+    def note_error(self, kind: str, msg: str) -> None:
+        """last_error names the cause. A traceback is its last line, the exception; a failed target that only says
+        where it failed ("deploy failed, see the error") carries the script error reported just before it."""
+        lines = [x.strip() for x in msg.splitlines() if x.strip()]
+        if kind == "target":
+            cause, self.script_error = self.script_error, ""
+            self.last_error = f"{msg}: {cause}" if cause and cause not in msg else msg
+            return
+        if msg.lstrip().startswith("Traceback (most recent call last)") and lines:
+            msg = lines[-1]
+        self.script_error = self.last_error = msg
+
+    def earlier_runs(self) -> list[dict[str, Any]]:
         records = []
         for path in sorted(self.dir.parent.glob("*/run.json")):
             if path.parent != self.dir:
                 with contextlib.suppress(OSError, ValueError):
                     records.append(load_run(path))
+        return records
+
+    def check_dry(self) -> str | None:
+        """An apply needs a dry run that finished ok with the same scripts and arguments, or a recorded reason to
+        go without one. Returns why this apply is refused, None when it may go on."""
+        covered, why = handover.covering_dry(self.task, self.earlier_runs(), self.args)
+        if covered:
+            self.dry = {"run_id": covered.get("run_id")}
+            return None
+        if self.skip_dry:
+            self.dry = {"skipped": self.skip_dry}
+            self.event("warn", f"applying without a dry run ({why}): {self.skip_dry}", level="warn")
+            return None
+        dry = handover.command(self.task.id, "dry", self.args)
+        return f'no dry run covers this apply: {why}. Run `{dry}` first, or pass --skip-dry "why" to apply without one'
+
+    def warn_if_applied_already(self) -> None:
+        records = self.earlier_runs()
         same = handover.same_apply(self.task, records, self.args)
         if same:
             self.event("warn", f"{handover.applied_text(same)}; this apply runs it again", level="warn")
@@ -524,7 +570,9 @@ class Run:
         return "ok"
 
 
-def run_task(task: Task, apply: bool, args: list[str], break_lock: bool, verify: bool = False) -> int:
+def run_task(
+    task: Task, apply: bool, args: list[str], break_lock: bool, verify: bool = False, skip_dry: str = ""
+) -> int:
     if task.meta is None:
         raise OpsquireError(f"{task.id} has invalid meta.json:\n  " + "\n  ".join(task.errors))
     if task.kind == "general":
@@ -543,7 +591,7 @@ def run_task(task: Task, apply: bool, args: list[str], break_lock: bool, verify:
     if verify and not meta.verify:
         raise OpsquireError(f"{task.id} has no verify check (meta.json `verify`); add verify.py or verify.sh")
     mode = "verify" if verify else "apply" if apply else meta.modes[0]
-    return Run(task, meta, mode, args, break_lock).execute()
+    return Run(task, meta, mode, args, break_lock, skip_dry=skip_dry).execute()
 
 
 def load_run(path: Path) -> dict[str, Any]:

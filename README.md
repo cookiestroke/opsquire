@@ -48,7 +48,8 @@ opsquire ask "<what you want>"     an agent finds or writes the task and prints 
 opsquire find <words>              is there already a script for this?
 opsquire run <plan>                several tasks in order, one command (dry first, then --apply)
 opsquire run <task>                dry run (or read-only run)
-opsquire run <task> --apply        the real thing; asks before each change
+opsquire run <task> --apply        the real thing; asks before each change; refused until a dry run of the
+                                   same scripts and arguments finished ok (--skip-dry "why" overrides, on record)
 opsquire last                      what just happened
 opsquire runs --status failed      what went wrong, across everything
 opsquire log <task>                full output of the latest run
