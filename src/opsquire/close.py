@@ -8,7 +8,7 @@ import os
 from typing import Any
 
 from .homegit import commit_quietly
-from .model import OUTCOME_STATES, OpsquireError, Task, home_dir, iso, now, resolve_task, write_json
+from .model import OUTCOME_STATES, OpsquireError, Task, home_dir, is_last_stage, iso, now, resolve_task, write_json
 from .query import find_run, runs_for
 
 
@@ -144,6 +144,8 @@ def auto_close(task_id: str, since: str) -> str | None:
     if not last or last.get("mode") not in ("apply", "verify") or last.get("status") != "ok":
         return None
     if last.get("mode") == "apply" and task.meta.verify and last is runs[-1]:
+        return None
+    if last.get("mode") == "apply" and not is_last_stage(task.meta, [str(x) for x in last.get("argv") or []]):
         return None
     targets = last.get("targets") or {}
     if last.get("mode") == "verify":

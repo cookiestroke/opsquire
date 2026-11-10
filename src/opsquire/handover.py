@@ -14,7 +14,7 @@ import sys
 from typing import Any
 
 from .homegit import commit_quietly
-from .model import OpsquireError, Task, code_version, home_dir, iso, now, resolve_task, write_json
+from .model import OpsquireError, Task, code_version, home_dir, iso, next_stage, now, resolve_task, write_json
 
 RUN_LINE_RE = re.compile(r"^opsquire run (?P<task>\S+)(?P<flags>(?:\s+--\w[\w-]*)*)(?:\s+--\s+(?P<args>.*))?\s*$")
 
@@ -135,7 +135,8 @@ def args_for(task: Task, runs: list[dict[str, Any]], mode: str) -> list[str]:
     ran = [r for r in runs if r.get("status") != "blocked"]
     if mode == "apply" and ran and ran[-1].get("mode") == "dry":
         return [str(x) for x in ran[-1].get("argv") or []]
-    return []
+    stage = next_stage(task.meta, ran) if task.meta and mode in ("dry", "apply") else None
+    return [stage] if stage else []
 
 
 def record_run_lines(actions: list[tuple[str, str]], why: str, by: str) -> list[str]:

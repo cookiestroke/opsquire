@@ -39,10 +39,13 @@ from .model import (
     decision,
     decision_text,
     home_dir,
+    is_last_stage,
     iso,
     load_task,
+    next_stage,
     now,
     resolve_task,
+    stage_of,
     update_config,
     write_json,
     write_text,
@@ -271,12 +274,17 @@ def cmd_run(a: argparse.Namespace) -> int:
         code = run_plan(task, a.apply, a.break_lock, skip_dry)
     else:
         code = run_task(task, a.apply, a.script_args, a.break_lock, a.verify, skip_dry)
-    if a.apply and code == 0 and task.kind != "plan" and task.meta and task.meta.verify:
+    last_stage = task.meta is None or is_last_stage(task.meta, a.script_args)
+    if a.apply and code == 0 and task.kind != "plan" and task.meta and task.meta.verify and last_stage:
         # A staged task (build, then deploy) ends ok after every stage; only its verify check knows the end state.
         print(f"opsquire: apply ok; running the verify check of {task.id} before closing it")
         if run_task(task, False, [], False, True) != 0:
             print("opsquire: the verify check did not finish ok; the task stays open")
-    if (a.apply or a.verify) and code == 0:
+    if a.apply and code == 0 and not last_stage and task.meta and task.meta.stages:
+        done = stage_of(task.meta, a.script_args)
+        nxt = next_stage(task.meta, runs_for(task.id))
+        print(f"opsquire: stage {done} applied; the inbox offers the dry run of stage {nxt} next")
+    if (a.apply or a.verify) and code == 0 and last_stage:
         steps = [str(s["task"]) for s in (task.meta.steps if task.meta else None) or []]
         closed = [t for t in [task.id, *steps] if auto_close(t, since)]
         if closed:

@@ -8,7 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from .lint import cached_lint_ok
-from .model import OUTCOME_STATES, Task, all_task_folders, is_offboarded, load_task, offboarded_folders, runs_dir
+from .model import (
+    OUTCOME_STATES,
+    Task,
+    all_task_folders,
+    is_last_stage,
+    is_offboarded,
+    load_task,
+    offboarded_folders,
+    runs_dir,
+)
 from .runner import load_run
 
 TASK_STATUSES = ("draft", "ready", "done", "partial", "superseded", "abandoned", "archived")
@@ -71,7 +80,10 @@ def task_status(task: Task, runs: list[dict[str, Any]]) -> str:
     if task.kind == "general":
         return script_status(task)
     final_mode = "apply" if task.raw.get("changes_prod") is True else "read"
-    if any(r.get("mode") == final_mode and r.get("status") == "ok" for r in runs):
+    last_stage = [
+        r for r in runs if task.meta is None or is_last_stage(task.meta, [str(x) for x in r.get("argv") or []])
+    ]
+    if any(r.get("mode") == final_mode and r.get("status") == "ok" for r in last_stage):
         return "done"
     if task.meta and cached_lint_ok(task):
         return "ready"

@@ -3466,6 +3466,55 @@ class OpsTest(unittest.TestCase):
         warns = [e["msg"] for e in self.events(self.last("twice")) if e["event"] == "warn"]
         self.assertEqual(len([w for w in warns if "second yes in one run" in w]), 1)
 
+    def inbox_item(self, task_id: str) -> dict[str, Any] | None:
+        code = "import json\nfrom opsquire.state import state\nprint(json.dumps(state()['inbox']))"
+        r = subprocess.run([sys.executable, "-c", code], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        items: list[dict[str, Any]] = json.loads(r.stdout)
+        return next((it for it in items if it["task_id"] == task_id), None)
+
+    def test_a_staged_task_walks_its_stages_from_the_inbox_and_checks_only_after_the_last(self) -> None:
+        head = "import sys\n\nimport opsquire_helpers as sq\n\n"
+        folder = self.new(
+            "staged",
+            head + "stage = sys.argv[1] if len(sys.argv) > 1 else 'build'\nsq.target('web1', 'ok', stage)\n",
+            "--changes-prod",
+            "--rollback",
+            "none",
+        )
+        (folder / "verify.py").write_text("import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'live')\n")
+        meta = json.loads((folder / "meta.json").read_text())
+        meta["stages"] = ["build", "build"]
+        (folder / "meta.json").write_text(json.dumps(meta))
+        self.assertNotEqual(self.cli("lint", "staged").returncode, 0, "stages must be distinct")
+        meta["stages"] = ["build", "deploy"]
+        (folder / "meta.json").write_text(json.dumps(meta))
+        r = self.cli("lint", "staged")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        def offered() -> tuple[str, str]:
+            item = self.inbox_item(folder.name)
+            assert item is not None
+            return str(item["next"]), str(item["args"])
+
+        self.assertEqual(offered(), ("dry", "build"))
+        self.assertEqual(self.cli("run", "staged", "--", "build").returncode, 0)
+        self.assertEqual(offered(), ("apply", "build"))
+        r = self.cli("run", "staged", "--apply", "--", "build")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("stage build applied; the inbox offers the dry run of stage deploy next", r.stdout)
+        self.assertEqual([x["mode"] for x in json.loads(self.cli("runs", "staged", "--json").stdout)], ["dry", "apply"])
+        self.assertIsNone(json.loads((folder / "meta.json").read_text()).get("outcome"))
+        self.assertEqual(offered(), ("dry", "deploy"))
+        self.assertEqual(self.cli("run", "staged", "--", "deploy").returncode, 0)
+        self.assertEqual(offered(), ("apply", "deploy"))
+        r = self.cli("run", "staged", "--apply", "--", "deploy")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        modes = [x["mode"] for x in json.loads(self.cli("runs", "staged", "--json").stdout)]
+        self.assertEqual(modes, ["dry", "apply", "dry", "apply", "verify"])
+        self.assertEqual(json.loads((folder / "meta.json").read_text())["outcome"]["state"], "done")
+        self.assertIsNone(self.inbox_item(folder.name))
+
 
 class ReleaseScripts(unittest.TestCase):
     """scripts/release.py and scripts/signed_commit.py: what the release workflow and every push to main rely on."""

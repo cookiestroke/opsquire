@@ -20,6 +20,7 @@ from .model import (
     all_task_folders,
     code_version,
     home_dir,
+    is_last_stage,
     iso,
     load_task,
     now,
@@ -294,6 +295,10 @@ def is_settled(view: dict[str, Any]) -> bool:
     return bool(view["outcome"]) or not view["changes_prod"] or status in ("superseded", "archived")
 
 
+def argv_of(run: dict[str, Any]) -> list[str]:
+    return [str(x) for x in run.get("argv") or []]
+
+
 def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None:
     """The run the operator owes a task: its first read or dry run when it is ready and never ran, the apply after
     a dry run of its current scripts that ended ok, the verify check after an apply that did not close the task (or
@@ -316,6 +321,8 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
         return "apply" if same_scripts else "dry"
     if last.get("mode") == "verify":
         return None
+    if last.get("mode") == "apply" and last.get("status") == "ok" and not is_last_stage(m, argv_of(last)):
+        return "dry"
     if last.get("mode") == "apply" and last.get("status") != "aborted" and m.verify:
         return "verify"
     if last.get("status") in ("failed", "partial") and same_scripts:

@@ -125,10 +125,11 @@ than the field have none, which means unknown.
 7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,
    and a `## Result` section in design.md (amend either when the generated text is not the truth). A task with a
    verify check closes only on it: right after an ok apply, `opsquire run` runs the verify check, and the task closes
-   when every target is ok; otherwise it stays open (a staged task's `-- build` apply is not its end). An unwritten
-   scaffold check (every target skipped) says nothing, and the apply closes the task as before. Every other end
-   is the agent's decision, right after `opsquire wait` returns: a failed, partial, aborted or interrupted apply
-   means either fix the task and hand it over again, or close it:
+   when every target is ok; otherwise it stays open. A task that runs in stages declares them (`stages` in
+   meta.json): the check runs, and the task closes, only after the last stage's apply, and no handover is needed
+   between stages. An unwritten scaffold check (every target skipped) says nothing, and the apply closes the task
+   as before. Every other end is the agent's decision, right after `opsquire wait` returns: a failed, partial,
+   aborted or interrupted apply means either fix the task and hand it over again, or close it:
    `opsquire close <task> --outcome done|partial|abandoned --note "what actually happened" [--run <run-id>]`
    (done when the host ended up right despite the record, partial when some of it did, abandoned when it will not
    happen). `close` only annotates meta.json and touches no host. A changing task is not settled until it is closed,
@@ -193,6 +194,7 @@ like any task: `opsquire run <plan>` (every step in its dry/read mode), then `op
 | `links` | chat threads, PRs, incident links |
 | `superseded_by`, `superseded`, `abandoned_reason`, `reopened` | written by `supersede`, `close` and `reopen`: who decided, when and why |
 | `thread` | optional: the thread (story) this task belongs to, kebab-case; inferred when absent |
+| `stages` | optional, changing tasks that run in stages: the first argument of each stage, in order (`["build", "deploy"]`; a run with no arguments is the first stage). The inbox offers each stage's dry run and apply with that argument, and the verify check and the automatic close wait for the last stage |
 | `verify` | changing tasks: the read-only check script (`verify.py` or `verify.sh`) that says whether the intended state is live |
 | `judged` | written by `opsquire judge` when it keeps a task open or asks for the check: decision, note, by, when |
 | `steps` | plans only: `[{"task": id, "args": [...], "verify": bool, "on_failure": id}]`; a plan has `entry: ""` and no credentials, uses or interpreter |

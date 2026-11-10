@@ -213,6 +213,7 @@ class Meta:
     outcome: dict[str, Any] | None = None
     thread: str | None = None
     verify: str | None = None
+    stages: list[str] | None = None
 
     def command(self, entry: Path) -> list[str]:
         if self.interpreter and entry.suffix == ".py":
@@ -227,6 +228,36 @@ class Meta:
 
     def to_json(self) -> dict[str, Any]:
         return {"schema": SCHEMA, **self.__dict__}
+
+
+STAGE_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
+
+
+def stage_of(meta: Meta, argv: list[str]) -> str | None:
+    """The stage a run with these arguments belongs to: its first argument, or the first stage when it has none."""
+    if not meta.stages:
+        return None
+    if not argv:
+        return meta.stages[0]
+    return argv[0] if argv[0] in meta.stages else None
+
+
+def is_last_stage(meta: Meta, argv: list[str]) -> bool:
+    return not meta.stages or stage_of(meta, argv) == meta.stages[-1]
+
+
+def next_stage(meta: Meta, runs: list[dict[str, Any]]) -> str | None:
+    """The stage the task's next run is for: the one after its latest ok apply, the first when none applied yet, and
+    the last once the last applied."""
+    if not meta.stages:
+        return None
+    for r in reversed(runs):
+        if r.get("mode") == "apply" and r.get("status") == "ok":
+            done = stage_of(meta, [str(x) for x in r.get("argv") or []])
+            if done is not None:
+                i = meta.stages.index(done)
+                return meta.stages[min(i + 1, len(meta.stages) - 1)]
+    return meta.stages[0]
 
 
 REQUIRED: dict[str, type] = {
@@ -269,7 +300,15 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
         outcome=raw.get("outcome"),
         thread=raw.get("thread"),
         verify=raw.get("verify"),
+        stages=raw.get("stages"),
     )
+    if meta.stages is not None:
+        names = meta.stages
+        good = isinstance(names, list) and all(isinstance(n, str) and STAGE_RE.match(n) for n in names)
+        if not good or len(names) < 2 or len(set(names)) != len(names) or not meta.changes_prod:
+            errors.append(
+                'stages names the first argument of each stage of a changing task, in order: ["build", "deploy"]'
+            )
     if meta.verify is not None:
         check = folder / str(meta.verify)
         if not isinstance(meta.verify, str) or not meta.changes_prod:
