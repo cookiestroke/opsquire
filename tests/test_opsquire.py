@@ -3362,6 +3362,75 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("run", tid).returncode, 1)
         self.assertEqual(self.last(tid)["last_error"], "refused the config", "an error before an ok target is not it")
 
+    def inbox_ids(self) -> list[str]:
+        code = "import json\nfrom opsquire.state import state\nprint(json.dumps(state()['inbox']))"
+        r2 = subprocess.run([sys.executable, "-c", code], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        items: list[dict[str, Any]] = json.loads(r2.stdout)
+        return [str(it["task_id"]) for it in items]
+
+    def test_a_waiting_task_can_be_superseded_and_reopened(self) -> None:
+        old = self.new("old", "print('old')\n")
+        newer = self.new("newer", "print('newer')\n")
+        for name in ("old", "newer"):
+            self.assertEqual(self.cli("lint", name).returncode, 0)
+        self.assertIn(old.name, self.inbox_ids())
+        self.assertNotEqual(self.cli("supersede", "old", "--by", "old").returncode, 0)
+        r = self.cli("supersede", "old", "--by", "newer", "--note", "newer reads both hosts")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn(old.name, self.inbox_ids())
+        self.assertIn(newer.name, self.inbox_ids())
+        r = self.cli("run", "old")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"{old.name} was superseded by {newer.name} (test, ", r.stderr)
+        self.assertIn("newer reads both hosts", r.stderr)
+        self.assertEqual(self.cli("runs", "old", "--json").stdout.strip(), "[]")
+        self.assertNotEqual(self.cli("reopen", "old", "--note", " ").returncode, 0)
+        r = self.cli("reopen", "old", "--note", "the newer one cannot reach web2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        meta = json.loads((old / "meta.json").read_text())
+        self.assertNotIn("superseded_by", meta)
+        self.assertEqual(meta["reopened"]["was"]["superseded_by"], newer.name)
+        self.assertEqual(self.cli("run", "old").returncode, 0)
+
+    def test_a_task_that_never_ran_expires_and_one_that_failed_waits_for_a_person(self) -> None:
+        unrun = self.new("unrun", "print(1)\n")
+        failed = self.new("failed", "raise SystemExit(1)\n", "--changes-prod", "--rollback", "none", "--no-verify")
+        recent = self.new("recent", "print(1)\n")
+        for name in ("unrun", "failed", "recent"):
+            self.assertEqual(self.cli("lint", name).returncode, 0)
+        self.assertEqual(self.cli("run", "failed", "--apply", *self.NO_DRY, answers=[("[y/N]", "y")]).returncode, 1)
+        self.backdate(unrun, 15)
+        self.backdate(failed, 15)
+        self.backdate(recent, 4)
+        (self.home / "var/offboard.json").unlink()
+        r = self.cli("lint", "recent")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"abandoned 1 tasks that never ran in 14 days: {unrun.name}", r.stderr)
+        self.assertIn(f"(oldest {recent.name}, 4 days)", r.stderr)
+        outcome = json.loads((unrun / "meta.json").read_text())["outcome"]
+        self.assertEqual((outcome["state"], outcome["closed_by"]), ("abandoned", "opsquire (expiry)"))
+        self.assertIsNone(json.loads((failed / "meta.json").read_text()).get("outcome"))
+        self.assertIsNone(json.loads((recent / "meta.json").read_text()).get("outcome"))
+        self.assertNotIn("need a decision", self.cli("lint", "recent").stderr, "once a day, not on every command")
+
+    def test_the_author_hears_what_became_of_its_tasks(self) -> None:
+        self.env["OPSQUIRE_AUTHOR"] = "agent-x (chat)"
+        waiting = self.new("waiting", "print(1)\n")
+        self.assertEqual(self.cli("lint", "waiting").returncode, 0)
+        self.env["OPSQUIRE_AUTHOR"] = "operator-y"
+        r = self.cli("close", "waiting", "--outcome", "abandoned", "--note", "done by hand")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.cli("new", "web1", "unrelated", "--purpose", "by someone else")
+        self.assertNotIn("was abandoned", r.stderr, "only the author hears it")
+        self.env["OPSQUIRE_AUTHOR"] = "agent-x (chat)"
+        r = self.cli("new", "web1", "next", "--purpose", "the next one")
+        self.assertIn(f"{waiting.name} was abandoned (operator-y, ", r.stderr)
+        self.assertIn("done by hand", r.stderr)
+        r = self.cli("wait", "waiting", "--timeout", "30")
+        self.assertEqual(r.returncode, 4, r.stderr)
+        self.assertIn("no run is coming", r.stderr)
+
 
 class ReleaseScripts(unittest.TestCase):
     """scripts/release.py and scripts/signed_commit.py: what the release workflow and every push to main rely on."""

@@ -36,6 +36,7 @@ GENERIC_AUTHOR_WORDS = {"claude", "code", "codex", "chat", "opsquire", "ask", "m
 CLOSED = {"done", "partial", "abandoned", "superseded", "archived"}
 HANDOVER_CLOSED = {"draft", "abandoned", "superseded", "archived"}
 STALE_NEVER_RUN_DAYS = 7
+INBOX_STALE_DAYS = 3.0
 STALE_AFTER_FAILURE_DAYS = 3
 RERUN_HEAVY = 3.0
 READ_VERSIONS_HEAVY = 3
@@ -333,6 +334,27 @@ def waiting_run(task: Task, runs: list[dict[str, Any]], status: str) -> tuple[st
     return (str(handed["mode"]), handed) if handed else (next_mode(task, runs, status), None)
 
 
+def waiting_since(task: Task, runs: list[dict[str, Any]], handed: dict[str, Any] | None) -> str:
+    """When the inbox item began to wait: its handover, else the last run that started something, else the day the
+    task was created."""
+    if handed:
+        return str(handed.get("at") or "")
+    started = [r for r in runs if r.get("status") != "blocked"]
+    if started:
+        return str(started[-1].get("ended") or started[-1].get("started") or "")
+    return str(task.raw.get("created") or "")
+
+
+def stale_text(task_id: str, days: float) -> str | None:
+    """What an inbox item that waited too long asks of the operator; None while it is fresh."""
+    if days < INBOX_STALE_DAYS:
+        return None
+    return (
+        f"waiting {days:.0f} days. Decide: run it, `opsquire supersede {task_id} --by <newer task>`, or "
+        f'`opsquire close {task_id} --outcome abandoned --note "why"`'
+    )
+
+
 def waiting_on(targets: list[str], exclude: str = "") -> list[dict[str, Any]]:
     """What else waits for these targets in the inbox: related runs on one machine belong in one plan or task."""
     out = []
@@ -559,6 +581,8 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
         if nxt:
             args = handover.args_for(t, task_runs, nxt)
             same = handover.same_apply(t, task_runs, args) if nxt == "apply" else None
+            since = waiting_since(t, task_runs, handed)
+            waited = days_since(since, at)
             inbox.append(
                 {
                     "task_id": t.id,
@@ -566,6 +590,9 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
                     "command": handover.command(t.id, nxt, args),
                     "args": shlex.join(args),
                     "created": v["created"],
+                    "waiting_since": since,
+                    "waiting_days": round(waited, 1),
+                    "stale": stale_text(t.id, waited),
                     "author": v["author"],
                     "purpose": v["purpose"],
                     "changes_prod": v["changes_prod"],

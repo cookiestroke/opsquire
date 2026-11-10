@@ -61,7 +61,10 @@ opsquire restore <task...>           bring offboarded tasks back, with the gener
 opsquire runs [<task>] [--status failed] [--area x] [--since 2026-10-30]
 opsquire last                        most recent run
 opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, latest run for a task
-opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it
+opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it;
+                                     exit 4 when the task was abandoned or superseded instead
+opsquire supersede <task> --by <newer> [--note "..."]   a newer task replaced it: out of the inbox, refused by run
+opsquire reopen <task> --note "why"  undo a close or a supersession (an expiry that was wrong, say)
 opsquire handover <task> [--apply|--verify] [--why "..."] [--again] [--withdraw] [-- args]
                                      recommend a run of an existing task: in the inbox with your reason until it runs
 opsquire threads [--json]            tasks grouped into threads (the stories they belong to), with suggestions
@@ -188,7 +191,7 @@ like any task: `opsquire run <plan>` (every step in its dry/read mode), then `op
 | `uses` | general scripts this task calls (`$OPSQUIRE_GENERAL/<id>/main.py`) |
 | `rollback` | how to undo, or `read-only` |
 | `links` | chat threads, PRs, incident links |
-| `superseded_by`, `abandoned_reason` | set by hand to retire a task |
+| `superseded_by`, `superseded`, `abandoned_reason`, `reopened` | written by `supersede`, `close` and `reopen`: who decided, when and why |
 | `thread` | optional: the thread (story) this task belongs to, kebab-case; inferred when absent |
 | `verify` | changing tasks: the read-only check script (`verify.py` or `verify.sh`) that says whether the intended state is live |
 | `judged` | written by `opsquire judge` when it keeps a task open or asks for the check: decision, note, by, when |
@@ -392,6 +395,20 @@ General script (derived from its last lint): `lint-ok` (passed on the current fi
 <task>` also lints, each on its own, the general scripts the task uses whose files changed, and
 `opsquire lint <general-id>` lints one directly: lint a general script after every edit, so the catalog never shows
 `unchecked` for a script other tasks rely on.
+
+## Waiting in the inbox
+
+An inbox item that waited 3 days (since its handover, its last run, or its creation) is marked stale in the inbox
+and the console and asks for a decision: run it, `opsquire supersede <task> --by <newer task>`, or
+`opsquire close <task> --outcome abandoned --note "why"`. Once a day `new`, `lint` and `run` say on stderr how many
+items wait for one. A task or plan that never started a run in 14 days is closed abandoned by itself (`closed_by`
+`opsquire (expiry)`); a task that ran once, a failed or partial apply above all, never expires and waits for a
+person. `opsquire reopen` undoes any of these.
+
+The author hears what became of its tasks: `opsquire new` and `opsquire handover` print on stderr the decisions
+someone else made this week on tasks with the same author, and the author's items that are stale; `opsquire wait`
+on a task abandoned or superseded while it waited exits 4 with the decision. Read them before starting again: a
+superseded task is not handed over a second time.
 
 ## Offboarding
 

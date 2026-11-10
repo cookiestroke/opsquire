@@ -56,6 +56,8 @@ opsquire log <task>                full output of the latest run
 opsquire wait <task>               (for agents) block until your next run of a task finishes
 opsquire handover <task> [--apply] --why "..."   (for agents) put a run of an existing task in the inbox, with the reason
 opsquire locks / unlock <target>
+opsquire supersede <task> --by <newer>   a waiting task that will not run as it is; `reopen` undoes it
+                                   (inbox items waiting 3+ days ask for this; tasks that never ran expire in 14)
 opsquire offboard --due            settled tasks idle for 7 days leave tasks/ for offboarded/ (also daily, on its own)
 opsquire restore <task>            bring one back; `opsquire init --offboard-days N` sets the retention
 opsquire milestones --since 2h     what others would want to know: tasks closed, applies that failed, thread results

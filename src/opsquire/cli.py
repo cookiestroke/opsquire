@@ -14,9 +14,10 @@ from types import FrameType
 from typing import Any
 
 from . import __version__, handover, locks, piece, repos, runner
+from .ageing import EXPIRE_DAYS, expire_unrun, reminder, told
 from .ask import Budget, ask, configured_budget
 from .bootstrap import init
-from .close import auto_close, close_task
+from .close import auto_close, close_task, reopen_task, supersede_task
 from .docs import write_docs
 from .homegit import commit_quietly
 from .integrate import COMMAND_PLACEHOLDER, integrate, own_command
@@ -35,15 +36,18 @@ from .model import (
     OpsquireError,
     code_version,
     config_path,
+    decision,
+    decision_text,
     home_dir,
     iso,
+    load_task,
     now,
     resolve_task,
     update_config,
     write_json,
     write_text,
 )
-from .offboard import daily_sweep, days_text, keep_days, offboard_due, offboard_named, restore
+from .offboard import daily_sweep, days_text, keep_days, offboard_due, offboard_named, restore, sweep_is_due_here
 from .plan import plan_meta, run_plan
 from .query import (
     SCRIPT_STATUSES,
@@ -59,6 +63,8 @@ from .query import (
 from .runner import EXIT_CODES, load_run, run_task, tty_prompt
 from .state import state, waiting_on
 from .ui import DEFAULT_PORT, serve, url
+
+WAIT_DECIDED = 4
 
 
 def emit(data: Any, as_json: bool, table: list[list[str]] | None = None) -> None:
@@ -126,6 +132,7 @@ def cmd_new(a: argparse.Namespace) -> int:
     if not a.json:
         print(folder)
     waiting = report_shared_targets(a.target or [a.area], name)
+    tell_author()
     if a.json:
         emit({"id": name, "path": str(folder), "waiting_on_same_target": waiting}, True)
     return 0
@@ -202,6 +209,35 @@ def cmd_lint(a: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def cmd_supersede(a: argparse.Namespace) -> int:
+    done = supersede_task(a.task, a.by, a.note or "")
+    if a.json:
+        emit(done, True)
+    else:
+        print(f"{done['id']}: superseded by {done['superseded_by']}; out of the inbox and refused by run")
+    return 0
+
+
+def cmd_reopen(a: argparse.Namespace) -> int:
+    done = reopen_task(a.task, a.note)
+    if a.json:
+        emit(done, True)
+    else:
+        print(f"{done['id']}: open again")
+    return 0
+
+
+def tell_author() -> None:
+    """The agent that runs new or handover hears what became of its earlier tasks: decided by someone else, or
+    waiting too long. Never the reason the command fails."""
+    try:
+        lines = told(handover.author())
+    except (OpsquireError, OSError, ValueError):
+        return
+    for line in lines:
+        print(f"opsquire: {line}", file=sys.stderr)
+
+
 def cmd_close(a: argparse.Namespace) -> int:
     """Record how a task really ended: done, partial or abandoned, with a note (what was finished by hand, which
     run landed). Only annotates meta.json; touches no host. The catalog and `ls` show the state from then on."""
@@ -276,6 +312,7 @@ def cmd_handover(a: argparse.Namespace) -> int:
     else:
         print(f"handed over: {cmd}\n  in the inbox until it runs" + (f"; why: {entry['why']}" if entry["why"] else ""))
         report_shared_targets(targets, task.id)
+    tell_author()
     return 0
 
 
@@ -432,13 +469,33 @@ def cmd_restore(a: argparse.Namespace) -> int:
 
 
 def sweep_after_command() -> None:
-    """Settled tasks past the retention leave after `new`, `lint` and `run`, at most once a day. Never the reason a
-    command fails: a home it cannot write keeps its tasks until the next command that can."""
+    """Once a day `new`, `lint` and `run` also expire tasks that never ran, offboard settled tasks past the retention
+    and count the inbox items that wait for a decision. Never the reason a command fails: a home it cannot write keeps
+    its tasks until the next command that can."""
+    at = now()
+    due = sweep_is_due_here(at)
+    if due:
+        try:
+            expired = expire_unrun(at)
+        except (OpsquireError, OSError) as e:
+            expired = []
+            print(f"opsquire: unrun tasks not expired this time: {str(e).splitlines()[0]}", file=sys.stderr)
+        if expired:
+            print(
+                f"opsquire: abandoned {len(expired)} tasks that never ran in {EXPIRE_DAYS:g} days: "
+                f'{", ".join(expired)} (`opsquire reopen <task> --note "why"` undoes one)',
+                file=sys.stderr,
+            )
     try:
-        moved = daily_sweep()
+        moved = daily_sweep(at)
     except (OpsquireError, OSError) as e:
         print(f"opsquire: settled tasks not offboarded this time: {str(e).splitlines()[0]}", file=sys.stderr)
         return
+    if due:
+        with contextlib.suppress(OpsquireError, OSError, ValueError):
+            note = reminder(state(at))
+            if note:
+                print(f"opsquire: {note}", file=sys.stderr)
     if moved:
         print(
             f"opsquire: offboarded {len(moved)} settled tasks idle {days_text(keep_days())}+ days "
@@ -499,10 +556,19 @@ def cmd_wait(a: argparse.Namespace) -> int:
     def progress(msg: str) -> None:
         print(f"opsquire: {msg}", file=sys.stderr, flush=True)
 
-    rec = wait_for_run(task.id, a.since, a.timeout, progress)
+    def decided() -> str | None:
+        d = decision(load_task(task.folder).raw) if task.folder.is_dir() else None
+        return decision_text(task.id, d) if d else None
+
+    rec = wait_for_run(task.id, a.since, a.timeout, progress, decided=decided)
     if rec is None:
         print(f"opsquire: no finished run of {task.id} within {a.timeout:g}s", file=sys.stderr)
         return 124
+    if "decided" in rec:
+        if a.json:
+            emit({"id": task.id, "decided": rec["decided"]}, True)
+        print(f"opsquire: no run is coming: {rec['decided']}", file=sys.stderr)
+        return WAIT_DECIDED
     if a.json:
         emit(rec, True)
     else:
@@ -823,6 +889,19 @@ def parser() -> argparse.ArgumentParser:
     ho.add_argument("--json", action="store_true")
     ho.set_defaults(fn=cmd_handover)
 
+    sp = sub.add_parser("supersede", help="a newer task replaced this one: it leaves the inbox and will not run")
+    sp.add_argument("task")
+    sp.add_argument("--by", required=True, help="the task that replaced it")
+    sp.add_argument("--note", help="what changed")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(fn=cmd_supersede)
+
+    ro = sub.add_parser("reopen", help="undo a close or a supersession (an expiry that was wrong, say)")
+    ro.add_argument("task")
+    ro.add_argument("--note", required=True, help="why it is open again")
+    ro.add_argument("--json", action="store_true")
+    ro.set_defaults(fn=cmd_reopen)
+
     cl = sub.add_parser("close", help="record how a task really ended (done, partial, abandoned) with a note")
     cl.add_argument("task")
     cl.add_argument("--outcome", required=True, choices=OUTCOME_STATES)
@@ -899,7 +978,12 @@ def parser() -> argparse.ArgumentParser:
     wt = sub.add_parser("wait", help="wait for the next finished run of a task, then print it (for agents)")
     wt.add_argument("task")
     wt.add_argument("--since", help="UTC ISO time; default: newer than the latest run that exists now")
-    wt.add_argument("--timeout", type=float, default=540, help="seconds (default 540); exit 124 on timeout")
+    wt.add_argument(
+        "--timeout",
+        type=float,
+        default=540,
+        help="seconds (default 540); exit 124 on timeout, 4 when the task was abandoned or superseded instead",
+    )
     wt.add_argument("--json", action="store_true")
     wt.set_defaults(fn=cmd_wait)
 

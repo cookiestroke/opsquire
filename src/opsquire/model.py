@@ -343,6 +343,34 @@ OUTCOME_STATES = ("done", "partial", "abandoned")
 THREAD_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 
+def decision(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """The recorded decision that no run of this task is coming (abandoned or superseded): who, when and why. None
+    for an open task, a task that ended done or partial, and a supersession written by hand with no record."""
+    outcome = raw.get("outcome")
+    if raw.get("abandoned_reason") and isinstance(outcome, dict) and outcome.get("state") == "abandoned":
+        return {
+            "state": "abandoned",
+            "by": str(outcome.get("closed_by") or "unknown"),
+            "at": str(outcome.get("closed") or ""),
+            "note": str(outcome.get("note") or ""),
+        }
+    record = raw.get("superseded")
+    if raw.get("superseded_by") and isinstance(record, dict):
+        return {
+            "state": "superseded",
+            "by": str(record.get("by") or "unknown"),
+            "at": str(record.get("at") or ""),
+            "note": str(record.get("note") or ""),
+            "superseded_by": str(raw["superseded_by"]),
+        }
+    return None
+
+
+def decision_text(task_id: str, d: dict[str, Any]) -> str:
+    what = f"superseded by {d['superseded_by']}" if d["state"] == "superseded" else "abandoned"
+    return f"{task_id} was {what} ({d['by']}, {d['at']})" + (f": {d['note']}" if d["note"] else "")
+
+
 def validate_outcome(outcome: Any) -> list[str]:
     """Errors in a task's closing `outcome` (written by `opsquire close`): a state, a note, who and when."""
     if not isinstance(outcome, dict):

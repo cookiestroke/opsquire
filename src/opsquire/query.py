@@ -171,8 +171,15 @@ def find_tasks(query: str, limit: int = 10) -> list[dict[str, Any]]:
 
 
 def wait_for_run(
-    task_id: str, since: str | None, timeout: float, progress: Callable[[str], None], poll: float = 1.0
+    task_id: str,
+    since: str | None,
+    timeout: float,
+    progress: Callable[[str], None],
+    poll: float = 1.0,
+    decided: Callable[[], str | None] = lambda: None,
 ) -> dict[str, Any] | None:
+    """The next finished run of the task, None on timeout, or {"decided": why} when the task was abandoned or
+    superseded while no run of it was going."""
     existing = runs_for(task_id)
     baseline = since or (str(existing[-1]["started"]) if existing else "")
     progress(f"waiting for a run of {task_id} started after {baseline or 'now'} (Ctrl-C to stop)")
@@ -192,6 +199,10 @@ def wait_for_run(
                 asked = question
                 if question:
                     progress(f"run {announced} is waiting for the operator to answer: {question}")
+        else:
+            why = decided()
+            if why:
+                return {"decided": why}
         if time.monotonic() >= deadline:
             return None
         time.sleep(poll)

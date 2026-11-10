@@ -27,6 +27,8 @@ from .model import (
     OpsquireError,
     Task,
     compact,
+    decision,
+    decision_text,
     home_dir,
     iso,
     now,
@@ -584,7 +586,9 @@ def run_task(
             f"{task.id} is archived (historical record, not runnable); see archived.note in its meta.json"
         )
     if task.meta.superseded_by or task.meta.abandoned_reason:
-        raise OpsquireError(f"{task.id} is superseded or abandoned; see its meta.json")
+        d = decision(task.raw)
+        said = decision_text(task.id, d) if d else f"{task.id} is superseded or abandoned"
+        raise OpsquireError(f'{said}; `opsquire reopen {task.id} --note "why"` if it must run after all')
     meta = task.meta
     if apply and not meta.changes_prod:
         raise OpsquireError(f"{task.id} is read-only (changes_prod is false); run it without --apply")

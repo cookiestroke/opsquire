@@ -284,14 +284,18 @@ def sweep_is_due(at: dt.datetime) -> bool:
     return at - last >= SWEEP_EVERY
 
 
+def sweep_is_due_here(at: dt.datetime) -> bool:
+    return not os.environ.get("OPSQUIRE_VAR") and sweep_is_due(at)
+
+
 def daily_sweep(at: dt.datetime | None = None) -> list[str]:
     """The sweep that rides `new`, `lint` and `run`: at most once a day, never inside a parallel piece's worktree
     (its tasks/ is a copy that merges back), and off when the retention is 0."""
     at = at or now()
     days = keep_days()
-    if os.environ.get("OPSQUIRE_VAR") or days <= 0 or not sweep_is_due(at):
+    if not sweep_is_due_here(at):
         return []
-    moved = offboard_due(at, days)
+    moved = offboard_due(at, days) if days > 0 else []
     with contextlib.suppress(OSError):
         sweep_stamp().parent.mkdir(parents=True, exist_ok=True)
         write_json(sweep_stamp(), {"swept": iso(at)})

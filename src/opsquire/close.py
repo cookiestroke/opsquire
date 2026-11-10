@@ -1,5 +1,6 @@
 """Closing a task: how it really ended (done, partial, abandoned) with a note, written to its meta.json only. Shared
-by `opsquire close` and the UI, the one write the UI makes."""
+by `opsquire close` and the UI, the one write the UI makes. Also the two other decisions about a task that will not
+run as it is: superseded by a newer task, and reopened after a decision that was wrong."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from .model import OUTCOME_STATES, OpsquireError, Task, home_dir, iso, now, reso
 from .query import find_run, runs_for
 
 
-def close_task(query: str, outcome: str, note: str, run: str | None = None) -> dict[str, Any]:
+def close_task(query: str, outcome: str, note: str, run: str | None = None, by: str = "") -> dict[str, Any]:
     """Annotate the task's meta.json with the outcome; returns the task id and notes about what is still missing
     (no design.md, no Result section)."""
     if outcome not in OUTCOME_STATES:
@@ -35,7 +36,7 @@ def close_task(query: str, outcome: str, note: str, run: str | None = None) -> d
     record: dict[str, Any] = {
         "state": outcome,
         "note": note,
-        "closed_by": os.environ.get("OPSQUIRE_AUTHOR", "unknown"),
+        "closed_by": by or os.environ.get("OPSQUIRE_AUTHOR", "unknown"),
         "closed": iso(now()),
     }
     if run_id:
@@ -44,6 +45,8 @@ def close_task(query: str, outcome: str, note: str, run: str | None = None) -> d
     raw["outcome"] = record
     if outcome == "abandoned":
         raw["abandoned_reason"] = note
+    else:
+        raw.pop("abandoned_reason", None)
     write_json(task.folder / "meta.json", raw)
     notes: list[str] = []
     design = task.folder / "design.md"
@@ -55,6 +58,57 @@ def close_task(query: str, outcome: str, note: str, run: str | None = None) -> d
     if note_commit:
         notes.append(note_commit)
     return {"id": task.id, "outcome": record, "notes": notes}
+
+
+def open_task_for_decision(query: str, verb: str) -> Task:
+    task = resolve_task(query)
+    if task.meta is None:
+        raise OpsquireError(f"cannot {verb} a task with invalid meta.json: " + "; ".join(task.errors))
+    if task.kind == "general":
+        raise OpsquireError(f"general scripts are not {verb}d; {verb} the tasks that use them")
+    if task.meta.archived:
+        raise OpsquireError("archived tasks are historical records and stay as they are")
+    return task
+
+
+def supersede_task(query: str, by_query: str, note: str = "") -> dict[str, Any]:
+    """Record that a newer task replaced this one: it leaves the inbox and refuses to run."""
+    task = open_task_for_decision(query, "supersede")
+    newer = resolve_task(by_query)
+    if newer.id == task.id:
+        raise OpsquireError("a task cannot supersede itself")
+    if newer.kind == "general":
+        raise OpsquireError(f"{newer.id} is a general script; name the task that replaced {task.id}")
+    if task.meta and (task.meta.superseded_by or task.meta.outcome):
+        raise OpsquireError(f"{task.id} is already closed or superseded; `opsquire reopen {task.id}` first")
+    record = {"by": os.environ.get("OPSQUIRE_AUTHOR", "unknown"), "at": iso(now()), "note": note.strip()}
+    raw = {k: v for k, v in task.raw.items() if k != "handover"}
+    raw["superseded_by"] = newer.id
+    raw["superseded"] = record
+    write_json(task.folder / "meta.json", raw)
+    commit_quietly(home_dir(), [task.folder], f"superseded by {newer.id}: {task.id}")
+    return {"id": task.id, "superseded_by": newer.id, "superseded": record}
+
+
+REOPENED_KEYS = ("outcome", "abandoned_reason", "superseded_by", "superseded")
+
+
+def reopen_task(query: str, note: str) -> dict[str, Any]:
+    """Undo a close or a supersession (an expiry that was wrong, say): the task is open again and what it was is
+    kept in `reopened`."""
+    task = open_task_for_decision(query, "reopen")
+    was = {k: task.raw[k] for k in REOPENED_KEYS if k in task.raw}
+    if not was:
+        raise OpsquireError(f"{task.id} is not closed or superseded; there is nothing to reopen")
+    note = note.strip()
+    if not note:
+        raise OpsquireError("--note is empty: say why it is open again")
+    record = {"by": os.environ.get("OPSQUIRE_AUTHOR", "unknown"), "at": iso(now()), "note": note, "was": was}
+    raw = {k: v for k, v in task.raw.items() if k not in REOPENED_KEYS}
+    raw["reopened"] = record
+    write_json(task.folder / "meta.json", raw)
+    commit_quietly(home_dir(), [task.folder], f"reopened: {task.id}")
+    return {"id": task.id, "reopened": record}
 
 
 def has_result(task: Task) -> bool:

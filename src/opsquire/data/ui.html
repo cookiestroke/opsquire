@@ -1034,12 +1034,13 @@ function renderInboxRow(it, nested, pos) {
   const handed = it.handed ? el('span', { class: 'muted small', title: `handed over by ${it.handed.by || 'an agent'}: ${it.handed.why || 'no reason given'}` }, it.handed.why ? truncate(it.handed.why, 90) : `handed over by ${it.handed.by || 'an agent'}`) : null;
   const again = it.applied_already ? el('span', { class: 'warnnote', title: it.applied_already }, 'already applied ok, same scripts') : null;
   const shared = (it.same_target || []).length ? el('span', { class: 'muted small', title: `also waiting on the same target: ${it.same_target.join(', ')}. Related runs belong in one plan.` }, `same machine as ${plural(it.same_target.length, 'other item')}`) : null;
+  const aged = it.stale ? el('span', { class: 'warnnote', title: it.stale }, `waiting ${Math.floor(it.waiting_days)} days: run, supersede or abandon`) : null;
   const stepsNote = (it.steps || []).length ? el('span', { class: 'plan', title: 'a plan: one run does every step below, in this order' }, `plan \u00b7 ${plural(it.steps.length, 'step')} in order`) : null;
   if (S.dev) return el('div', { class: 'ib' + sub, 'data-key': 'i:' + id },
     tree, stepNo, modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
-    argsTag(it.args), stepsNote, changed, again, shared, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+    argsTag(it.args), stepsNote, aged, changed, again, shared, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
   return el('div', { class: 'sr' + sub, 'data-key': 'i:' + id },
-    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), argsTag(it.args), stepsNote, changed, again, shared, handed,
+    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), argsTag(it.args), stepsNote, aged, changed, again, shared, handed,
     el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}`, title: it.next === 'apply' ? 'the dry run passed; this changes production' : 'a read-only or dry run first; nothing changes' }, nextLabel(it.next)),
     runButton(id, it.next, nested ? 'Run this step alone' : undefined));
 }
