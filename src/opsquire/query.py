@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from .lint import cached_lint_ok
-from .model import Task, all_task_folders, load_task, runs_dir
+from .model import OUTCOME_STATES, Task, all_task_folders, is_offboarded, load_task, offboarded_folders, runs_dir
 from .runner import load_run
+
+TASK_STATUSES = ("draft", "ready", "done", "partial", "superseded", "abandoned", "archived")
+SCRIPT_STATUSES = ("lint-ok", "lint-failing", "unchecked")
 
 
 def runs_for(task_id: str) -> list[dict[str, Any]]:
@@ -38,22 +41,46 @@ def all_runs() -> list[dict[str, Any]]:
     return sorted(recs, key=lambda r: str(r.get("started")))
 
 
-def task_status(task: Task, runs: list[dict[str, Any]]) -> str:
-    if task.meta and task.meta.archived:
+def recorded_end(raw: dict[str, Any]) -> str | None:
+    """How meta.json says the task ended. Read from the file as written: an error elsewhere in meta.json (a general
+    script it used was renamed since) must not turn a retired or closed task back into a draft."""
+    if raw.get("archived"):
         return "archived"
-    if task.meta and task.meta.abandoned_reason:
+    if raw.get("abandoned_reason"):
         return "abandoned"
-    if task.meta and task.meta.superseded_by:
+    if raw.get("superseded_by"):
         return "superseded"
-    if task.meta and task.meta.outcome:
-        return str(task.meta.outcome["state"])
-    if task.meta:
-        final_mode = "apply" if task.meta.changes_prod else "read"
-        if any(r.get("mode") == final_mode and r.get("status") == "ok" for r in runs):
-            return "done"
+    outcome = raw.get("outcome")
+    if isinstance(outcome, dict) and outcome.get("state") in OUTCOME_STATES:
+        return str(outcome["state"])
+    return None
+
+
+def script_status(task: Task) -> str:
+    """A general script never runs on its own, so its status is its lint: of the files as they are now."""
+    ok = cached_lint_ok(task)
+    if ok is None:
+        return "unchecked"
+    return "lint-ok" if ok else "lint-failing"
+
+
+def task_status(task: Task, runs: list[dict[str, Any]]) -> str:
+    end = recorded_end(task.raw)
+    if end:
+        return end
+    if task.kind == "general":
+        return script_status(task)
+    final_mode = "apply" if task.raw.get("changes_prod") is True else "read"
+    if any(r.get("mode") == final_mode and r.get("status") == "ok" for r in runs):
+        return "done"
     if task.meta and cached_lint_ok(task):
         return "ready"
     return "draft"
+
+
+def used_by(script_id: str, tasks: list[Task]) -> list[str]:
+    """The tasks whose meta.json names this general script, valid or not."""
+    return [t.id for t in tasks if isinstance(t.raw.get("uses"), list) and script_id in t.raw["uses"]]
 
 
 def summarize(task: Task) -> dict[str, Any]:
@@ -69,6 +96,7 @@ def summarize(task: Task) -> dict[str, Any]:
         "changes_prod": m.changes_prod if m else task.raw.get("changes_prod"),
         "targets": m.targets if m else task.raw.get("targets"),
         "path": str(task.folder),
+        "offboarded": is_offboarded(task.folder),
         "meta_errors": task.errors,
         "runs": len(runs),
         "last_run": (
@@ -119,7 +147,7 @@ def find_tasks(query: str, limit: int = 10) -> list[dict[str, Any]]:
     if not words:
         return []
     hits: list[dict[str, Any]] = []
-    for folder in all_task_folders():
+    for folder in [*all_task_folders(), *offboarded_folders()]:
         task = load_task(folder)
         fields = {name: set(_tokens(text)) for name, text in _fields(task).items()}
         score = 0.0
@@ -136,8 +164,9 @@ def find_tasks(query: str, limit: int = 10) -> list[dict[str, Any]]:
             continue
         score *= len(matched) / len(words)
         hits.append(summarize(task) | {"score": round(score, 2), "matched": sorted(matched)})
-    order = {"done": 0, "partial": 1, "ready": 1, "draft": 2, "archived": 3, "superseded": 4, "abandoned": 5}
-    hits.sort(key=lambda h: (-h["score"], order.get(h["status"], 9), h["id"]))
+    order = {"done": 0, "lint-ok": 0, "partial": 1, "ready": 1, "draft": 2, "unchecked": 2, "lint-failing": 2}
+    order |= {"archived": 3, "superseded": 4, "abandoned": 5}
+    hits.sort(key=lambda h: (-h["score"], h["offboarded"], order.get(h["status"], 9), h["id"]))
     return hits[:limit]
 
 

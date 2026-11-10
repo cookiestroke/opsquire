@@ -21,11 +21,12 @@ from .docs import write_docs
 from .homegit import commit_quietly
 from .integrate import COMMAND_PLACEHOLDER, integrate, own_command
 from .judge import judge
-from .lint import lint_task, save_lint
+from .lint import lint_changed_scripts, lint_task, save_lint
 from .milestones import KINDS, milestones, render, since_arg
 from .model import (
     DATA_DIR,
     GENERAL_ID_RE,
+    OFFBOARDED,
     OUTCOME_STATES,
     TASK_ID_RE,
     TEMPLATES_DIR,
@@ -42,8 +43,19 @@ from .model import (
     write_json,
     write_text,
 )
+from .offboard import daily_sweep, days_text, keep_days, offboard_due, offboard_named, restore
 from .plan import plan_meta, run_plan
-from .query import all_runs, find_run, find_tasks, list_tasks, runs_for, summarize, wait_for_run
+from .query import (
+    SCRIPT_STATUSES,
+    TASK_STATUSES,
+    all_runs,
+    find_run,
+    find_tasks,
+    list_tasks,
+    runs_for,
+    summarize,
+    wait_for_run,
+)
 from .runner import EXIT_CODES, load_run, run_task, tty_prompt
 from .state import state, waiting_on
 from .ui import DEFAULT_PORT, serve, url
@@ -94,6 +106,8 @@ def cmd_new(a: argparse.Namespace) -> int:
     folder = home_dir() / "general" / name if a.general else home_dir() / "tasks" / f"{t:%Y-%m}" / name
     if folder.exists():
         raise OpsquireError(f"{folder} already exists")
+    if a.general and (home_dir() / OFFBOARDED / "general" / name).exists():
+        raise OpsquireError(f"{name} exists and is offboarded: `opsquire restore {name}` brings it back")
     if a.changes_prod and not a.rollback and not a.plan:
         raise OpsquireError("--rollback is required with --changes-prod")
     created_parents = [p for p in reversed(folder.parents) if not p.exists()]
@@ -165,12 +179,21 @@ def cmd_lint(a: argparse.Namespace) -> int:
     task = resolve_task(a.task)
     result = lint_task(task)
     save_lint(task, result)
+    scripts = lint_changed_scripts(task)
+    failing = sorted(s for s, r in scripts.items() if not r.ok)
     if a.json:
-        emit({"id": task.id, "ok": result.ok, "content_hash": result.content_hash, "output": result.output}, True)
+        data = {"id": task.id, "ok": result.ok, "content_hash": result.content_hash, "output": result.output}
+        emit(data | {"scripts": {s: r.ok for s, r in scripts.items()}}, True)
     else:
         print(result.output)
+        for script in failing:
+            print(f"\n== general script {script}, on its own\n{scripts[script].output}")
         tests = f" ({result.tests} tests)" if result.tests else ""
         print(f"\n{task.id}: {'LINT OK' if result.ok else 'LINT FAILED'}{tests}")
+        for script, checked in scripts.items():
+            print(f"{script}: {'LINT OK' if checked.ok else 'LINT FAILED'} (general script, changed since its lint)")
+    if failing:
+        return 1
     if result.ok:
         uses = [home_dir() / "general" / u for u in (task.meta.uses if task.meta else [])]
         note = commit_quietly(home_dir(), [task.folder, *uses], f"ready: {task.id}")
@@ -196,7 +219,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.verbose:
         runner.VERBOSE = True
     task = resolve_task(a.task)
-    note = commit_quietly(home_dir(), [home_dir() / "tasks", home_dir() / "general"], f"before running {task.id}")
+    versioned = [home_dir() / sub for sub in ("tasks", "general", OFFBOARDED)]
+    note = commit_quietly(home_dir(), versioned, f"before running {task.id}")
     if note:
         print(f"opsquire: {note}", file=sys.stderr)
     since = iso(now())
@@ -271,7 +295,7 @@ def cmd_ls(a: argparse.Namespace) -> int:
 
 
 def cmd_show(a: argparse.Namespace) -> int:
-    task = resolve_task(a.task)
+    task = resolve_task(a.task, offboarded=True)
     data = summarize(task) | {"meta": task.raw, "run_history": runs_for(task.id)}
     if a.json:
         emit(data, True)
@@ -308,7 +332,7 @@ def question(rec: dict[str, Any]) -> str:
 
 
 def cmd_runs(a: argparse.Namespace) -> int:
-    recs = runs_for(resolve_task(a.task).id) if a.task else all_runs()
+    recs = runs_for(resolve_task(a.task, offboarded=True).id) if a.task else all_runs()
     recs = [
         r
         for r in recs
@@ -336,7 +360,7 @@ def cmd_last(a: argparse.Namespace) -> int:
 def cmd_log(a: argparse.Namespace) -> int:
     path = find_run(a.run)
     if path is None:
-        task_runs = runs_for(resolve_task(a.run).id)
+        task_runs = runs_for(resolve_task(a.run, offboarded=True).id)
         if not task_runs:
             raise OpsquireError(f"no runs for {a.run!r}")
         path = home_dir() / task_runs[-1]["paths"]["dir"]
@@ -356,10 +380,65 @@ def cmd_log(a: argparse.Namespace) -> int:
 def cmd_find(a: argparse.Namespace) -> int:
     hits = find_tasks(" ".join(a.words), a.limit)
     table = [["SCORE", "STATUS", "ID", "PURPOSE"]] + [
-        [f"{h['score']:.1f}", h["status"], h["id"], str(h["purpose"] or "")[:80]] for h in hits
+        [
+            f"{h['score']:.1f}",
+            h["status"] + (", offboarded" if h["offboarded"] else ""),
+            h["id"],
+            str(h["purpose"] or "")[:80],
+        ]
+        for h in hits
     ]
     emit(hits, a.json, table if hits else [])
     return 0
+
+
+def cmd_offboard(a: argparse.Namespace) -> int:
+    """Move settled tasks out of tasks/ into offboarded/: the named ones now, or with --due every one that sat idle
+    for the retention period (what the daily sweep does). Nothing is deleted; `opsquire restore` brings one back."""
+    if bool(a.task) == a.due:
+        raise OpsquireError("name the tasks to offboard now, or pass --due for every settled task past the retention")
+    if a.days is not None and not a.due:
+        raise OpsquireError("--days goes with --due; a named task is offboarded whatever its age")
+    days = keep_days() if a.days is None else a.days
+    if a.due and a.days is None and days <= 0:
+        raise OpsquireError("automatic offboarding is off for this home (retention 0); pass --days N")
+    if days < 0:
+        raise OpsquireError("--days cannot be negative")
+    moved = offboard_due(days=days, dry=a.dry) if a.due else offboard_named(a.task, a.dry)
+    if a.json:
+        emit({"offboarded": [] if a.dry else moved, "would_offboard": moved if a.dry else [], "days": days}, True)
+        return 0
+    verb = "would offboard" if a.dry else "offboarded"
+    age = f" idle {days_text(days)}+ days" if a.due else ""
+    print(f"{verb} {len(moved)}{age}" + (":" if moved else ""))
+    for tid in moved:
+        print(f"  {tid}")
+    return 0
+
+
+def cmd_restore(a: argparse.Namespace) -> int:
+    restored = restore(a.task)
+    if a.json:
+        emit({"restored": restored}, True)
+        return 0
+    print("restored: " + ", ".join(restored))
+    return 0
+
+
+def sweep_after_command() -> None:
+    """Settled tasks past the retention leave after `new`, `lint` and `run`, at most once a day. Never the reason a
+    command fails: a home it cannot write keeps its tasks until the next command that can."""
+    try:
+        moved = daily_sweep()
+    except (OpsquireError, OSError) as e:
+        print(f"opsquire: settled tasks not offboarded this time: {str(e).splitlines()[0]}", file=sys.stderr)
+        return
+    if moved:
+        print(
+            f"opsquire: offboarded {len(moved)} settled tasks idle {days_text(keep_days())}+ days "
+            "(`opsquire find` still finds them, `opsquire restore <task>` brings one back)",
+            file=sys.stderr,
+        )
 
 
 def cmd_ask(a: argparse.Namespace) -> int:
@@ -433,7 +512,9 @@ def cmd_wait(a: argparse.Namespace) -> int:
 
 
 def cmd_init(a: argparse.Namespace) -> int:
-    for line in init(a.path, a.budget, a.dry_run):
+    if a.offboard_days is not None and a.offboard_days < 0:
+        raise OpsquireError("--offboard-days must be 0 (never automatically) or more")
+    for line in init(a.path, a.budget, a.dry_run, a.offboard_days):
         print(line)
     return 0
 
@@ -593,7 +674,8 @@ def cmd_threads(a: argparse.Namespace) -> int:
         return 0
     for th in s["threads"]:
         flag = "" if th["explicit"] else " (inferred)"
-        print(f"{th['state']:<5} {th['title']}{flag}  [{th['updated'] or '-'}]")
+        left = f"  (+{th['offboarded']} offboarded)" if th["offboarded"] else ""
+        print(f"{th['state']:<5} {th['title']}{flag}  [{th['updated'] or '-'}]{left}")
         for tid in th["tasks"]:
             t = s["tasks"][tid]
             print(f"      {t['status']:<10} {tid}")
@@ -740,7 +822,7 @@ def parser() -> argparse.ArgumentParser:
 
     ls = sub.add_parser("ls", help="list tasks with derived status")
     ls.add_argument("--area")
-    ls.add_argument("--status", choices=["draft", "ready", "done", "superseded", "abandoned", "archived"])
+    ls.add_argument("--status", choices=[*TASK_STATUSES, *SCRIPT_STATUSES])
     ls.add_argument("--kind", choices=["task", "general", "plan"])
     ls.add_argument("--json", action="store_true")
     ls.set_defaults(fn=cmd_ls)
@@ -769,6 +851,21 @@ def parser() -> argparse.ArgumentParser:
     fd.add_argument("--limit", type=int, default=10)
     fd.add_argument("--json", action="store_true")
     fd.set_defaults(fn=cmd_find)
+
+    ob = sub.add_parser(
+        "offboard", help="move settled tasks out of tasks/ into offboarded/ (nothing is deleted; see restore)"
+    )
+    ob.add_argument("task", nargs="*", help="tasks (a plan takes its steps along) or unused general scripts, now")
+    ob.add_argument("--due", action="store_true", help="every settled task idle for the retention period")
+    ob.add_argument("--days", type=float, metavar="N", help="with --due: this retention instead of the home's")
+    ob.add_argument("--dry", action="store_true", help="say what would move, move nothing")
+    ob.add_argument("--json", action="store_true")
+    ob.set_defaults(fn=cmd_offboard)
+
+    rst = sub.add_parser("restore", help="bring offboarded tasks back, with the general scripts and steps they need")
+    rst.add_argument("task", nargs="+")
+    rst.add_argument("--json", action="store_true")
+    rst.set_defaults(fn=cmd_restore)
 
     ak = sub.add_parser("ask", help="ask an agent to find or write the task for a request; prints what to run")
     ak.add_argument("request", nargs="*")
@@ -802,6 +899,12 @@ def parser() -> argparse.ArgumentParser:
     ini = sub.add_parser("init", help="set up a machine: home, local rules, config, credentials, skill, first task")
     ini.add_argument("path", nargs="?", help="the home to use (default: the configured or default home)")
     ini.add_argument("--budget", type=float, metavar="USD", help="spending reminder per `opsquire ask`")
+    ini.add_argument(
+        "--offboard-days",
+        type=float,
+        metavar="N",
+        help="settled tasks leave tasks/ N days after their last activity (default 7; 0: never automatically)",
+    )
     ini.add_argument("--dry-run", action="store_true")
     ini.set_defaults(fn=cmd_init)
 
@@ -891,6 +994,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         code: int = a.fn(a)
         if a.cmd in ("new", "lint", "run"):
+            sweep_after_command()
+        if a.cmd in ("new", "lint", "run", "offboard", "restore"):
             refresh_docs()
         return code
     except OpsquireError as e:

@@ -59,7 +59,7 @@ def milestones(
     at: dt.datetime | None = None,
 ) -> list[dict[str, Any]]:
     at = at or now()
-    st = state(at)
+    st = state(at, with_offboarded=True)
     tasks: dict[str, dict[str, Any]] = st["tasks"]
     runs: dict[str, dict[str, Any]] = st["runs"]
     threads = {str(th["id"]): th for th in st["threads"]}

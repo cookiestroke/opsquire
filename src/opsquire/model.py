@@ -28,6 +28,7 @@ LOCK_MODES = ("exclusive", "shared", "none")
 INTERPRETERS = {".py": [sys.executable, "-u"], ".sh": ["/bin/bash"]}
 IGNORED_PARTS = {"__pycache__", ".mypy_cache", ".ruff_cache"}
 LINT_FILE = ".lint.json"
+OFFBOARDED = "offboarded"
 ORIGIN_ENV = "OPSQUIRE_ORIGIN"
 ORIGIN_CONSOLE = "console"
 ORIGIN_TERMINAL = "terminal"
@@ -332,7 +333,9 @@ def validate_meta(raw: Any, folder: Path) -> tuple[Meta | None, list[str]]:
             errors.append(f"credentials entry {env!r} must map an UPPER_CASE env name to a dotted key")
     for use in meta.uses:
         if not isinstance(use, str) or not (home_dir() / "general" / use / "meta.json").is_file():
-            errors.append(f"uses {use!r} is not a general script")
+            gone = isinstance(use, str) and (home_dir() / OFFBOARDED / "general" / use).is_dir()
+            hint = f" (it is offboarded: `opsquire restore {use}` brings it back)" if gone else ""
+            errors.append(f"uses {use!r} is not a general script{hint}")
     return (meta if not errors else None), errors
 
 
@@ -497,16 +500,40 @@ def all_task_folders() -> list[Path]:
     return tasks + general
 
 
-def resolve_task(query: str) -> Task:
-    folders = all_task_folders()
+def offboarded_folders() -> list[Path]:
+    """Settled tasks that left tasks/ (and general scripts taken out by hand): same layout, under offboarded/."""
+    root = home_dir() / OFFBOARDED
+    return sorted(p for p in root.glob("*/*") if p.is_dir() and not p.name.startswith("."))
+
+
+def is_offboarded(folder: Path) -> bool:
+    return folder.parent.parent.name == OFFBOARDED
+
+
+def match_folder(folders: list[Path], query: str) -> Path | None:
     q = query.rstrip("/").split("/")[-1]
     exact = [f for f in folders if f.name == q]
     if exact:
-        return load_task(exact[0])
+        return exact[0]
     matches = [f for f in folders if q in f.name]
-    if len(matches) == 1:
-        return load_task(matches[0])
-    if not matches:
+    if len(matches) > 1:
+        names = "\n  ".join(m.name for m in matches)
+        raise OpsquireError(f"{query!r} matches several tasks:\n  {names}")
+    return matches[0] if matches else None
+
+
+def resolve_task(query: str, offboarded: bool = False) -> Task:
+    """The task a command names. Commands that only read a task (show, log, runs) and restore pass offboarded=True;
+    for every other command an offboarded task is not there to work on, and the error says how to bring it back."""
+    folder = match_folder(all_task_folders(), query)
+    if folder:
+        return load_task(folder)
+    folder = match_folder(offboarded_folders(), query)
+    if folder is None:
         raise OpsquireError(f"no task matches {query!r}")
-    names = "\n  ".join(m.name for m in matches)
-    raise OpsquireError(f"{query!r} matches several tasks:\n  {names}")
+    if not offboarded:
+        raise OpsquireError(
+            f"{folder.name} is offboarded (settled and idle): `opsquire restore {folder.name}` brings it back, "
+            f"`opsquire show {folder.name}` reads it"
+        )
+    return load_task(folder)

@@ -196,6 +196,18 @@ def save_lint(task: Task, result: LintResult) -> None:
         pass
 
 
+def lint_changed_scripts(task: Task) -> dict[str, LintResult]:
+    """Lint, each on its own, the general scripts this task uses whose files changed since their last lint, and
+    stamp them: a script edited for one task is checked then, not when the next task reuses it."""
+    out: dict[str, LintResult] = {}
+    for use in task.meta.uses if task.meta else []:
+        script = load_task(home_dir() / "general" / use)
+        if cached_lint_ok(script) is None:
+            out[use] = lint_task(script)
+            save_lint(script, out[use])
+    return out
+
+
 def last_lint(task: Task) -> dict[str, Any] | None:
     """The task's last lint stamp, whatever files it was taken on."""
     try:

@@ -20,6 +20,8 @@ it is write-denied to agents, so a run record is always real.
 ```
 tasks/YYYY-MM/YYYYMMDD-HHMM_<area>_<task>/   task: meta.json + main.py|main.sh (+ payload files, design.md)
 general/<area>_<verb-noun>/                   reusable script with arguments, called by tasks, never run directly
+offboarded/YYYY-MM/<task-id>/                 settled tasks that sat idle past the retention (see Offboarding)
+offboarded/general/<general-id>/              general scripts the operator took out by hand
 var/runs/<task-id>/<run-id>/                  one folder per run (run-id = UTC time + mode)
     run.json        summary: read this first
     events.jsonl    structured events, one JSON object per line
@@ -39,7 +41,7 @@ are UTC ISO-8601 with milliseconds: `2026-10-30T17:20:01.123Z`.
 
 ## Docs: read these before code
 
-`docs/CATALOG.md` lists every general script (purpose, test count, users, run record) and every task;
+`docs/CATALOG.md` lists every general script (purpose, lint, test count, users, run record) and every task;
 `docs/<general-id>.md` gives a general script's API (module and function docstrings, signatures), what its tests
 guarantee, and its run history. They are generated from code, tests, meta.json and run records after every
 `new`, `lint` and `run` (or `opsquire docs`), so they are current; never edit them. Read them first and open
@@ -49,9 +51,13 @@ is what the next agent reads instead of the code.
 ## Finding things (use `--json` for structured output)
 
 ```
-opsquire find <words...>             ranked search over ids, areas, targets, purposes, archived history
-opsquire ls [--area x] [--status draft|ready|done|superseded|abandoned|archived]
+opsquire find <words...>             ranked search over ids, areas, targets, purposes, archived history; also
+                                     finds offboarded tasks and marks them
+opsquire ls [--area x] [--status draft|ready|done|partial|superseded|abandoned|archived
+                                 |lint-ok|lint-failing|unchecked]   (the last three are general scripts)
 opsquire show <task>                 meta + every run
+opsquire offboard <task...> | --due [--days N] [--dry]    move settled tasks out of tasks/ (see Offboarding)
+opsquire restore <task...>           bring offboarded tasks back, with the general scripts and steps they need
 opsquire runs [<task>] [--status failed] [--area x] [--since 2026-10-30]
 opsquire last                        most recent run
 opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, latest run for a task
@@ -371,6 +377,32 @@ Task (derived, never stored): `draft` (lint not passing) → `ready` (lint passe
 → `done` (an `apply` run, or a `read` run for read-only tasks, finished `ok`); `superseded` /
 `abandoned` / `archived` from meta. `opsquire close` records how a task really ended and overrides the run-derived
 status with `done`, `partial` or `abandoned`.
+
+General script (derived from its last lint): `lint-ok` (passed on the current files), `lint-failing`, `unchecked`
+(never linted, or edited since). A general script is never run on its own, so it has no task status. `opsquire lint
+<task>` also lints, each on its own, the general scripts the task uses whose files changed, and
+`opsquire lint <general-id>` lints one directly: lint a general script after every edit, so the catalog never shows
+`unchecked` for a script other tasks rely on.
+
+## Offboarding
+
+`tasks/`, `ls`, the catalog, the console and the inbox show the work that is still alive. A settled task (closed,
+superseded, or a read-only task whose run finished `ok`) with no run waiting in the inbox leaves for
+`offboarded/YYYY-MM/<id>/` once it sat idle for the retention: 7 days after its last activity (created, last run, or
+last change to meta.json such as a close or a handover) unless the home says otherwise
+(`opsquire init --offboard-days N`, 0 = never automatically). The sweep rides `new`, `lint` and `run` at most once a
+day, says on stderr what it moved, and commits the move. Nothing is deleted: the folder is moved whole, its run
+records stay in `var/`, `find` still finds it (marked offboarded) and `show`, `runs` and `log` still read it.
+
+- A plan and its steps leave together, or stay together while any of them is alive.
+- General scripts never leave on their own. `opsquire offboard <general-id>` is refused while an active task uses it.
+- An unsettled task never leaves: run it, supersede it, or close it abandoned. Records archived from before opsquire
+  leave only by hand.
+- To run, lint, close or hand over an offboarded task, restore it first: `opsquire restore <task>` (the error says
+  so). Restoring starts its idle clock again. A read task you mean to reuse after a quiet week is found by `find`
+  and comes back the same way.
+- Never move folders between `tasks/` and `offboarded/` by hand; `opsquire offboard <task...>` does it now,
+  whatever the age, and refuses with the reason for each task that is not settled.
 
 Run: `running`, `ok`, `partial` (some targets failed), `failed`, `aborted` (answered no),
 `interrupted` (Ctrl-C, terminal closed, or runner vanished), `blocked` (lint, lock or missing

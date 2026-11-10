@@ -331,6 +331,7 @@ const TONE = {
   ok: 'good', done: 'good', failed: 'bad', blocked: 'bad', partial: 'warn', running: 'live', open: 'live',
   ready: 'neutral', draft: 'grey', abandoned: 'grey', superseded: 'grey', archived: 'grey', skipped: 'grey',
   unchanged: 'grey', interrupted: 'grey', aborted: 'grey', merged: 'good', waiting: 'warn', alive: 'good', dead: 'grey',
+  'lint-ok': 'good', 'lint-failing': 'bad', unchecked: 'grey',
 };
 const TASK_ID_RE = /\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b/g;
 function tone(status) { return TONE[status] || 'neutral'; }
@@ -1091,6 +1092,7 @@ function renderThread(th, taskIds) {
     S.dev ? pill(th.state || 'open') : !done && open ? el('span', { class: 'next', title: 'tasks still open' }, `${open} to do`) : null,
     S.dev && (th.areas || []).length ? el('span', { class: 'muted small' }, th.areas.join(', ')) : null,
     th.suggestions ? el('span', { class: 'suggn', title: plural(th.suggestions, 'suggestion') }, `${th.suggestions} !`) : null,
+    th.offboarded ? el('span', { class: 'muted small', title: 'settled tasks of this thread that left after the retention period; opsquire find still finds them, opsquire restore brings one back' }, `+${th.offboarded} offboarded`) : null,
     el('span', { class: 'grow' }),
     el('span', { class: 'mini' }, flowSvg(ids, true)),
     when(th.updated),
@@ -1369,8 +1371,9 @@ function renderScripts() {
       S.dev ? el('span', { class: 'id title' }, s.id) : [el('span', { class: 'title' }, scriptName(s.id)), areaTag({ id: s.id, area: scriptArea(s.id) })],
       t && (t.meta_errors || []).length ? el('span', { class: 'err small' }, t.meta_errors.join('; ')) : null,
       el('span', { class: 'purpose muted', title: s.purpose || '' }, s.purpose || 'no purpose'),
+      s.lint ? el('span', { title: 'lint and tests of the script as it is now; unchecked means it changed since its last lint' }, pill(s.lint)) : null,
       el('span', { class: 'muted small' }, scriptStats(s.stats)),
-      el('span', { class: 'count' }, plural((s.used_by || []).length, 'task')),
+      el('span', { class: 'count' }, plural((s.used_by || []).length, 'task') + (s.used_by_offboarded ? `, ${s.used_by_offboarded} offboarded` : '')),
     ];
     return collapsible('s:' + s.id, head, () => renderScriptBody(s, t), 'script/' + encodeURIComponent(s.id));
   }));

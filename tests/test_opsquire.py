@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import fcntl
 import io
 import json
@@ -305,7 +306,16 @@ class OpsTest(unittest.TestCase):
         meta = json.loads((folder / "meta.json").read_text())
         meta["id"] = "renamed"
         (folder / "meta.json").write_text(json.dumps(meta))
-        self.assertEqual(json.loads(self.cli("show", "uses-general", "--json").stdout)["status"], "draft")
+        shown = json.loads(self.cli("show", "uses-general", "--json").stdout)
+        self.assertEqual(shown["status"], "done", "it ran ok; a later meta error does not undo that")
+        self.assertIn("differs from folder name", " ".join(shown["meta_errors"]))
+        self.assertEqual(self.cli("run", "uses-general").returncode, 2)
+        never_ran = self.new("never-ran", "print(1)\n")
+        self.assertEqual(self.cli("lint", "never-ran").returncode, 0)
+        (never_ran / "meta.json").write_text(
+            json.dumps(json.loads((never_ran / "meta.json").read_text()) | {"id": "x"})
+        )
+        self.assertEqual(json.loads(self.cli("show", "never-ran", "--json").stdout)["status"], "draft")
 
     def test_archived_is_listed_but_never_runs_or_lints(self) -> None:
         body = "import os\nos.system('touch should-not-run')\n"
@@ -875,7 +885,7 @@ class OpsTest(unittest.TestCase):
         self.new("user", "print(1)\n", "--uses", "web1_shared")
         self.assertEqual(self.cli("lint", "web1_shared").returncode, 0)
         catalog = (self.home / "docs/CATALOG.md").read_text()
-        self.assertIn("**web1_shared**: shared logic (tests: 2; used by 1; never run)", catalog)
+        self.assertIn("**web1_shared**: shared logic (lint-ok; tests: 2; used by 1; never run)", catalog)
         self.assertRegex(catalog, r"\d{8}-\d{4}_web1_user \[draft, task; never run\]: test user \(uses web1_shared\)")
         self.assertEqual(self.cli("run", "web1_user").returncode, 0)
         self.assertEqual(self.cli("run", "web1_user").returncode, 0)
@@ -1968,6 +1978,7 @@ class OpsTest(unittest.TestCase):
             "home repo: initialized a local git repository",
             "contract: written",
             "first task: created and ready (",
+            "offboarding: settled tasks leave tasks/ 7 days after their last activity",
         ):
             self.assertIn(line, out)
         config = json.loads((self.tmp / "cfg/opsquire/config.json").read_text())
@@ -1983,8 +1994,16 @@ class OpsTest(unittest.TestCase):
         self.assertIn("hello from demo", run.stdout)
         self.assertEqual(json.loads(self.cli("last", "--json").stdout)["status"], "ok")
         (home / "LOCAL.md").write_text("mine\n")
+        self.assertEqual(self.cli("init", "--offboard-days", "-1").returncode, 2)
+        kept = self.cli("init", "--offboard-days", "30", "--dry-run")
+        self.assertIn("offboarding: settled tasks leave tasks/ 30 days after", kept.stdout)
+        self.assertNotIn("offboard_after_days", (self.tmp / "cfg/opsquire/config.json").read_text())
+        never = self.cli("init", "--offboard-days", "0")
+        self.assertIn("offboarding: off; settled tasks stay until `opsquire offboard <task>`", never.stdout)
+        self.assertEqual(json.loads((self.tmp / "cfg/opsquire/config.json").read_text())["offboard_after_days"], 0.0)
         again = self.cli("init")
         self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("offboarding: off;", again.stdout)
         for line in (
             "tasks/: present",
             "local rules: present",
@@ -2916,6 +2935,306 @@ class OpsTest(unittest.TestCase):
         opened = self.cli("repo", "pr", str(copy), "--title", "fix app", "--body-file", str(body))
         self.assertEqual(opened.returncode, 0, opened.stderr)
         self.assertIn("pull/9 (colleague) also changes src/app.py", opened.stderr)
+
+    def test_a_recorded_end_survives_a_renamed_general_script(self) -> None:
+        g = Path(self.cli("new", "web1", "shared", "--general", "--purpose", "shared logic").stdout.strip())
+        made = {}
+        for name in ("replaced", "dropped", "ran", "waiting"):
+            made[name] = self.new(name, "print(1)\n", "--uses", "web1_shared")
+            self.assertEqual(self.cli("lint", name).returncode, 0)
+        meta = json.loads((made["replaced"] / "meta.json").read_text())
+        (made["replaced"] / "meta.json").write_text(json.dumps(meta | {"superseded_by": made["ran"].name}))
+        self.assertEqual(self.cli("close", "dropped", "--outcome", "abandoned", "--note", "not needed").returncode, 0)
+        self.assertEqual(self.cli("run", "ran").returncode, 0)
+        renamed = g.with_name("web1_common")
+        g.rename(renamed)
+        (renamed / "meta.json").write_text(
+            json.dumps(json.loads((renamed / "meta.json").read_text()) | {"id": "web1_common"})
+        )
+        listed = {t["id"].split("_", 2)[-1]: t for t in json.loads(self.cli("ls", "--json").stdout)}
+        self.assertIn("uses 'web1_shared' is not a general script", listed["replaced"]["meta_errors"])
+        self.assertEqual(
+            {name: listed[name]["status"] for name in made},
+            {"replaced": "superseded", "dropped": "abandoned", "ran": "done", "waiting": "draft"},
+        )
+        st = json.loads(self.cli("threads", "--json").stdout)
+        views = {name: st["tasks"][folder.name] for name, folder in made.items()}
+        self.assertEqual(
+            {name: v["settled"] for name, v in views.items()}, dict.fromkeys(made, True) | {"waiting": False}
+        )
+        self.assertEqual(views["dropped"]["outcome"]["state"], "abandoned")
+        self.assertEqual(views["replaced"]["superseded_by"], made["ran"].name)
+        self.assertEqual([s["kind"] for s in views["waiting"]["suggestions"]], ["broken"])
+        self.assertIn("web1_shared", views["waiting"]["suggestions"][0]["text"])
+        self.assertEqual(views["ran"]["suggestions"], [])
+        self.assertEqual(self.cli("docs").returncode, 0)
+        catalog = (self.home / "docs/CATALOG.md").read_text()
+        self.assertRegex(catalog, r"web1_replaced \[superseded, task; never run\]")
+        self.assertRegex(catalog, r"web1_dropped \[abandoned, task; never run\].* Closed abandoned by test: not needed")
+
+    def test_a_general_script_shows_its_lint_and_a_task_lint_checks_a_changed_one(self) -> None:
+        g = Path(self.cli("new", "web1", "shared", "--general", "--purpose", "shared logic").stdout.strip())
+        good = '"""Doubling helpers."""\n\n\ndef double(x: int) -> int:\n    """Twice x."""\n    return x * 2\n'
+        (g / "logic.py").write_text(good)
+        (g / "test_logic.py").write_text(self.PASSING_TEST)
+
+        def script() -> dict[str, Any]:
+            rows: list[dict[str, Any]] = json.loads(self.cli("ls", "--kind", "general", "--json").stdout)
+            return rows[0]
+
+        self.assertEqual(script()["status"], "unchecked")
+        self.assertEqual(self.cli("lint", "web1_shared").returncode, 0)
+        self.assertEqual(script()["status"], "lint-ok")
+        self.assertIn("(lint-ok; tests: 2; used by 0; never run)", (self.home / "docs/CATALOG.md").read_text())
+        self.assertIn("- lint: lint-ok", (self.home / "docs/web1_shared.md").read_text())
+
+        (g / "logic.py").write_text("import os\n" + good)
+        self.assertEqual(script()["status"], "unchecked", "edited since its lint")
+        self.new("user", "print(1)\n", "--uses", "web1_shared")
+        self.assertIn("(unchecked; tests: 2; used by 1; never run)", (self.home / "docs/CATALOG.md").read_text())
+        failed = self.cli("lint", "user")
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("web1_shared: LINT FAILED (general script, changed since its lint)", failed.stdout)
+        self.assertEqual(script()["status"], "lint-failing")
+        self.assertEqual(len(json.loads(self.cli("ls", "--status", "lint-failing", "--json").stdout)), 1)
+        self.assertIn("(lint-failing; tests: 2; used by 1; never run)", (self.home / "docs/CATALOG.md").read_text())
+        st = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual(st["scripts"]["web1_shared"]["lint"], "lint-failing")
+        self.assertEqual(st["inbox"], [])
+
+        (g / "logic.py").write_text(good)
+        fixed = self.cli("lint", "user", "--json")
+        self.assertEqual(fixed.returncode, 0, fixed.stdout)
+        self.assertEqual(json.loads(fixed.stdout)["scripts"], {"web1_shared": True})
+        self.assertEqual(script()["status"], "lint-ok")
+        self.assertEqual(json.loads(self.cli("lint", "user", "--json").stdout)["scripts"], {}, "unchanged: not again")
+
+    def test_a_dry_run_of_older_scripts_does_not_offer_the_apply(self) -> None:
+        g = Path(self.cli("new", "web1", "shared", "--general", "--purpose", "shared logic").stdout.strip())
+        folder = self.new(
+            "canary", "print(1)\n", "--changes-prod", "--rollback", "none", "--no-verify", "--uses", "web1_shared"
+        )
+
+        def owed() -> list[str]:
+            return [i["next"] for i in json.loads(self.cli("threads", "--json").stdout)["inbox"]]
+
+        self.assertEqual(self.cli("lint", "canary").returncode, 0)
+        self.assertEqual(owed(), ["dry"])
+        self.assertEqual(self.cli("run", "canary").returncode, 0)
+        self.assertEqual(owed(), ["apply"])
+        (folder / "design.md").write_text("# canary\n\nnotes do not change what runs\n")
+        self.assertEqual(self.cli("lint", "canary").returncode, 0)
+        self.assertEqual(owed(), ["apply"])
+        (g / "notes.txt").write_text("the general script it uses changed after the dry run\n")
+        self.assertEqual(owed(), ["dry"], "changed since lint, and the dry run was of other files")
+        self.assertEqual(self.cli("lint", "canary").returncode, 0)
+        self.assertEqual(owed(), ["dry"])
+        self.assertEqual(self.cli("run", "canary").returncode, 0)
+        self.assertEqual(owed(), ["apply"])
+        (folder / "main.py").write_text("print(2)\n")
+        self.assertEqual(self.cli("lint", "canary").returncode, 0)
+        self.assertEqual(owed(), ["dry"])
+
+    def backdate(self, folder: Path, days: float) -> None:
+        """Make a task look last touched `days` ago: its creation stamp and the time meta.json was written."""
+        meta = json.loads((folder / "meta.json").read_text())
+        then = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+        meta["created"] = then.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        (folder / "meta.json").write_text(json.dumps(meta))
+        os.utime(folder / "meta.json", (then.timestamp(), then.timestamp()))
+
+    def due_in(self, days: float) -> list[str]:
+        code = (
+            "import datetime as dt, json\nfrom opsquire.model import now\nfrom opsquire.offboard import due\n"
+            f"print(json.dumps([t.id for t in due(now() + dt.timedelta(days={days}))]))"
+        )
+        r = subprocess.run([sys.executable, "-c", code], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ids: list[str] = json.loads(r.stdout)
+        return ids
+
+    def offboard_env(self, **config: Any) -> None:
+        (self.tmp / "cfg/opsquire").mkdir(parents=True)
+        (self.tmp / "cfg/opsquire/config.json").write_text(json.dumps(config))
+        self.env["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
+
+    def test_settled_tasks_leave_after_the_retention_and_come_back(self) -> None:
+        self.offboard_env()
+        self.git_home()
+        seen = self.new("seen", "print('looked')\n", "--thread", "cleanup")
+        self.assertEqual(self.cli("lint", "seen").returncode, 0)
+        self.assertEqual(self.cli("run", "seen").returncode, 0)
+        open_task = self.new("open", "print(1)\n", "--changes-prod", "--rollback", "none", "--no-verify")
+        self.assertEqual(self.cli("lint", "open").returncode, 0)
+        stale = self.new("stale", "print(1)\n", "--thread", "cleanup")
+        fresh = self.new("fresh", "print(1)\n", "--thread", "cleanup")
+        for name in ("stale", "fresh"):
+            r = self.cli("close", name, "--outcome", "abandoned", "--note", "not needed after all")
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.backdate(stale, 8)
+        self.assertEqual(self.due_in(0), [stale.name])
+        self.assertEqual(self.due_in(6), [stale.name], "a read task that ran ok and a close both start the clock")
+        self.assertEqual(self.due_in(8), sorted([seen.name, stale.name, fresh.name]), "the open task never leaves")
+
+        dry = json.loads(self.cli("offboard", "--due", "--dry", "--json").stdout)
+        self.assertEqual((dry["would_offboard"], dry["offboarded"], dry["days"]), ([stale.name], [], 7.0))
+        self.assertTrue(stale.is_dir())
+
+        stamp = self.home / "var/offboard.json"
+        self.assertTrue(stamp.is_file(), "the commands above already swept today and found nothing")
+        stamp.unlink()
+        r = self.cli("lint", "open")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("offboarded 1 settled tasks idle 7+ days", r.stderr)
+        gone = self.home / "offboarded" / stale.parent.name / stale.name
+        self.assertTrue((gone / "main.py").is_file())
+        self.assertFalse(stale.exists())
+        log = subprocess.run(
+            ["git", "-C", str(self.home), "log", "--format=%s", "--name-status", "-M", "-3"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        self.assertIn("offboarded 1 tasks idle 7+ days", log)
+        self.assertRegex(log, rf"R100\ttasks/[\d-]+/{stale.name}/main.py\toffboarded/[\d-]+/{stale.name}/main.py")
+
+        self.backdate(fresh, 8)
+        r = self.cli("lint", "open")
+        self.assertNotIn("offboarded", r.stderr, "the sweep rides at most once a day")
+        self.assertTrue(fresh.is_dir())
+        r = self.cli("offboard", "--due")
+        self.assertEqual((r.returncode, r.stdout), (0, f"offboarded 1 idle 7+ days:\n  {fresh.name}\n"))
+        self.assertEqual(self.cli("offboard", "--due").stdout, "offboarded 0 idle 7+ days\n")
+
+        listed = {t["id"] for t in json.loads(self.cli("ls", "--json").stdout)}
+        self.assertEqual(listed, {seen.name, open_task.name})
+        hits = {h["id"]: h for h in json.loads(self.cli("find", "stale", "seen", "--json").stdout)}
+        self.assertEqual((hits[stale.name]["offboarded"], hits[stale.name]["status"]), (True, "abandoned"))
+        self.assertFalse(hits[seen.name]["offboarded"])
+        self.assertIn("abandoned, offboarded", self.cli("find", "stale").stdout)
+        shown = json.loads(self.cli("show", "stale", "--json").stdout)
+        self.assertEqual((shown["offboarded"], shown["path"]), (True, str(gone)))
+        self.assertEqual(self.cli("runs", "stale").returncode, 0)
+        for cmd in (
+            ["run", "stale"],
+            ["lint", "stale"],
+            ["handover", "stale"],
+            ["close", "stale", "--outcome", "done"],
+        ):
+            r = self.cli(*cmd, "--note", "x") if cmd[0] == "close" else self.cli(*cmd)
+            self.assertEqual(r.returncode, 2, cmd)
+            self.assertIn(f"`opsquire restore {stale.name}` brings it back", r.stderr)
+        catalog = (self.home / "docs/CATALOG.md").read_text()
+        self.assertNotIn(stale.name, catalog)
+        self.assertIn("## Offboarded\n\n2 settled tasks idle past the retention are in offboarded/", catalog)
+        state = json.loads(self.cli("threads", "--json").stdout)
+        self.assertEqual((state["offboarded"], sorted(state["tasks"])), (2, sorted([seen.name, open_task.name])))
+        thread = next(th for th in state["threads"] if th["id"] == "cleanup")
+        self.assertEqual((thread["tasks"], thread["offboarded"]), ([seen.name], 2))
+        self.assertIn("(+2 offboarded)", self.cli("threads").stdout)
+        ended = [m["task_id"] for m in json.loads(self.cli("milestones", "--since", "30d", "--json").stdout)]
+        self.assertEqual(ended, [], "abandoned read tasks are no milestone, and reading them back does not fail")
+
+        r = self.cli("restore", "stale")
+        self.assertEqual((r.returncode, r.stdout), (0, f"restored: {stale.name}\n"))
+        self.assertTrue((stale / "main.py").is_file())
+        self.assertFalse(gone.exists())
+        self.assertEqual(self.due_in(0), [], "restoring starts the idle clock again")
+        self.assertIn(stale.name, (self.home / "docs/CATALOG.md").read_text())
+        self.assertIn("is not offboarded", self.cli("restore", "stale").stderr)
+        self.assertEqual(self.cli("restore", "fresh").returncode, 0)
+        self.assertEqual(list((self.home / "offboarded").iterdir()), [])
+        status = subprocess.run(
+            ["git", "-C", str(self.home), "status", "--porcelain"], capture_output=True, text=True, check=True
+        ).stdout
+        self.assertEqual(status, "", "every move is committed")
+
+    def test_offboarding_by_hand_refuses_what_is_still_alive(self) -> None:
+        self.offboard_env(offboard_after_days=0)
+        script = Path(self.cli("new", "web1", "shared", "--general", "--purpose", "shared logic").stdout.strip())
+        user = self.new("user", "print(1)\n", "--uses", "web1_shared")
+        self.assertEqual(self.cli("lint", "user").returncode, 0)
+        r = self.cli("offboard", "user")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"nothing offboarded:\n  {user.name}: it is not settled (status ready)", r.stderr)
+        self.assertEqual(self.cli("run", "user").returncode, 0)
+        self.assertEqual(self.cli("handover", "user", "--why", "look again").returncode, 0)
+        self.assertIn("a read run of it is waiting in the inbox", self.cli("offboard", "user").stderr)
+        self.assertEqual(self.cli("handover", "user", "--withdraw").returncode, 0)
+        r = self.cli("offboard", "web1_shared")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"web1_shared: active task {user.name} uses it", r.stderr)
+        self.assertEqual(self.cli("offboard").returncode, 2)
+        self.assertEqual(self.cli("offboard", "user", "--due").returncode, 2)
+        self.assertIn("retention 0", self.cli("offboard", "--due").stderr)
+        self.assertEqual(self.due_in(30), [user.name], "the home's retention of 0 only stops the sweep")
+        self.backdate(user, 30)
+        self.assertNotIn("offboarded", self.cli("lint", "web1_shared").stderr)
+        self.assertTrue(user.is_dir(), "retention 0: nothing leaves on its own")
+
+        self.assertEqual(self.cli("offboard", "user").returncode, 0)
+        catalog = (self.home / "docs/CATALOG.md").read_text()
+        self.assertIn("used by 0, 1 offboarded; runs 1, 1 ok read)", catalog)
+        self.assertIn(f"- used by offboarded tasks: {user.name}", (self.home / "docs/web1_shared.md").read_text())
+        scripts = json.loads(self.cli("threads", "--json").stdout)["scripts"]
+        self.assertEqual((scripts["web1_shared"]["used_by"], scripts["web1_shared"]["used_by_offboarded"]), ([], 1))
+        self.assertTrue(script.is_dir(), "a general script never leaves on its own")
+        self.assertEqual(self.cli("offboard", "--due", "--days", "0").stdout, "offboarded 0 idle 0+ days\n")
+
+        self.assertEqual(self.cli("offboard", "web1_shared").returncode, 0)
+        self.assertTrue((self.home / "offboarded/general/web1_shared/main.py").is_file())
+        self.assertTrue((self.home / "general").is_dir())
+        self.assertFalse((self.home / "docs/web1_shared.md").exists())
+        r = self.cli("new", "web1", "shared", "--general", "--purpose", "again")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("web1_shared exists and is offboarded: `opsquire restore web1_shared`", r.stderr)
+        other = self.new("other", "print(1)\n")
+        meta = json.loads((other / "meta.json").read_text())
+        (other / "meta.json").write_text(json.dumps(meta | {"uses": ["web1_shared"]}))
+        errors = json.loads(self.cli("show", "other", "--json").stdout)["meta_errors"]
+        self.assertEqual(
+            errors,
+            [
+                "uses 'web1_shared' is not a general script (it is offboarded: `opsquire restore web1_shared` "
+                "brings it back)"
+            ],
+        )
+
+        r = self.cli("restore", "user", "--json")
+        self.assertEqual(json.loads(r.stdout)["restored"], ["web1_shared", user.name])
+        shown = json.loads(self.cli("show", "user", "--json").stdout)
+        self.assertEqual((shown["status"], shown["meta_errors"], shown["offboarded"]), ("done", [], False))
+        self.assertEqual(self.cli("lint", "other").returncode, 0)
+
+    def test_a_plan_and_its_steps_leave_together(self) -> None:
+        self.offboard_env()
+        first = self.new("first", "print(1)\n")
+        second = self.new("second", "print(2)\n")
+        for step in (first, second):
+            self.assertEqual(self.cli("lint", step.name).returncode, 0)
+        plan = self.make_plan(first, second)
+        self.assertEqual(self.cli("lint", plan.name).returncode, 0)
+        self.assertEqual(self.cli("run", plan.name).returncode, 0)
+        everything = [plan.name, first.name, second.name]
+        self.assertEqual(
+            self.due_in(8), everything, "the plan first: an interrupted sweep leaves no plan without steps"
+        )
+        self.assertEqual(self.cli("handover", "second", "--why", "once more").returncode, 0)
+        self.assertEqual(self.due_in(8), [], "one step has a run waiting, so the plan and the other step stay too")
+        r = self.cli("offboard", "first")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"{first.name}: it is a step of plan {plan.name}, which stays", r.stderr)
+        r = self.cli("offboard", plan.name)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"{second.name}: a read run of it is waiting in the inbox", r.stderr)
+        self.assertTrue(first.is_dir() and plan.is_dir())
+        self.assertEqual(self.cli("handover", "second", "--withdraw").returncode, 0)
+        r = self.cli("offboard", plan.name, "--json")
+        self.assertEqual(json.loads(r.stdout)["offboarded"], everything)
+        self.assertEqual(json.loads(self.cli("ls", "--json").stdout), [])
+        self.assertFalse(plan.parent.exists(), "an emptied month folder goes too")
+        self.assertEqual(self.cli("restore", plan.name).stdout, f"restored: {second.name}, {first.name}, {plan.name}\n")
+        self.assertEqual(self.cli("run", plan.name).returncode, 0)
 
 
 class ReleaseScripts(unittest.TestCase):

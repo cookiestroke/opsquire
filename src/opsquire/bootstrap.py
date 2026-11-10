@@ -29,6 +29,7 @@ from .model import (
     update_config,
     write_text,
 )
+from .offboard import CONFIG_KEY, days_text, keep_days
 
 DEMO_NAME = "demo_hello"
 DEMO_MAIN = '''"""The first task of this home: read-only, it says hello and counts what is here."""
@@ -62,7 +63,7 @@ TOOLS = (
 )
 
 
-def init(path: str | None, budget: float | None, dry: bool) -> list[str]:
+def init(path: str | None, budget: float | None, dry: bool, offboard_days: float | None = None) -> list[str]:
     lines: list[str] = []
     would = "would be " if dry else ""
     if path:
@@ -99,6 +100,14 @@ def init(path: str | None, budget: float | None, dry: bool) -> list[str]:
             else ""
         )
         + "; `opsquire ask --strict-budget` makes it a hard cap"
+    )
+    if offboard_days is not None and not dry:
+        update_config(**{CONFIG_KEY: offboard_days})
+    days = offboard_days if offboard_days is not None else keep_days()
+    lines.append(
+        f"offboarding: settled tasks leave tasks/ {days_text(days)} days after their last activity"
+        if days > 0
+        else "offboarding: off; settled tasks stay until `opsquire offboard <task>`"
     )
     lines.append(credentials_line(dry))
     for name, use in TOOLS:

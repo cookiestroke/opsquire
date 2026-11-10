@@ -23,11 +23,13 @@ from .model import (
     iso,
     load_task,
     now,
+    offboarded_folders,
     parse_iso,
     read_json,
+    validate_outcome,
     var_dir,
 )
-from .query import all_runs, runs_for, task_status
+from .query import all_runs, runs_for, task_status, used_by
 
 TASK_ID_RE = re.compile(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b")
 GENERIC_AUTHOR_WORDS = {"claude", "code", "codex", "chat", "opsquire", "ask", "migrated", "by", "unknown", "test"}
@@ -188,7 +190,11 @@ def suggestions(
     """What a task's record suggests about it; the UI shows these with their evidence, nothing acts on them."""
     out: list[dict[str, str]] = []
     m = task.meta
-    if m is None or m.archived or task.kind == "general":
+    if task.kind == "general" or task.raw.get("archived"):
+        return out
+    if m is None:
+        if status == "draft" and (last_lint(task) or {}).get("ok"):
+            out.append({"kind": "broken", "text": f"was ready, now its meta.json is invalid: {'; '.join(task.errors)}"})
         return out
     last = runs[-1] if runs else None
     final = final_mode(task)
@@ -289,9 +295,9 @@ def is_settled(view: dict[str, Any]) -> bool:
 
 def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None:
     """The run the operator owes a task: its first read or dry run when it is ready and never ran, the apply after
-    a dry run that ended ok, the verify check after an apply that did not close the task (or when the judge asked
-    for it), else a fresh dry run. None when nothing waits: read-only tasks that ran, closed tasks, and a task
-    whose verify check failed (that one needs a decision)."""
+    a dry run of its current scripts that ended ok, the verify check after an apply that did not close the task (or
+    when the judge asked for it), else a fresh dry run. None when nothing waits: read-only tasks that ran, closed
+    tasks, and a task whose verify check failed (that one needs a decision)."""
     m = task.meta
     if m is None or task.kind == "general" or status in CLOSED or status == "draft":
         return None
@@ -303,15 +309,14 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
     if m.verify and judged.get("decision") == "verify":
         return "verify"
     last = runs[-1]
+    same_scripts = code_version(last.get("files") or {}) == code_version(task.file_hashes())
     if last.get("mode") == "dry" and last.get("status") == "ok":
-        return "apply"
+        return "apply" if same_scripts else "dry"
     if last.get("mode") == "verify":
         return None
     if last.get("mode") == "apply" and last.get("status") != "aborted" and m.verify:
         return "verify"
-    if last.get("status") in ("failed", "partial") and code_version(last.get("files") or {}) == code_version(
-        task.file_hashes()
-    ):
+    if last.get("status") in ("failed", "partial") and same_scripts:
         return None
     return "dry"
 
@@ -424,18 +429,24 @@ def ask_view(a: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def state(at: dt.datetime | None = None) -> dict[str, Any]:
-    """Everything the UI shows, computed fresh from the home (small enough to rebuild on every request)."""
+def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[str, Any]:
+    """Everything the UI shows, computed fresh from the home (small enough to rebuild on every request). Offboarded
+    tasks still shape the threads (a thread says how many of its tasks left) and count as users of a general script;
+    they get a view of their own only with_offboarded, for readers of history such as milestones."""
     at = at or now()
     home = home_dir()
-    tasks = [load_task(f) for f in all_task_folders()]
+    active = [load_task(f) for f in all_task_folders()]
+    gone = [load_task(f) for f in offboarded_folders()]
+    gone_ids = {t.id for t in gone}
+    everything = active + gone
+    tasks = everything if with_offboarded else active
     runs = all_runs()
     by_task: dict[str, list[dict[str, Any]]] = {}
     for r in runs:
         by_task.setdefault(str(r.get("task_id")), []).append(r)
     asks = load_asks()
-    threads_of = infer_threads(tasks, asks)
-    final = {t.id: final_mode(t) for t in tasks}
+    threads_of = infer_threads(everything, asks)
+    final = {t.id: final_mode(t) for t in everything}
     agents_of = agent_work(tasks, asks)
     task_views: dict[str, dict[str, Any]] = {}
     for t in tasks:
@@ -455,14 +466,15 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
             "entry": m.entry if m else raw.get("entry"),
             "verify": m.verify if m else raw.get("verify"),
             "targets": m.targets if m else list(raw.get("targets") or []),
-            "uses": m.uses if m else [],
+            "uses": m.uses if m else [u for u in raw.get("uses") or [] if isinstance(u, str)],
             "links": m.links if m else [],
             "steps": [s.get("task") for s in (m.steps or [])] if m else [],
-            "outcome": m.outcome if m else None,
+            "outcome": raw.get("outcome") if not validate_outcome(raw.get("outcome")) else None,
             "judged": raw.get("judged"),
-            "superseded_by": m.superseded_by if m else None,
-            "abandoned_reason": m.abandoned_reason if m else None,
-            "archived": bool(m.archived) if m else False,
+            "superseded_by": raw.get("superseded_by"),
+            "abandoned_reason": raw.get("abandoned_reason"),
+            "archived": bool(raw.get("archived")),
+            "offboarded": t.id in gone_ids,
             "thread": threads_of.get(t.id),
             "thread_explicit": bool(m and m.thread),
             "runs": [str(r.get("run_id")) for r in trs],
@@ -483,6 +495,10 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
         tid = threads_of.get(t.id)
         if tid:
             threads.setdefault(tid, {"id": tid, "tasks": []})["tasks"].append(t.id)
+    left: dict[str, int] = {}
+    for t in gone:
+        if t.id in threads_of and not with_offboarded:
+            left[threads_of[t.id]] = left.get(threads_of[t.id], 0) + 1
     for tid, th in threads.items():
         members = [t for t in tasks if t.id in th["tasks"]]
         settled = [is_settled(task_views[m]) for m in th["tasks"]]
@@ -501,18 +517,22 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
                 "links": sorted({x for m in th["tasks"] for x in task_views[m]["links"]}),
                 "result": read_or_none(home / "threads" / f"{tid}.md"),
                 "suggestions": sum(len(task_views[m]["suggestions"]) for m in th["tasks"]),
+                "offboarded": left.get(tid, 0),
             }
         )
     scripts = {}
     for t in tasks:
         if t.kind != "general":
             continue
-        users = [x.id for x in tasks if x.meta and t.id in x.meta.uses]
-        srun = [r for tid in [t.id, *users] for r in by_task.get(tid, [])]
+        users = used_by(t.id, tasks)
+        past = [u for u in used_by(t.id, gone) if u not in users]
+        srun = [r for tid in [t.id, *users, *past] for r in by_task.get(tid, [])]
         scripts[t.id] = {
             "id": t.id,
             "purpose": task_views[t.id]["purpose"],
             "used_by": users,
+            "used_by_offboarded": len(past),
+            "lint": task_views[t.id]["status"],
             "stats": run_stats(srun, final),
         }
     held = []
@@ -563,6 +583,7 @@ def state(at: dt.datetime | None = None) -> dict[str, Any]:
         "inbox": with_shared_targets(nest_steps(inbox, {t.id: t for t in tasks})),
         "threads": sorted(threads.values(), key=lambda th: str(th["updated"] or ""), reverse=True),
         "tasks": task_views,
+        "offboarded": len([t for t in gone if t.kind != "general"]),
         "runs": {str(r.get("run_id")): run_view(r) for r in runs},
         "asks": [ask_view(a) for a in asks],
         "scripts": scripts,
