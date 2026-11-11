@@ -52,6 +52,23 @@ jobs:
       - run: python -m pip install --quiet --upgrade pip && pip install --quiet -e ".[lint]"
       - run: python tests/test_opsquire.py
 
+  full-power:
+    name: every feature end to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GIT_AUTHOR_NAME: ci
+      GIT_AUTHOR_EMAIL: ci@example.invalid
+      GIT_COMMITTER_NAME: ci
+      GIT_COMMITTER_EMAIL: ci@example.invalid
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --quiet --upgrade pip && pip install --quiet -e ".[lint]"
+      - run: python scripts/full_power.py
+
   package:
     name: wheel installs clean
     runs-on: ubuntu-latest

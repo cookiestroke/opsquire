@@ -84,6 +84,7 @@ mypy src tests scripts
 (cd src/opsquire/data/helpers && mypy --config-file ../mypy.ini opsquire_helpers.py)
 (cd src/opsquire/data/templates && MYPYPATH=../helpers mypy --config-file ../mypy.ini main.py verify.py read.py)
 shellcheck -x -P src/opsquire/data/helpers src/opsquire/data/helpers/opsquire.sh src/opsquire/data/templates/*.sh
+python scripts/full_power.py   # every feature end to end, through the real CLI, in a scratch home
 ```
 
 Standard library only, Python 3.10+. [CI](.github/workflows/ci.yml) runs the same checks on every push and
