@@ -82,7 +82,7 @@ python3 tests/test_opsquire.py -v
 ruff check . && ruff format --check .
 mypy src tests scripts
 (cd src/opsquire/data/helpers && mypy --config-file ../mypy.ini opsquire_helpers.py)
-(cd src/opsquire/data/templates && MYPYPATH=../helpers mypy --config-file ../mypy.ini main.py verify.py)
+(cd src/opsquire/data/templates && MYPYPATH=../helpers mypy --config-file ../mypy.ini main.py verify.py read.py)
 shellcheck -x -P src/opsquire/data/helpers src/opsquire/data/helpers/opsquire.sh src/opsquire/data/templates/*.sh
 ```
 

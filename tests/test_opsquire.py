@@ -48,6 +48,26 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+ASKING_BODY = """import opsquire_helpers as sq
+
+
+def main() -> None:
+    sq.step("Pre-checks (read-only)")
+
+    if sq.APPLY:
+        sq.confirm("Apply the change?")
+        sq.step("Apply")
+
+    for name in sq.TARGETS:
+        sq.target(name, "ok")
+    sq.result("done")
+
+
+if __name__ == "__main__":
+    sq.run(main)
+"""
+
+
 def run_in_pty(
     cmd: list[str], env: dict[str, str], answers: list[tuple[str, str]], size: tuple[int, int] | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -119,6 +139,7 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         folder = Path(r.stdout.strip())
         (folder / f"main.{lang}").write_text(body)
+        (folder / "test_main.py").unlink(missing_ok=True)
         return folder
 
     def last(self, task: str) -> dict[str, Any]:
@@ -153,7 +174,7 @@ class OpsTest(unittest.TestCase):
     def test_prod_task_dry_apply_and_abort(self) -> None:
         self.new(
             "restart",
-            (ROOT / "src/opsquire/data/templates/main.py").read_text(),
+            ASKING_BODY,
             "--changes-prod",
             "--rollback",
             "restart again",
@@ -553,7 +574,7 @@ class OpsTest(unittest.TestCase):
             " ".join(json.loads(self.cli("show", folder.name, "--json").stdout)["meta_errors"]),
         )
 
-    CONFIRM_BODY = (Path(__file__).resolve().parent.parent / "src/opsquire/data/templates/main.py").read_text()
+    CONFIRM_BODY = ASKING_BODY
 
     def make_plan(self, *steps: Path, name: str = "flow", extra: dict[str, Any] | None = None) -> Path:
         args = [a for s in steps for a in ("--step", s.name)]
@@ -2542,11 +2563,12 @@ class OpsTest(unittest.TestCase):
     def test_close_records_outcome_and_shows_in_status_and_catalog(self) -> None:
         folder = self.new(
             "finish-by-hand",
-            (ROOT / "src/opsquire/data/templates/main.py").read_text(),
+            ASKING_BODY,
             "--changes-prod",
             "--rollback",
             "undo",
         )
+        (folder / "design.md").unlink()
         self.assertEqual(self.cli("run", "finish-by-hand").returncode, 0)
         dry = self.last("finish-by-hand")["run_id"]
         r = self.cli("close", "finish-by-hand", "--outcome", "done", "--note", "restore finished by hand", "--run", dry)
@@ -3540,6 +3562,44 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("contract", "--write", "--force").returncode, 0)
         self.assertNotIn("only here", agents.read_text())
         self.assertIn("### Rule: third", agents.read_text())
+
+    def test_the_scaffold_lints_runs_and_asks_once_as_it_comes(self) -> None:
+        r = self.cli("new", "web1", "look", "--purpose", "look around", "--target", "web1", "--target", "web2")
+        read = Path(r.stdout.strip())
+        r = self.cli("new", "web1", "change", "--purpose", "change it", "--changes-prod", "--rollback", "none")
+        change = Path(r.stdout.strip())
+        self.assertEqual(sorted(p.name for p in read.iterdir()), ["design.md", "main.py", "meta.json"])
+        self.assertTrue((change / "test_main.py").is_file())
+        self.assertIn("## Rollback", (change / "design.md").read_text())
+        self.assertIn("change it", (change / "design.md").read_text())
+        for folder in (read, change):
+            r = self.cli("lint", folder.name)
+            self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("(1 tests)", self.cli("lint", change.name).stdout)
+        self.assertEqual(self.cli("run", read.name).returncode, 0)
+        kinds = {e["event"] for e in self.events(self.last(read.name))}
+        self.assertTrue({"data", "progress", "target", "result"} <= kinds, kinds)
+        self.assertEqual(self.cli("run", change.name).returncode, 0)
+        targets = self.last(change.name)["targets"]
+        self.assertEqual(targets["web1"]["status"], "unchanged", "the starter plan changes nothing")
+        r = self.cli("new", "web1", "bad", "--purpose", "x", "--changes-prod", "--rollback", "none", "--stage", "a")
+        self.assertEqual(r.returncode, 2)
+        r = self.cli(
+            "new", "web1", "two", "--purpose", "x", "--changes-prod", "--rollback", "n", "--stage", "a", "--stage", "b"
+        )
+        self.assertEqual(json.loads((Path(r.stdout.strip()) / "meta.json").read_text())["stages"], ["a", "b"])
+
+    def test_an_exception_in_a_script_is_the_runs_last_error(self) -> None:
+        self.new(
+            "boom",
+            "import opsquire_helpers as sq\n\n\ndef main() -> None:\n    raise RuntimeError('disk full on web1')\n\n\n"
+            "sq.run(main, cleanup=lambda: sq.step('cleaned up'))\n",
+        )
+        r = self.cli("run", "boom")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        rec = self.last("boom")
+        self.assertIn("RuntimeError: disk full on web1", rec["last_error"])
+        self.assertIn("cleaned up", [e["msg"] for e in self.events(rec)])
 
 
 class ReleaseScripts(unittest.TestCase):

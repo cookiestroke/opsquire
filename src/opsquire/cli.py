@@ -28,6 +28,7 @@ from .model import (
     GENERAL_ID_RE,
     OFFBOARDED,
     OUTCOME_STATES,
+    STAGE_RE,
     TASK_ID_RE,
     TEMPLATES_DIR,
     THREAD_RE,
@@ -47,6 +48,7 @@ from .model import (
     stage_of,
     update_config,
     write_json,
+    write_text,
 )
 from .offboard import daily_sweep, days_text, keep_days, offboard_due, offboard_named, restore, sweep_is_due_here
 from .plan import plan_meta, run_plan
@@ -115,6 +117,11 @@ def cmd_new(a: argparse.Namespace) -> int:
         raise OpsquireError(f"{folder} already exists")
     if a.general and (home_dir() / OFFBOARDED / "general" / name).exists():
         raise OpsquireError(f"{name} exists and is offboarded: `opsquire restore {name}` brings it back")
+    stages = a.stage or []
+    if stages and (len(stages) < 2 or len(set(stages)) != len(stages) or not all(STAGE_RE.match(x) for x in stages)):
+        raise OpsquireError("nothing created: --stage takes two or more distinct lowercase names, in order")
+    if stages and not a.changes_prod:
+        raise OpsquireError("nothing created: only a changing task runs in stages (--changes-prod)")
     if a.changes_prod and not a.rollback and not a.plan:
         raise OpsquireError("--rollback is required with --changes-prod")
     created_parents = [p for p in reversed(folder.parents) if not p.exists()]
@@ -146,7 +153,16 @@ def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -
         build_plan(a, name, t, folder)
         return
     entry = f"main.{a.lang}"
-    shutil.copy(TEMPLATES_DIR / entry, folder / entry)
+    if a.lang == "py":
+        shape = "main" if a.changes_prod else "read"
+        shutil.copy(TEMPLATES_DIR / f"{shape}.py", folder / entry)
+        if a.changes_prod and not a.general:
+            shutil.copy(TEMPLATES_DIR / "test_main.py", folder / "test_main.py")
+    else:
+        shutil.copy(TEMPLATES_DIR / entry, folder / entry)
+    if not a.general:
+        design = (TEMPLATES_DIR / "design.md").read_text()
+        write_text(folder / "design.md", design.replace("{id}", name).replace("{purpose}", a.purpose))
     verify = None
     if a.changes_prod and not a.general and not a.no_verify:
         verify = f"verify.{a.lang}"
@@ -170,6 +186,7 @@ def build_task(a: argparse.Namespace, name: str, t: dt.datetime, folder: Path) -
         interpreter=a.interpreter,
         thread=a.thread,
         verify=verify,
+        stages=a.stage,
     )
     write_json(folder / "meta.json", meta.to_json())
 
@@ -856,6 +873,12 @@ def parser() -> argparse.ArgumentParser:
     n.add_argument("--link", action="append")
     n.add_argument("--thread", help="the thread (story) this task belongs to; else inferred from session and links")
     n.add_argument("--author")
+    n.add_argument(
+        "--stage",
+        action="append",
+        metavar="NAME",
+        help="a stage of a task that runs in stages, in order (repeat): the first argument each stage's runs take",
+    )
     n.add_argument("--interpreter", help="python for this task (e.g. a project venv); default: opsquire's own")
     n.set_defaults(fn=cmd_new)
 

@@ -196,11 +196,13 @@ def demo_task(home: Path, dry: bool) -> tuple[str, bool]:
         link=None,
         interpreter=None,
         thread=None,
+        stage=None,
         author="opsquire-init",
     )
     folder.mkdir(parents=True)
     build_task(args, name, t, folder)
     write_text(folder / "main.py", DEMO_MAIN)
+    (folder / "test_main.py").unlink(missing_ok=True)
     write_text(
         folder / "design.md", f"# {name}\n\nCreated by `opsquire init` on {iso(t)[:10]} as the first task to run.\n"
     )

@@ -100,6 +100,13 @@ than the field have none, which means unknown.
    prints only the folder. It exits 2 and creates nothing on a bad name, so check its exit code in a script. A host
    named `db_2` has area `db-2` and `--target db_2`: locks match targets exactly. `new` and `handover` report on stderr
    what else waits for the same targets.
+   Python tasks start from a working shape, not a stub: a changing task's `main.py` reads every target, decides each
+   one's changes in a pure `plan_for` that `test_main.py` tests, reports unchanged targets and leaves them alone, asks
+   once listing every change, then changes and reports each target; a read task's `main.py` reads every target into
+   `data` events and one finding per target. Both report `progress`; add a test to a read task when it parses anything. `design.md` comes with its sections (Why, Plan,
+   Rollback, Verify). Fill them in rather than replacing them with a bare script: keep the decision in a pure function
+   with its tests, and replace the starter test with real cases (captured real responses for anything parsed).
+   A task that runs in stages gets `--stage build --stage deploy` (in order) at `new`.
 3. Edit `main.py` / `main.sh`. Today Python (ruff + `mypy --strict`) and bash (shellcheck) are linted;
    other languages need a linter wired into `opsquire/lint.py` first.
 4. `opsquire lint <task>` must pass: ruff, `mypy --strict`, shellcheck, and every `test_*.py` (unittest) in the

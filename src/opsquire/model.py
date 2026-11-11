@@ -180,7 +180,8 @@ def write_text(path: Path, text: str) -> None:
         tmp.write_text(text)
         tmp.replace(path)
     except BaseException:
-        tmp.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
         raise
 
 

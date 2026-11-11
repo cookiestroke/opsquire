@@ -9,6 +9,7 @@ import select
 import signal
 import sys
 import time
+import traceback
 from collections.abc import Callable
 from types import FrameType
 from typing import Any
@@ -101,7 +102,8 @@ def _to_interrupt(_signum: int, _frame: FrameType | None) -> None:
 
 
 def run(main: Callable[[], None], cleanup: Callable[[], None] | None = None) -> None:
-    """Run main with graceful termination: Ctrl-C, SIGTERM or SIGHUP run cleanup, report, and exit 130."""
+    """Run main with graceful termination: Ctrl-C, SIGTERM or SIGHUP run cleanup, report, and exit 130. An exception
+    runs cleanup too and is reported as an error event with its traceback (the record's last_error names it)."""
     signal.signal(signal.SIGTERM, _to_interrupt)
     signal.signal(signal.SIGHUP, _to_interrupt)
     code = 0
@@ -109,9 +111,12 @@ def run(main: Callable[[], None], cleanup: Callable[[], None] | None = None) -> 
         main()
     except KeyboardInterrupt:
         code = 130
+    except Exception:
+        error(traceback.format_exc().rstrip())
+        code = 1
     finally:
         if cleanup:
             cleanup()
-    if code:
+    if code == 130:
         warn("interrupted by the operator")
     sys.exit(code)

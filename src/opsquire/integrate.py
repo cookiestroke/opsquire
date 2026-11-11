@@ -47,8 +47,12 @@ def install_skill(dry: bool) -> list[str]:
         if dry:
             lines.append(f"claude skill: would be {verb} ({dest})")
             continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        write_text(dest, want)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            write_text(dest, want)
+        except OSError as e:
+            lines.append(f"claude skill: NOT {verb} ({dest}): {e.strerror or e}")
+            continue
         lines.append(f"claude skill: {verb} ({dest})")
     return lines
 
