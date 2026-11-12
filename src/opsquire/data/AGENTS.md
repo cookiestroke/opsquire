@@ -32,6 +32,7 @@ var/asks/<ask-id>.json                        every `opsquire ask`, with its age
 repos.json                                    optional: repos agents may change through PRs
 .repos/<ask-id>/<repo>/                       an ask's copies of those repos (not versioned)
 .repos/chat/<repo>-<id>/                      a copy made outside an ask, one per checkout (not versioned)
+.reads/<author>.json                          the runs each agent has read (not versioned)
 LOCAL.md                                      local rules, appended to this contract
 AGENTS.md                                     this contract, written by opsquire: never edit it; a new rule goes in
                                               LOCAL.md, and opsquire rewrites AGENTS.md on the next new, lint or run
@@ -143,10 +144,10 @@ than the field have none, which means unknown.
    continue from them: report what it found, fix and hand over again, or close. Never end your turn on a handed-over
    run without its record, and never ask the operator to paste output. When `wait` times out, wait again.
    opsquire holds you to it, by your `OPSQUIRE_AUTHOR` (set it in every shell): a record counts as read once
-   `wait`, `log`, `runs <task>`, `show` or `last` printed it to you. `handover` is refused until you read the task's
-   latest run, and `handover` and `new` are refused while a run you handed over has finished unread
-   (`opsquire unread` lists them). With the Stop hook `opsquire integrate` installs, a Claude session cannot end its
-   turn on such a run either.
+   `wait`, `log`, `runs <task>`, `show` or `last` printed it to you (kept in `.reads/`, outside `var/`; when one
+   cannot be recorded opsquire says so on stderr). `handover` is refused until you read the task's latest run, and
+   `handover` and `new` are refused while a run you handed over has finished unread (`opsquire unread` lists them).
+   With the Stop hook `opsquire integrate` installs, a Claude session cannot end its turn on such a run either.
 7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,
    and a `## Result` section in design.md (amend either when the generated text is not the truth). A task with a
    verify check closes only on it: right after an ok apply, `opsquire run` runs the verify check, and the task closes

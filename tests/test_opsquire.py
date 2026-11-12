@@ -3721,6 +3721,43 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("runs", "probe", "--json").returncode, 0)
         self.assertEqual(self.cli("handover", folder.name, "--why", "again").returncode, 0)
 
+    def test_an_agent_that_cannot_write_var_still_records_its_reads(self) -> None:
+        """Agent sandboxes deny writes under var/; reading a run must still count, and a read that cannot be recorded
+        says so instead of leaving the agent refused for no visible reason."""
+        if os.geteuid() == 0:
+            self.skipTest("root writes through read-only modes")
+        agent, operator = "claude-code 2d39fd02", "operator-z"
+        self.env["OPSQUIRE_AUTHOR"] = agent
+        self.new("probe", "print('found 3 stale locks')\n")
+        self.assertEqual(self.cli("lint", "probe").returncode, 0)
+        self.env["OPSQUIRE_AUTHOR"] = operator
+        self.assertEqual(self.cli("run", "probe").returncode, 0)
+        self.env["OPSQUIRE_AUTHOR"] = agent
+        var_dirs = [self.home / "var", *(p for p in (self.home / "var").rglob("*") if p.is_dir())]
+        try:
+            for d in var_dirs:
+                d.chmod(0o555)
+            r = self.cli("runs", "probe", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.cli("log", self.last("probe")["run_id"]).returncode, 0)
+            r = self.cli("handover", "probe", "--why", "again")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse((self.home / "var/reads").exists())
+
+            other = "claude-code 7c1e9a40"
+            self.env["OPSQUIRE_AUTHOR"] = other
+            ledgers = self.home / ".reads"
+            ledgers.chmod(0o555)
+            try:
+                r = self.cli("log", "probe")
+            finally:
+                ledgers.chmod(0o755)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(f"could not record that {other} read", r.stderr)
+        finally:
+            for d in var_dirs:
+                d.chmod(0o755)
+
     def test_integrate_installs_the_stop_hook_once_and_keeps_other_settings(self) -> None:
         claude = self.tmp / "claude"
         claude.mkdir()

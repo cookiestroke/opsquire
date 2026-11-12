@@ -1,34 +1,44 @@
 """Which run records each agent has read. An agent reads a record through `wait`, `log`, `runs <task>`, `last` or
 `show`, or by running it itself; `handover` and `new` refuse an agent that has not read the task's latest run or
-the results of the runs it handed over, and the stop hook keeps a session from ending its turn on them."""
+the results of the runs it handed over, and the stop hook keeps a session from ending its turn on them. The ledger
+lives in the home, outside `var/`, which agents cannot write."""
 
 from __future__ import annotations
 
-import contextlib
 import json
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from .model import author_key, read_json, var_dir, write_json
+from . import homegit
+from .model import author_key, main_home, read_json, var_dir, write_json
 from .query import all_runs, runs_for
 
 FINISHED = ("ok", "failed", "partial", "aborted", "interrupted", "blocked")
 
 
 def ledger(key: str) -> Path:
+    return main_home() / homegit.READ_LEDGERS / f"{key.replace(' ', '_')}.json"
+
+
+def legacy_ledger(key: str) -> Path:
     return var_dir() / "reads" / f"{key.replace(' ', '_')}.json"
+
+
+def load(path: Path) -> set[str]:
+    try:
+        data = read_json(path)
+    except (OSError, ValueError):
+        return set()
+    return {str(r) for r in data} if isinstance(data, list) else set()
 
 
 def read_ids(author: str) -> set[str]:
     key = author_key(author)
     if not key:
         return set()
-    try:
-        data = read_json(ledger(key))
-    except (OSError, ValueError):
-        return set()
-    return set(data) if isinstance(data, list) else set()
+    return load(ledger(key)) | load(legacy_ledger(key))
 
 
 def mark(author: str, run_ids: Iterable[str]) -> None:
@@ -39,9 +49,16 @@ def mark(author: str, run_ids: Iterable[str]) -> None:
     have = read_ids(author)
     if ids <= have:
         return
-    with contextlib.suppress(OSError):
-        ledger(key).parent.mkdir(parents=True, exist_ok=True)
-        write_json(ledger(key), sorted(have | ids))
+    path = ledger(key)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(path, sorted(have | ids))
+    except OSError as e:
+        print(
+            f"opsquire: could not record that {author} read {', '.join(sorted(ids - have))} "
+            f"({path}: {e.strerror or e}); `handover` and `new` will refuse as if it were unread",
+            file=sys.stderr,
+        )
 
 
 def mark_records(author: str, recs: Iterable[dict[str, Any]]) -> None:

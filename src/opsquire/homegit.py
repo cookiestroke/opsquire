@@ -36,6 +36,7 @@ __pycache__/
 
 WORKTREES = ".worktrees"
 REPO_COPIES = ".repos"
+READ_LEDGERS = ".reads"
 EXCLUDE_LOCK = threading.Lock()
 PLACEHOLDER_IDENTITY = ("-c", "user.name=opsquire", "-c", "user.email=opsquire@localhost")
 
@@ -93,13 +94,13 @@ def ensure_repo(home: Path, dry: bool) -> str:
 
 
 def exclude_worktrees(home: Path) -> None:
-    """Keep opsquire's scratch folders (parallel piece worktrees, repo copies) out of the home's commits, without
-    touching the operator's .gitignore."""
+    """Keep opsquire's scratch folders (parallel piece worktrees, repo copies, read ledgers) out of the home's
+    commits, without touching the operator's .gitignore."""
     with EXCLUDE_LOCK:
         common = Path(git(home, "rev-parse", "--git-common-dir").stdout.strip())
         exclude = (common if common.is_absolute() else home / common) / "info" / "exclude"
         lines = exclude.read_text().splitlines() if exclude.is_file() else []
-        missing = [e for e in (f"/{WORKTREES}/", f"/{REPO_COPIES}/") if e not in lines]
+        missing = [e for e in (f"/{WORKTREES}/", f"/{REPO_COPIES}/", f"/{READ_LEDGERS}/") if e not in lines]
         if missing:
             exclude.parent.mkdir(parents=True, exist_ok=True)
             exclude.write_text("\n".join([*lines, *missing]) + "\n")
