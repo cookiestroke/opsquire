@@ -18,6 +18,7 @@ from .lint import asks_first, last_lint
 from .model import (
     Task,
     all_task_folders,
+    author_key,
     code_version,
     home_dir,
     is_last_stage,
@@ -33,7 +34,6 @@ from .model import (
 from .query import all_runs, runs_for, task_status, used_by
 
 TASK_ID_RE = re.compile(r"\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b")
-GENERIC_AUTHOR_WORDS = {"claude", "code", "codex", "chat", "opsquire", "ask", "migrated", "by", "unknown", "test"}
 CLOSED = {"done", "partial", "abandoned", "superseded", "archived"}
 HANDOVER_CLOSED = {"draft", "abandoned", "superseded", "archived"}
 STALE_NEVER_RUN_DAYS = 7
@@ -41,13 +41,6 @@ INBOX_STALE_DAYS = 3.0
 STALE_AFTER_FAILURE_DAYS = 3
 RERUN_HEAVY = 3.0
 READ_VERSIONS_HEAVY = 3
-
-
-def author_key(author: str) -> str:
-    """What identifies the session in an author string, or "" when it names only the tool ("claude-code (chat)")."""
-    text = re.sub(r"\d{4}-\d{2}-\d{2}", " ", author.lower())
-    words = [w for w in re.findall(r"[a-z0-9]+", text) if w not in GENERIC_AUTHOR_WORDS]
-    return " ".join(words)
 
 
 class Union:
@@ -580,8 +573,18 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
                     "alive": h.alive(),
                 }
             )
+    holds = {t.id: kept for t in tasks if (kept := handover.held(t, at))}
+    for t in tasks:
+        if t.id in holds:
+            for step in t.meta.steps or [] if t.meta else []:
+                holds.setdefault(str(step.get("task")), {**holds[t.id], "plan": t.id})
+    for tid, kept in holds.items():
+        if tid in task_views:
+            task_views[tid]["held"] = kept
     inbox = []
     for t in sorted(tasks, key=lambda t: t.id, reverse=True):
+        if t.id in holds:
+            continue
         v = task_views[t.id]
         relint = changed_since_lint(t, str(v["status"]))
         status = "ready" if relint else str(v["status"])

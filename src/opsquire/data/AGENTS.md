@@ -65,6 +65,13 @@ opsquire last                        most recent run
 opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, latest run for a task
 opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it;
                                      exit 4 when the task was abandoned or superseded instead
+opsquire doctor [--json]             is opsquire working here: the console (up, current code, last state build),
+                                     the stop hook, the contract, your author, your unread results; exit 1 if not.
+                                     Agents cannot open the console's port; this reads its health file instead
+opsquire hold <task> --why "..." [--until 15:00] | --release
+                                     keep a ready task (and a plan's steps) out of the inbox until it is handed
+                                     over or --until passes; `new --hold "why"` creates it held. Use it for work
+                                     prepared ahead of its time; never tell the operator to ignore an inbox item
 opsquire supersede <task> --by <newer> [--note "..."]   a newer task replaced it: out of the inbox, refused by run
 opsquire reopen <task> --note "why"  undo a close or a supersession (an expiry that was wrong, say)
 opsquire handover <task> [--apply|--verify] [--why "..."] [--again] [--withdraw] [-- args]
@@ -129,8 +136,17 @@ than the field have none, which means unknown.
    dry run, which the plan's own dry run gives. Only the operator can go without, by typing
    `opsquire run <task-id> --apply --skip-dry "why"`; the reason is recorded in `run.json` (`dry`). Never hand them
    that command to get past a dry run that failed.
-6. Then run `opsquire wait <task-id> --json` yourself and continue from the record. Never ask the
-   operator to paste output.
+6. Every run you hand over, you follow to its end, always: before handing it over read the task's earlier runs
+   (`opsquire runs <task-id> --json`, and `opsquire log <run-id>` for any that did not end ok) so you know what
+   failed before and do not hand over a run that already answered the question; then run
+   `opsquire wait <task-id> --json` yourself, read the record and its output (`opsquire log <task-id>`) and
+   continue from them: report what it found, fix and hand over again, or close. Never end your turn on a handed-over
+   run without its record, and never ask the operator to paste output. When `wait` times out, wait again.
+   opsquire holds you to it, by your `OPSQUIRE_AUTHOR` (set it in every shell): a record counts as read once
+   `wait`, `log`, `runs <task>`, `show` or `last` printed it to you. `handover` is refused until you read the task's
+   latest run, and `handover` and `new` are refused while a run you handed over has finished unread
+   (`opsquire unread` lists them). With the Stop hook `opsquire integrate` installs, a Claude session cannot end its
+   turn on such a run either.
 7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,
    and a `## Result` section in design.md (amend either when the generated text is not the truth). A task with a
    verify check closes only on it: right after an ok apply, `opsquire run` runs the verify check, and the task closes

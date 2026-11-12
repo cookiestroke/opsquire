@@ -7,6 +7,7 @@ until a run of the task starts after it. Asks record one for every RUN line thei
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
 import shlex
@@ -47,6 +48,38 @@ def record(task: Task, mode: str, args: list[str], why: str, by: str, again: boo
     write_json(task.folder / "meta.json", raw)
     commit_quietly(home_dir(), [task.folder], f"handover: {task.id}")
     return entry
+
+
+def hold(task: Task, why: str, by: str, until: dt.datetime | None = None) -> dict[str, Any]:
+    """Keep the task, and a plan's steps, out of the inbox until it is handed over or `until` passes."""
+    entry: dict[str, Any] = {"at": iso(now()), "by": by, "why": why.strip()}
+    if until:
+        entry["until"] = iso(until)
+    raw = {k: v for k, v in task.raw.items() if k != "handover"}
+    raw["hold"] = entry
+    write_json(task.folder / "meta.json", raw)
+    return entry
+
+
+def release(task: Task) -> bool:
+    if "hold" not in task.raw:
+        return False
+    write_json(task.folder / "meta.json", {k: v for k, v in task.raw.items() if k != "hold"})
+    return True
+
+
+def held(task: Task, at: dt.datetime) -> dict[str, Any] | None:
+    """The task's hold while it lasts: not handed over since, and before its `until`."""
+    h = task.raw.get("hold")
+    if not isinstance(h, dict) or not isinstance(h.get("at"), str):
+        return None
+    handed = task.raw.get("handover")
+    if isinstance(handed, dict) and str(handed.get("at") or "") > h["at"]:
+        return None
+    until = h.get("until")
+    if isinstance(until, str) and until <= iso(at):
+        return None
+    return h
 
 
 def withdraw(task: Task) -> bool:

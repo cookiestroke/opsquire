@@ -4,6 +4,7 @@ Idempotent."""
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -57,5 +58,42 @@ def install_skill(dry: bool) -> list[str]:
     return lines
 
 
+HOOK_MARK = "unread --hook"
+
+
+def install_stop_hook(dry: bool) -> list[str]:
+    """A Claude Code Stop hook in each config dir: a session cannot end its turn while a run it handed over has
+    finished and it has not read the record. Existing settings are kept; an unreadable file is left alone."""
+    lines = []
+    command = f"{own_command()} {HOOK_MARK}"
+    for skill in claude_skill_files():
+        path = skill.parent.parent.parent / "settings.json"
+        try:
+            settings = json.loads(path.read_text()) if path.is_file() else {}
+        except (OSError, ValueError) as e:
+            lines.append(f"claude stop hook: NOT installed ({path}): cannot read it: {e}")
+            continue
+        if not isinstance(settings, dict):
+            lines.append(f"claude stop hook: NOT installed ({path}): not a JSON object")
+            continue
+        stop = settings.setdefault("hooks", {}).setdefault("Stop", [])
+        present = [g for g in stop for h in g.get("hooks", []) if HOOK_MARK in str(h.get("command", ""))]
+        if present:
+            lines.append(f"claude stop hook: present ({path})")
+            continue
+        if dry:
+            lines.append(f"claude stop hook: would be installed ({path})")
+            continue
+        stop.append({"hooks": [{"type": "command", "command": command, "timeout": 30}]})
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_text(path, json.dumps(settings, indent=2) + "\n")
+        except OSError as e:
+            lines.append(f"claude stop hook: NOT installed ({path}): {e.strerror or e}")
+            continue
+        lines.append(f"claude stop hook: installed ({path})")
+    return lines
+
+
 def integrate(dry: bool) -> list[str]:
-    return [*install_skill(dry), ensure_repo(home_dir(), dry)]
+    return [*install_skill(dry), *install_stop_hook(dry), ensure_repo(home_dir(), dry)]

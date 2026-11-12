@@ -28,7 +28,7 @@ GENERAL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*_[a-z0-9][a-z0-9-]*$")
 ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 LOCK_MODES = ("exclusive", "shared", "none")
 INTERPRETERS = {".py": [sys.executable, "-u"], ".sh": ["/bin/bash"]}
-IGNORED_PARTS = {"__pycache__", ".mypy_cache", ".ruff_cache"}
+IGNORED_PARTS = {"__pycache__", ".mypy_cache", ".ruff_cache", ".claude"}
 LINT_FILE = ".lint.json"
 OFFBOARDED = "offboarded"
 ORIGIN_ENV = "OPSQUIRE_ORIGIN"
@@ -101,6 +101,16 @@ def run_alive(pid: int, host: str, run_dir: Path, pid_ns: str = "") -> bool:
     except PermissionError:
         return True
     return True
+
+
+GENERIC_AUTHOR_WORDS = {"claude", "code", "codex", "chat", "opsquire", "ask", "migrated", "by", "unknown", "test"}
+
+
+def author_key(author: str) -> str:
+    """What identifies the session in an author string, or "" when it names only the tool ("claude-code (chat)")."""
+    text = re.sub(r"\d{4}-\d{2}-\d{2}", " ", author.lower())
+    words = [w for w in re.findall(r"[a-z0-9]+", text) if w not in GENERIC_AUTHOR_WORDS]
+    return " ".join(words)
 
 
 def config_path() -> Path:
@@ -535,7 +545,7 @@ class Task:
         return h.hexdigest()
 
 
-ANNOTATIONS = ("outcome", "judged", "handover")
+ANNOTATIONS = ("outcome", "judged", "handover", "hold")
 
 
 T = TypeVar("T")

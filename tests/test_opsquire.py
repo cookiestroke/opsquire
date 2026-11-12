@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import fcntl
 import io
@@ -17,6 +18,7 @@ import tempfile
 import termios
 import time
 import unittest
+import urllib.request
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -127,6 +129,7 @@ class OpsTest(unittest.TestCase):
             self.assertEqual(alive, [], "locks left held by live processes")
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    CHANGING = ("--changes-prod", "--rollback", "none", "--no-verify")
     NO_DRY = ("--skip-dry", "the dry run is not what this test is about")
 
     def cli(self, *args: str, answers: list[tuple[str, str]] | None = None) -> subprocess.CompletedProcess[str]:
@@ -529,6 +532,18 @@ class OpsTest(unittest.TestCase):
             text = (ROOT / name).read_text(errors="ignore").lower()
             hits += [f"{name}: {w}" for w in banned if w in text]
         self.assertEqual(hits, [])
+
+    def test_agent_sandbox_stubs_are_not_script_files(self) -> None:
+        folder = self.new("stubbed", "print('ok')\n")
+        before = self.cli("lint", "stubbed")
+        self.assertEqual(before.returncode, 0, before.stdout + before.stderr)
+        stubs = folder / ".claude"
+        stubs.mkdir()
+        for name in ("agents", "settings.json", "loop.md"):
+            (stubs / name).write_text("")
+        after = self.cli("lint", "stubbed")
+        self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+        self.assertNotIn("unsupported files", after.stdout + after.stderr)
 
     def test_lint_ignores_active_venv_and_project_configs(self) -> None:
         self.new("pinned", "import os\n\nprint(os.getcwd())\n")
@@ -3631,6 +3646,119 @@ class OpsTest(unittest.TestCase):
         self.assertIn("system clock moved", recs[0]["clock_note"])
         item = self.inbox_item(folder.name)
         self.assertEqual(item and item["next"], "apply")
+
+    def test_a_held_task_and_its_plans_steps_stay_out_of_the_inbox_until_handed_over(self) -> None:
+        one = self.new("one", "print(1)\n", *self.CHANGING)
+        two = self.new("two", "print(2)\n", *self.CHANGING)
+        for name in ("one", "two"):
+            self.assertEqual(self.cli("lint", name).returncode, 0)
+        plan = self.make_plan(one, two, name="golive")
+        self.assertEqual(self.cli("lint", plan.name).returncode, 0)
+        self.assertIsNotNone(self.inbox_item(plan.name))
+        self.assertNotEqual(self.cli("hold", plan.name).returncode, 0, "a hold says why")
+        r = self.cli("hold", plan.name, "--why", "go live at 15:00")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for t in (plan, one, two):
+            self.assertIsNone(self.inbox_item(t.name), t.name)
+        self.assertEqual(self.cli("run", plan.name).returncode, 0, "a hold keeps it out of the inbox, not unrunnable")
+        self.assertEqual(json.loads(self.cli("show", plan.name, "--json").stdout)["status"], "ready")
+        r = self.cli("handover", plan.name, "--apply", "--why", "15:00")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        item = self.inbox_item(plan.name)
+        self.assertEqual(item and item["next"], "apply", "the dry run still covers it: a hold is not a change")
+        self.assertEqual(self.cli("hold", one.name, "--why", "later", "--until", "2000-01-01T00:00:00Z").returncode, 0)
+        self.assertEqual(self.cli("hold", two.name, "--why", "later").returncode, 0)
+        self.assertEqual(self.cli("hold", two.name, "--release").returncode, 0)
+        self.assertNotIn("hold", json.loads((two / "meta.json").read_text()))
+
+    def test_new_can_create_a_task_held(self) -> None:
+        r = self.cli("new", "web1", "later", "--purpose", "x", "--hold", "after the merge")
+        folder = Path(r.stdout.strip())
+        self.assertEqual(self.cli("lint", folder.name).returncode, 0)
+        self.assertIsNone(self.inbox_item(folder.name))
+        self.assertEqual(json.loads((folder / "meta.json").read_text())["hold"]["why"], "after the merge")
+
+    def test_an_agent_reads_the_tasks_last_run_and_its_own_results_before_more_work(self) -> None:
+        agent, operator = "claude-code 6d4a8e7e", "operator-z"
+        self.env["OPSQUIRE_AUTHOR"] = agent
+        folder = self.new("probe", "print('found 3 stale locks')\n")
+        self.assertEqual(self.cli("lint", "probe").returncode, 0)
+        self.assertEqual(self.cli("handover", "probe", "--why", "first look").returncode, 0, "nothing ran yet")
+        self.env["OPSQUIRE_AUTHOR"] = operator
+        self.assertEqual(self.cli("run", "probe").returncode, 0)
+        self.assertEqual(self.last("probe")["handed_by"], agent)
+        self.env["OPSQUIRE_AUTHOR"] = agent
+        r = self.cli("new", "web1", "next", "--purpose", "more")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("runs you handed over finished and you have not read them", r.stderr)
+        self.assertEqual(self.cli("unread").returncode, 1)
+        hook = subprocess.run(
+            [*CLI, "unread", "--hook"],
+            env=self.env,
+            input=json.dumps({"session_id": "6d4a8e7e-1111-2222", "stop_hook_active": False}),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(json.loads(hook.stdout)["decision"], "block", hook.stderr)
+        again = subprocess.run(
+            [*CLI, "unread", "--hook"],
+            env=self.env,
+            input=json.dumps({"session_id": "6d4a8e7e-1111-2222", "stop_hook_active": True}),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(again.stdout, "", "once per stop attempt, never a loop")
+        self.assertEqual(self.cli("log", "probe").returncode, 0)
+        self.assertEqual(self.cli("unread").returncode, 0)
+        self.assertEqual(self.cli("new", "web1", "next", "--purpose", "more").returncode, 0)
+
+        self.env["OPSQUIRE_AUTHOR"] = operator
+        self.assertEqual(self.cli("run", "probe").returncode, 0)
+        self.env["OPSQUIRE_AUTHOR"] = agent
+        r = self.cli("handover", "probe", "--why", "again")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("read the task's latest run first", r.stderr)
+        self.assertEqual(self.cli("runs", "probe", "--json").returncode, 0)
+        self.assertEqual(self.cli("handover", folder.name, "--why", "again").returncode, 0)
+
+    def test_integrate_installs_the_stop_hook_once_and_keeps_other_settings(self) -> None:
+        claude = self.tmp / "claude"
+        claude.mkdir()
+        (claude / "settings.json").write_text(json.dumps({"model": "x", "hooks": {"Stop": []}}))
+        self.env["CLAUDE_CONFIG_DIR"] = str(claude)
+        self.env["HOME"] = str(self.tmp)
+        for _ in range(2):
+            r = self.cli("integrate")
+            self.assertEqual(r.returncode, 0, r.stderr)
+        settings = json.loads((claude / "settings.json").read_text())
+        self.assertEqual(settings["model"], "x")
+        commands = [h["command"] for g in settings["hooks"]["Stop"] for h in g["hooks"]]
+        self.assertEqual(len(commands), 1)
+        self.assertTrue(commands[0].endswith("unread --hook"))
+
+    def test_doctor_sees_a_running_console_through_its_health_file(self) -> None:
+        self.env["OPSQUIRE_AUTHOR"] = "claude-code 1234abcd"
+        r = self.cli("doctor")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("console: not running", r.stdout)
+        port = str(free_port())
+        ui = subprocess.Popen(
+            [*CLI, "ui", "--port", port], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        try:
+            for _ in range(60):
+                with contextlib.suppress(OSError):
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=5).read()
+                    if (self.home / f"var/ui/{port}.json").is_file():
+                        break
+                time.sleep(0.25)
+            out = self.cli("doctor").stdout
+            self.assertIn(f"console: up at http://127.0.0.1:{port}/", out)
+            self.assertIn("last state build", out)
+        finally:
+            ui.send_signal(signal.SIGINT)
+            ui.wait(20)
+        self.assertFalse((self.home / f"var/ui/{port}.json").exists(), "a console that stops takes its file with it")
 
 
 class ReleaseScripts(unittest.TestCase):

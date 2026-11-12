@@ -13,7 +13,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import __version__, contract, handover, locks, piece, repos, runner
+from . import __version__, contract, doctor, handover, locks, piece, reads, repos, runner
 from .ageing import EXPIRE_DAYS, expire_unrun, reminder, told
 from .ask import Budget, ask, configured_budget
 from .bootstrap import init
@@ -102,7 +102,47 @@ def report_shared_targets(targets: list[str], exclude: str = "") -> list[dict[st
     return waiting
 
 
+def refuse_unread(task_id: str | None) -> None:
+    """An agent hands over or creates work only after reading what its earlier work and this task's last run said."""
+    me = handover.author()
+    mine = reads.unread_results(me)
+    if mine:
+        first = mine[0]
+        raise OpsquireError(
+            f"refused: runs you handed over finished and you have not read them: {reads.describe(mine)}. Read them "
+            f"first (`opsquire wait {first.get('task_id')} --json` or `opsquire log {first.get('run_id')}`)"
+        )
+    latest = reads.unread_latest(task_id, me) if task_id else None
+    if latest:
+        raise OpsquireError(
+            f"not handed over: read the task's latest run first, {reads.describe([latest])}: "
+            f"`opsquire runs {task_id} --json`, then `opsquire log {latest.get('run_id')}`"
+        )
+
+
+def cmd_doctor(a: argparse.Namespace) -> int:
+    ok, lines = doctor.report(handover.author())
+    if a.json:
+        emit({"ok": ok, "checks": lines, "consoles": doctor.consoles()}, True)
+    else:
+        print("\n".join(lines))
+    return 0 if ok else 1
+
+
+def cmd_unread(a: argparse.Namespace) -> int:
+    if a.hook:
+        answer = reads.stop_hook(sys.stdin.read())
+        if answer:
+            print(json.dumps(answer))
+        return 0
+    recs = reads.unread_results(a.author or handover.author())
+    emit(recs, a.json, run_table(recs))
+    return 1 if recs else 0
+
+
 def cmd_new(a: argparse.Namespace) -> int:
+    if not a.plan:
+        refuse_unread(None)
     t = now()
     name = f"{a.area}_{a.name}" if a.general else f"{t:%Y%m%d-%H%M}_{a.area}_{a.name}"
     if not (GENERAL_ID_RE if a.general else TASK_ID_RE).match(name):
@@ -139,6 +179,8 @@ def cmd_new(a: argparse.Namespace) -> int:
         raise
     if not a.json:
         print(folder)
+    if a.hold:
+        handover.hold(load_task(folder), a.hold, handover.author())
     waiting = report_shared_targets(a.target or [a.area], name)
     tell_author()
     if a.json:
@@ -225,6 +267,40 @@ def cmd_lint(a: argparse.Namespace) -> int:
         if note:
             print(note, file=sys.stderr)
     return 0 if result.ok else 1
+
+
+def cmd_hold(a: argparse.Namespace) -> int:
+    task = resolve_task(a.task)
+    if a.release:
+        released = handover.release(task)
+        print(f"{task.id}: back in the inbox when it has a run to offer" if released else f"{task.id}: not held")
+        return 0
+    if not (a.why or "").strip():
+        raise OpsquireError('say why it waits: opsquire hold <task> --why "..." [--until 15:00]')
+    until = parse_until(a.until) if a.until else None
+    entry = handover.hold(task, a.why, handover.author(), until)
+    commit_quietly(home_dir(), [task.folder], f"hold: {task.id}")
+    lasts = f" until {entry['until']}" if until else " until it is handed over"
+    print(f"{task.id}: held out of the inbox{lasts}; why: {entry['why']}")
+    return 0
+
+
+def parse_until(text: str) -> dt.datetime:
+    """An HH:MM in the operator's local time (today, or tomorrow when it has passed) or an ISO time."""
+    local = dt.datetime.now().astimezone()
+    try:
+        hh, mm = (int(x) for x in text.split(":"))
+        when = local.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if when <= local:
+            when += dt.timedelta(days=1)
+        return when.astimezone(dt.timezone.utc)
+    except ValueError:
+        pass
+    try:
+        when = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return (when if when.tzinfo else when.astimezone()).astimezone(dt.timezone.utc)
+    except ValueError:
+        raise OpsquireError(f"--until {text!r}: use HH:MM (local time) or an ISO time") from None
 
 
 def cmd_supersede(a: argparse.Namespace) -> int:
@@ -316,6 +392,7 @@ def cmd_handover(a: argparse.Namespace) -> int:
         else:
             print(f"{task.id}: handover withdrawn" if withdrawn else f"{task.id}: no handover to withdraw")
         return 0
+    refuse_unread(task.id)
     mode = handover.mode_for(task, a.apply, a.verify)
     same = handover.same_apply(task, runs_for(task.id), a.script_args) if mode == "apply" else None
     if same and not (a.again and (a.why or "").strip()):
@@ -363,6 +440,7 @@ def cmd_ls(a: argparse.Namespace) -> int:
 def cmd_show(a: argparse.Namespace) -> int:
     task = resolve_task(a.task, offboarded=True)
     data = summarize(task) | {"meta": task.raw, "run_history": runs_for(task.id)}
+    reads.mark_records(handover.author(), data["run_history"])
     if a.json:
         emit(data, True)
         return 0
@@ -407,6 +485,7 @@ def cmd_runs(a: argparse.Namespace) -> int:
         and (not a.since or str(r.get("started")) >= a.since)
     ][-a.limit :]
     emit(recs, a.json, run_table(recs))
+    reads.mark_records(handover.author(), recs)
     return 0
 
 
@@ -415,6 +494,7 @@ def cmd_last(a: argparse.Namespace) -> int:
     if not recs:
         raise OpsquireError("no runs yet")
     rec = recs[-1]
+    reads.mark_records(handover.author(), [rec])
     if a.json:
         emit(rec, True)
         return 0
@@ -435,6 +515,7 @@ def cmd_log(a: argparse.Namespace) -> int:
         print(json.dumps([json.loads(line) for line in target.read_text().splitlines()], indent=2))
     else:
         sys.stdout.write(target.read_text())
+    reads.mark_records(handover.author(), [load_run(path / "run.json")])
     if not a.events:
         rec = load_run(path / "run.json")
         print(f"\n--- status={rec['status']} exit={rec.get('exit_code')} origin={rec.get('origin') or '-'} run={path}")
@@ -587,6 +668,8 @@ def cmd_wait(a: argparse.Namespace) -> int:
     if rec is None:
         print(f"opsquire: no finished run of {task.id} within {a.timeout:g}s", file=sys.stderr)
         return 124
+    if "decided" not in rec:
+        reads.mark_records(handover.author(), [rec])
     if "decided" in rec:
         if a.json:
             emit({"id": task.id, "decided": rec["decided"]}, True)
@@ -873,6 +956,7 @@ def parser() -> argparse.ArgumentParser:
     n.add_argument("--link", action="append")
     n.add_argument("--thread", help="the thread (story) this task belongs to; else inferred from session and links")
     n.add_argument("--author")
+    n.add_argument("--hold", metavar="WHY", help="created held: out of the inbox until handed over")
     n.add_argument(
         "--stage",
         action="append",
@@ -916,6 +1000,23 @@ def parser() -> argparse.ArgumentParser:
     ho.add_argument("--withdraw", action="store_true", help="take the task's handover out of the inbox")
     ho.add_argument("--json", action="store_true")
     ho.set_defaults(fn=cmd_handover)
+
+    dr = sub.add_parser("doctor", help="is opsquire working here: console, stop hook, contract, author; exit 1 if not")
+    dr.add_argument("--json", action="store_true")
+    dr.set_defaults(fn=cmd_doctor)
+
+    ur = sub.add_parser("unread", help="(for agents) finished runs you handed over and have not read; exit 1 if any")
+    ur.add_argument("--author", help="whose; default OPSQUIRE_AUTHOR")
+    ur.add_argument("--hook", action="store_true", help="answer a Claude Code Stop hook event on stdin")
+    ur.add_argument("--json", action="store_true")
+    ur.set_defaults(fn=cmd_unread)
+
+    hd = sub.add_parser("hold", help="keep a task (and a plan's steps) out of the inbox until handed over or --until")
+    hd.add_argument("task")
+    hd.add_argument("--why", help="what it waits for; shown with the task")
+    hd.add_argument("--until", help="HH:MM local time, or an ISO time, when it comes back by itself")
+    hd.add_argument("--release", action="store_true", help="end the hold now")
+    hd.set_defaults(fn=cmd_hold)
 
     sp = sub.add_parser("supersede", help="a newer task replaced this one: it leaves the inbox and will not run")
     sp.add_argument("task")

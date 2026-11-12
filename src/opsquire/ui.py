@@ -7,28 +7,44 @@ code with what is on disk and installed now, and the page tells the operator to 
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import socket
 import sys
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import metadata, resources
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .close import close_task
 from .jobs import Jobs
-from .model import IGNORED_PARTS, PACKAGE_DIR, OpsquireError, home_dir, iso, now, runs_dir, task_folder, var_dir
+from .model import (
+    IGNORED_PARTS,
+    PACKAGE_DIR,
+    OpsquireError,
+    home_dir,
+    iso,
+    now,
+    runs_dir,
+    task_folder,
+    var_dir,
+    write_json,
+)
 from .state import state
 
 DEFAULT_PORT = 7771
 WATCH_INTERVAL_S = 1.0
+HEALTH_EVERY_S = 5.0
+HEALTH_STALE_S = 20.0
 PING_INTERVAL_S = 15.0
 MAX_LOG_BYTES = 512 * 1024
 VIEWABLE = {"design.md", "main.py", "main.sh", "verify.py", "verify.sh", "meta.json", "test_main.py"}
@@ -169,7 +185,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             elif url.path == "/api/state":
                 server: UIServer = self.server  # type: ignore[assignment]
-                self.send_json({**state(), "jobs": self.jobs.views(), "code": code_status(server.code)})
+                t0 = time.monotonic()
+                try:
+                    built = state()
+                except Exception as e:
+                    server.health["state_error"] = f"{type(e).__name__}: {e}"
+                    raise
+                server.health.update(state_s=round(time.monotonic() - t0, 3), state_at=iso(now()), state_error="")
+                self.send_json({**built, "jobs": self.jobs.views(), "code": code_status(server.code)})
             elif url.path == "/api/job":
                 self.send_json(self.jobs.read(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/log":
@@ -270,7 +293,33 @@ class UIServer(ThreadingHTTPServer):
         self.code = code_hashes()
         self.generation = 0
         self.moved = threading.Condition()
+        self.health: dict[str, Any] = {"state_s": None, "state_at": None, "state_error": ""}
+        self.started = iso(now())
+        self.beaten = 0.0
         threading.Thread(target=self.watch, daemon=True).start()
+
+    def health_file(self) -> Path:
+        return var_dir() / "ui" / f"{self.server_address[1]}.json"
+
+    def beat(self, code: dict[str, Any]) -> None:
+        """What `opsquire doctor` reads to tell whether this console is up and current, from any shell: the agent
+        sandboxes that cannot open its port read this file instead."""
+        if time.monotonic() - self.beaten < HEALTH_EVERY_S:
+            return
+        self.beaten = time.monotonic()
+        host, port = str(self.server_address[0]), self.server_address[1]
+        record = {
+            "pid": os.getpid(),
+            "url": f"http://{host}:{port}/",
+            "started": self.started,
+            "beat": iso(now()),
+            "stale_code": code["changed"],
+            "jobs": len([j for j in self.jobs.views() if j.get("status") != "done"]),
+            **self.health,
+        }
+        with contextlib.suppress(OSError):
+            self.health_file().parent.mkdir(parents=True, exist_ok=True)
+            write_json(self.health_file(), record)
 
     def watch(self) -> None:
         seen = (fingerprint(), code_status(self.code))
@@ -279,6 +328,7 @@ class UIServer(ThreadingHTTPServer):
             self.jobs.changed.clear()
             try:
                 current = (fingerprint(), code_status(self.code))
+                self.beat(current[1])
             except Exception:
                 traceback.print_exc(file=sys.stderr)
                 continue
@@ -295,6 +345,8 @@ class UIServer(ThreadingHTTPServer):
 
     def stop(self) -> None:
         self.stopping.set()
+        with contextlib.suppress(OSError):
+            self.health_file().unlink()
         with self.moved:
             self.moved.notify_all()
 

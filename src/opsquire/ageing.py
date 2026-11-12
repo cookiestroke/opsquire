@@ -7,9 +7,9 @@ import datetime as dt
 from typing import Any
 
 from .close import close_task
-from .model import Task, all_task_folders, decision, decision_text, load_task, now, parse_iso
+from .model import Task, all_task_folders, author_key, decision, decision_text, load_task, now, parse_iso
 from .query import all_runs
-from .state import INBOX_STALE_DAYS, author_key, days_since, state
+from .state import INBOX_STALE_DAYS, days_since, state
 
 EXPIRE_DAYS = 14.0
 TOLD_DAYS = 7.0

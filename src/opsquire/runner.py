@@ -94,6 +94,7 @@ class Run:
         self.skip_dry = skip_dry
         self.dry: dict[str, Any] | None = None
         self.script_error = ""
+        self.handed_by = handed_by(task, mode)
         self.started = now()
         self.clock = time.monotonic()
         self.clock_moved = False
@@ -263,6 +264,10 @@ class Run:
     def write_record(self, status: str, exit_code: int | None) -> None:
         self.check_clock()
         ended = now() if status != "running" else None
+        if ended:
+            from .reads import mark
+
+            mark(os.environ.get("OPSQUIRE_AUTHOR", ""), [self.run_id])
         self.record = {
             "schema": SCHEMA,
             "run_id": self.run_id,
@@ -282,6 +287,7 @@ class Run:
             "cwd": os.getcwd(),
             "origin": run_origin(),
             "argv": self.args,
+            "handed_by": self.handed_by,
             "entry": self.meta.verify if self.mode == "verify" and self.meta.verify else self.meta.entry,
             "interpreter": self.meta.command(self.task.folder / self.meta.entry)[0],
             "exit_code": exit_code,
@@ -634,6 +640,14 @@ def read_run(path: Path) -> dict[str, Any]:
     with path.open() as f:
         rec: dict[str, Any] = json.load(f)
     return rec
+
+
+def handed_by(task: Task, mode: str) -> str:
+    """Who handed this run over, when the run takes up a pending handover: their result to read."""
+    from .query import runs_for
+
+    h = handover.pending(task, runs_for(task.id))
+    return str(h.get("by") or "") if h and h.get("mode") == mode else ""
 
 
 def load_run(path: Path) -> dict[str, Any]:
