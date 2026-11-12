@@ -8,6 +8,7 @@ code with what is on disk and installed now, and the page tells the operator to 
 from __future__ import annotations
 
 import contextlib
+import gzip
 import hashlib
 import json
 import os
@@ -39,6 +40,7 @@ from .model import (
     var_dir,
     write_json,
 )
+from .snapshots import Snapshots
 from .state import state
 
 DEFAULT_PORT = 7771
@@ -164,7 +166,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(data).encode()
+        zipped = len(body) > 1024 and "gzip" in (self.headers.get("Accept-Encoding") or "")
+        if zipped:
+            body = gzip.compress(body, compresslevel=5)
         self.send_response(status)
+        if zipped:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -185,14 +192,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             elif url.path == "/api/state":
                 server: UIServer = self.server  # type: ignore[assignment]
-                t0 = time.monotonic()
                 try:
-                    built = state()
+                    answer = server.snapshots.answer(server.generation, q.get("since", ""))
                 except Exception as e:
                     server.health["state_error"] = f"{type(e).__name__}: {e}"
                     raise
-                server.health.update(state_s=round(time.monotonic() - t0, 3), state_at=iso(now()), state_error="")
-                self.send_json({**built, "jobs": self.jobs.views(), "code": code_status(server.code)})
+                self.send_json({**answer, "jobs": self.jobs.views(), "code": code_status(server.code)})
             elif url.path == "/api/job":
                 self.send_json(self.jobs.read(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/log":
@@ -273,7 +278,8 @@ class Handler(BaseHTTPRequestHandler):
             current = server.wait_change(seen, PING_INTERVAL_S)
             if current != seen:
                 seen = current
-                self.wfile.write(f"event: change\ndata: {json.dumps({'generated': iso(now())})}\n\n".encode())
+                version = server.snapshots.version(current)
+                self.wfile.write(f"event: change\ndata: {json.dumps({'version': version})}\n\n".encode())
             else:
                 self.wfile.write(b"event: ping\ndata: {}\n\n")
             self.wfile.flush()
@@ -294,9 +300,16 @@ class UIServer(ThreadingHTTPServer):
         self.generation = 0
         self.moved = threading.Condition()
         self.health: dict[str, Any] = {"state_s": None, "state_at": None, "state_error": ""}
+        self.snapshots = Snapshots(self.timed_state)
         self.started = iso(now())
         self.beaten = 0.0
         threading.Thread(target=self.watch, daemon=True).start()
+
+    def timed_state(self) -> dict[str, Any]:
+        t0 = time.monotonic()
+        built = state()
+        self.health.update(state_s=round(time.monotonic() - t0, 3), state_at=iso(now()), state_error="")
+        return built
 
     def health_file(self) -> Path:
         return var_dir() / "ui" / f"{self.server_address[1]}.json"

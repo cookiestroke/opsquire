@@ -683,7 +683,7 @@ async function api(path, opts) {
 }
 function post(path, body) { return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
 /* ---- state ---- */
-const S = { data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, map: { hours: 48, end: null },
+const S = { version: null, data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, map: { hours: 48, end: null },
   dev: false, details: new Set(), judging: new Map(), judgeText: new Map(), decideAll: null };
 const task = id => (S.data && S.data.tasks && S.data.tasks[id]) || null;
 const run = id => (S.data && S.data.runs && S.data.runs[id]) || null;
@@ -1708,8 +1708,17 @@ async function load() {
   if (loading) { loadAgain = true; return; }
   loading = true;
   try {
-    const data = await api('/api/state');
-    if (data && typeof data === 'object') { S.data = data; S.error = null; S.pageCode = S.pageCode || (data.code && data.code.page); }
+    const r = await api('/api/state' + (S.version && S.data ? `?since=${encodeURIComponent(S.version)}` : ''));
+    if (r && r.kind === 'full') S.data = r;
+    else if (r && r.kind === 'patch' && S.data && r.since === S.version) {
+      for (const [key, entries] of Object.entries(r.changed || {})) {
+        const into = S.data[key] = S.data[key] || {};
+        for (const [id, value] of Object.entries(entries)) { if (value === null) delete into[id]; else into[id] = value; }
+      }
+      Object.assign(S.data, r.replace || {});
+    } else if (r && r.kind !== 'same') { S.version = null; loading = false; return load(); }
+    S.data.jobs = r.jobs; S.data.code = r.code; S.version = r.version;
+    S.error = null; S.pageCode = S.pageCode || (r.code && r.code.page);
     retry = 2000;
     if (S.hash === null) applyHash(); else render();
   } catch (e) {
@@ -1727,7 +1736,7 @@ function connect() {
   if (es) es.close();
   es = new EventSource('/api/stream');
   es.addEventListener('hello', () => { backoff = 1000; setConn('live', 'live'); refresh(); });
-  es.addEventListener('change', () => refresh());
+  es.addEventListener('change', e => { let v = null; try { v = JSON.parse(e.data).version; } catch (_) {} if (!v || v !== S.version) refresh(); });
   es.onerror = () => {
     es.close(); es = null;
     setConn('down', `reconnecting in ${Math.round(backoff / 1000)}s`);

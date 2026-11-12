@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import fcntl
+import gzip
 import io
 import json
 import os
@@ -3818,6 +3819,49 @@ class OpsTest(unittest.TestCase):
             ui.send_signal(signal.SIGINT)
             ui.wait(20)
         self.assertFalse((self.home / f"var/ui/{port}.json").exists(), "a console that stops takes its file with it")
+
+    def test_the_console_sends_only_what_changed_since_the_pages_version(self) -> None:
+        for name in ("one", "two"):
+            self.new(name, "print(1)\n")
+            self.assertEqual(self.cli("lint", name).returncode, 0)
+        port = str(free_port())
+        ui = subprocess.Popen(
+            [*CLI, "ui", "--port", port], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+        def get(since: str = "") -> tuple[dict[str, Any], str]:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/state" + (f"?since={since}" if since else ""),
+                headers={"Accept-Encoding": "gzip"},
+            )
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw, enc = r.read(), r.headers.get("Content-Encoding") or ""
+            body: dict[str, Any] = json.loads(gzip.decompress(raw) if enc == "gzip" else raw)
+            return body, enc
+
+        try:
+            for _ in range(80):
+                with contextlib.suppress(OSError):
+                    full, enc = get()
+                    break
+                time.sleep(0.25)
+            self.assertEqual(full["kind"], "full")
+            self.assertEqual(enc, "gzip")
+            self.assertEqual(len(full["tasks"]), 2)
+            self.assertEqual(get(full["version"])[0]["kind"], "same")
+            self.assertEqual(self.cli("run", "one").returncode, 0)
+            for _ in range(40):
+                patch, _ = get(full["version"])
+                if patch["kind"] != "same":
+                    break
+                time.sleep(0.25)
+            self.assertEqual(patch["kind"], "patch")
+            self.assertEqual(list(patch["changed"]["tasks"]), [next(t for t in full["tasks"] if "one" in t)])
+            self.assertEqual(len(patch["changed"]["runs"]), 1)
+            self.assertEqual(get("not-a-version")[0]["kind"], "full")
+        finally:
+            ui.send_signal(signal.SIGINT)
+            ui.wait(20)
 
 
 class ReleaseScripts(unittest.TestCase):
