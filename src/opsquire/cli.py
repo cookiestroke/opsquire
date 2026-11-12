@@ -34,6 +34,7 @@ from .model import (
     THREAD_RE,
     Meta,
     OpsquireError,
+    Task,
     code_version,
     config_path,
     decision,
@@ -363,6 +364,8 @@ def cmd_run(a: argparse.Namespace) -> int:
         if a.verify:
             raise OpsquireError("plans have no verify check; verify their steps")
         code = run_plan(task, a.apply, a.break_lock, skip_dry)
+    elif pipeline(task, a):
+        code, a.script_args = run_stages(task, a.break_lock)
     else:
         code = run_task(task, a.apply, a.script_args, a.break_lock, a.verify, skip_dry)
     last_stage = task.meta is None or is_last_stage(task.meta, a.script_args)
@@ -374,13 +377,39 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.apply and code == 0 and not last_stage and task.meta and task.meta.stages:
         done = stage_of(task.meta, a.script_args)
         nxt = next_stage(task.meta, runs_for(task.id))
-        print(f"opsquire: stage {done} applied; the inbox offers the dry run of stage {nxt} next")
+        print(f"opsquire: stage {done} applied; `opsquire run {task.id} --apply` runs the rest from stage {nxt}")
     if (a.apply or a.verify) and code == 0 and last_stage:
         steps = [str(s["task"]) for s in (task.meta.steps if task.meta else None) or []]
         closed = [t for t in [task.id, *steps] if auto_close(t, since)]
         if closed:
             print(f"closed done: {', '.join(closed)} (auto, from the run record; `opsquire close` can amend it)")
     return code
+
+
+def pipeline(task: Task, a: argparse.Namespace) -> bool:
+    """`run <staged task> --apply` with no arguments walks every stage left."""
+    return bool(task.meta and task.meta.stages and a.apply and not a.script_args and not a.verify and not a.skip_dry)
+
+
+def run_stages(task: Task, break_lock: bool) -> tuple[int, list[str]]:
+    """Each stage still to apply, in order: its dry run, then its apply (covered by that dry run, its own question
+    showing that stage's plan). Stops at the first run that does not end ok. Returns that code and the stage's args,
+    so what follows (the verify check, the close) runs only after the last stage."""
+    assert task.meta and task.meta.stages
+    stages = task.meta.stages
+    start = stages.index(next_stage(task.meta, runs_for(task.id)) or stages[0])
+    if start == len(stages) - 1 and task.raw.get("outcome"):
+        raise OpsquireError(f"{task.id} is closed; every stage ran")
+    for i, stage in enumerate(stages[start:], start + 1):
+        for apply in (False, True):
+            print(f"opsquire: stage {i}/{len(stages)} {stage}: {'apply' if apply else 'dry run'}")
+            code = run_task(task, apply, [stage], break_lock)
+            if code:
+                print(
+                    f"opsquire: stopped at stage {stage} ({'apply' if apply else 'dry run'}); later stages did not run"
+                )
+                return code, [stage]
+    return 0, [stages[-1]]
 
 
 def cmd_handover(a: argparse.Namespace) -> int:

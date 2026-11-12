@@ -590,8 +590,12 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
         status = "ready" if relint else str(v["status"])
         task_runs = by_task.get(t.id, [])
         nxt, handed = waiting_run(t, task_runs, status)
+        stages = t.meta.stages if t.meta else None
+        if nxt in ("dry", "apply") and stages and not (handed and handed.get("args")):
+            nxt = "apply"
         if nxt:
-            args = handover.args_for(t, task_runs, nxt)
+            whole = bool(stages) and nxt == "apply" and not (handed and handed.get("args"))
+            args: list[str] = [] if whole else handover.args_for(t, task_runs, nxt)
             same = handover.same_apply(t, task_runs, args) if nxt == "apply" else None
             since = waiting_since(t, task_runs, handed)
             waited = days_since(since, at)

@@ -188,25 +188,27 @@ def staged_task() -> None:
     (staged / "verify.py").write_text(VERIFY_OK)
     code, out, _ = cli("lint", staged.name)
     check("staged task lints with its 2 tests", code == 0 and "(2 tests)" in out, out)
-    check("the inbox offers dry -- build", offered(staged.name) == ("dry", "build"), str(offered(staged.name)))
+    check("the inbox offers the whole pipeline", offered(staged.name) == ("apply", ""), str(offered(staged.name)))
     code, out, _ = cli("run", staged.name, "--apply", "--", "build")
-    check("an apply with no dry run is blocked", code == 2 and runs(staged.name)[-1]["status"] == "blocked", out)
-    check("the blocked run keeps the inbox item", offered(staged.name) == ("dry", "build"))
-    cli("run", staged.name, "--", "build")
-    targets = runs(staged.name)[-1]["targets"]
-    web1_would = "would" in targets["web1"]["msg"]
-    check("dry: web1 would change, web2 is left", targets["web2"]["status"] == "unchanged" and web1_would)
-    check("the inbox offers apply -- build", offered(staged.name) == ("apply", "build"))
-    code, out, _ = cli("run", staged.name, "--apply", "--", "build", answers=[("[y/N]", "y")])
-    asked_once = out.count("[y/N]") == 1
-    check("the build apply asks once and moves on", code == 0 and asked_once and "stage build applied" in out, out)
-    open_after_build = runs(staged.name)[-1]["mode"] == "apply" and not meta(staged).get("outcome")
-    check("no verify after build, the task stays open", open_after_build)
-    check("the inbox offers dry -- deploy", offered(staged.name) == ("dry", "deploy"))
-    cli("run", staged.name, "--", "deploy")
-    code, out, _ = cli("run", staged.name, "--apply", "--", "deploy", answers=[("[y/N]", "y")])
+    check(
+        "one stage applied with no dry run is blocked", code == 2 and runs(staged.name)[-1]["status"] == "blocked", out
+    )
+    check("the blocked run keeps the inbox item", offered(staged.name) == ("apply", ""))
+    code, out, _ = cli("run", staged.name, "--apply", answers=[("[y/N]", "y"), ("[y/N]", "y")])
+    modes = [(r["mode"], r.get("argv")) for r in runs(staged.name) if r["status"] != "blocked"]
+    walked = modes == [
+        ("dry", ["build"]),
+        ("apply", ["build"]),
+        ("dry", ["deploy"]),
+        ("apply", ["deploy"]),
+        ("verify", []),
+    ]
+    check("one apply walks build and deploy, then verifies", code == 0 and walked, str(modes) + out[-600:])
+    check("each stage asked its own question once", out.count("[y/N]") == 2, out[-600:])
+    targets = next(r for r in runs(staged.name) if r.get("argv") == ["build"] and r["mode"] == "dry")["targets"]
+    check("dry: web1 would change, web2 is left", targets["web2"]["status"] == "unchanged")
     closed = (meta(staged).get("outcome") or {}).get("state") == "done"
-    check("the deploy apply runs verify and closes done", code == 0 and closed, out)
+    check("the task closes done after the last stage", closed)
     check("design.md gets its Result", "## Result" in (staged / "design.md").read_text())
     check("the closed task leaves the inbox", offered(staged.name) is None)
 

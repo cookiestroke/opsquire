@@ -115,6 +115,9 @@ than the field have none, which means unknown.
    Rollback, Verify). Fill them in rather than replacing them with a bare script: keep the decision in a pure function
    with its tests, and replace the starter test with real cases (captured real responses for anything parsed).
    A task that runs in stages gets `--stage build --stage deploy` (in order) at `new`.
+   `opsquire run <task-id> --apply` with no arguments walks every stage left: each stage's dry run, then its apply
+   (its question shows that stage's plan), then the verify check once after the last, stopping at the first run
+   that fails. Hand that over as one item (`handover <task-id> --apply`); `-- <stage>` runs one stage alone.
 3. Edit `main.py` / `main.sh`. Today Python (ruff + `mypy --strict`) and bash (shellcheck) are linted;
    other languages need a linter wired into `opsquire/lint.py` first.
 4. `opsquire lint <task>` must pass: ruff, `mypy --strict`, shellcheck, and every `test_*.py` (unittest) in the

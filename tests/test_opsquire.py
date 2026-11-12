@@ -3534,23 +3534,45 @@ class OpsTest(unittest.TestCase):
             assert item is not None
             return str(item["next"]), str(item["args"])
 
-        self.assertEqual(offered(), ("dry", "build"))
+        self.assertEqual(offered(), ("apply", ""), "one item runs every stage")
+        r = self.cli("run", "staged", "--apply", "--", "build")
+        self.assertEqual(r.returncode, 2, "one stage alone still needs its own dry run")
         self.assertEqual(self.cli("run", "staged", "--", "build").returncode, 0)
-        self.assertEqual(offered(), ("apply", "build"))
         r = self.cli("run", "staged", "--apply", "--", "build")
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("stage build applied; the inbox offers the dry run of stage deploy next", r.stdout)
-        self.assertEqual([x["mode"] for x in json.loads(self.cli("runs", "staged", "--json").stdout)], ["dry", "apply"])
+        self.assertIn("stage build applied; `opsquire run", r.stdout)
         self.assertIsNone(json.loads((folder / "meta.json").read_text()).get("outcome"))
-        self.assertEqual(offered(), ("dry", "deploy"))
-        self.assertEqual(self.cli("run", "staged", "--", "deploy").returncode, 0)
-        self.assertEqual(offered(), ("apply", "deploy"))
-        r = self.cli("run", "staged", "--apply", "--", "deploy")
+        self.assertEqual(offered(), ("apply", ""))
+        r = self.cli("run", "staged", "--apply")
         self.assertEqual(r.returncode, 0, r.stdout)
-        modes = [x["mode"] for x in json.loads(self.cli("runs", "staged", "--json").stdout)]
-        self.assertEqual(modes, ["dry", "apply", "dry", "apply", "verify"])
+        self.assertIn("stage 2/2 deploy: dry run", r.stdout)
+        self.assertNotIn("stage 1/2", r.stdout, "it carries on from the stage left")
+        modes = [(x["mode"], x["argv"]) for x in json.loads(self.cli("runs", "staged", "--json").stdout)]
+        self.assertEqual(
+            modes[-5:],
+            [("dry", ["build"]), ("apply", ["build"]), ("dry", ["deploy"]), ("apply", ["deploy"]), ("verify", [])],
+        )
         self.assertEqual(json.loads((folder / "meta.json").read_text())["outcome"]["state"], "done")
         self.assertIsNone(self.inbox_item(folder.name))
+
+    def test_one_apply_walks_every_stage_and_stops_at_the_first_failure(self) -> None:
+        body = (
+            "import sys\n\nimport opsquire_helpers as sq\n\nstage = sys.argv[1]\n"
+            "if sq.APPLY and stage == 'deploy':\n    raise SystemExit(1)\nsq.target('web1', 'ok', stage)\n"
+        )
+        folder = self.new(
+            "piped", body, "--changes-prod", "--rollback", "none", "--stage", "build", "--stage", "deploy"
+        )
+        (folder / "verify.py").write_text("import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'live')\n")
+        self.assertEqual(self.cli("lint", "piped").returncode, 0)
+        r = self.cli("handover", "piped", "--apply", "--why", "roll it out")
+        self.assertEqual(r.returncode, 0, "a staged apply makes its own dry runs: " + r.stderr)
+        r = self.cli("run", "piped", "--apply")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("stopped at stage deploy (apply); later stages did not run", r.stdout)
+        modes = [(x["mode"], x["argv"]) for x in json.loads(self.cli("runs", "piped", "--json").stdout)]
+        self.assertEqual(modes, [("dry", ["build"]), ("apply", ["build"]), ("dry", ["deploy"]), ("apply", ["deploy"])])
+        self.assertIsNone(json.loads((folder / "meta.json").read_text()).get("outcome"))
 
     def test_the_homes_contract_follows_local_rules_and_keeps_a_hand_edit(self) -> None:
         agents, local = self.home / "AGENTS.md", self.home / "LOCAL.md"

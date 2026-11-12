@@ -128,8 +128,8 @@ def covering_dry(task: Task, runs: list[dict[str, Any]], args: list[str]) -> tup
 
 def needs_dry(task: Task, runs: list[dict[str, Any]], args: list[str]) -> str | None:
     """Why an apply of this task cannot be handed over yet, None when a dry run covers it. A plan is checked step by
-    step when it runs."""
-    if task.kind == "plan":
+    step when it runs, and a staged task's apply with no arguments makes each stage's dry run itself."""
+    if task.kind == "plan" or (task.meta and task.meta.stages and not args):
         return None
     covered, why = covering_dry(task, runs, args)
     if covered:
