@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/state":
                 server: UIServer = self.server  # type: ignore[assignment]
                 try:
-                    answer = server.snapshots.answer(server.generation, q.get("since", ""))
+                    answer = server.snapshots.answer(server.look(), q.get("since", ""))
                 except Exception as e:
                     server.health["state_error"] = f"{type(e).__name__}: {e}"
                     raise
@@ -304,6 +304,7 @@ class UIServer(ThreadingHTTPServer):
         self.jobs = Jobs()
         self.code = code_hashes()
         self.generation = 0
+        self.seen: tuple[str, dict[str, Any]] | None = None
         self.moved = threading.Condition()
         self.health: dict[str, Any] = {"state_s": None, "state_at": None, "state_error": ""}
         self.snapshots = Snapshots(self.timed_state)
@@ -315,6 +316,9 @@ class UIServer(ThreadingHTTPServer):
         t0 = time.monotonic()
         built = state()
         self.health.update(state_s=round(time.monotonic() - t0, 3), state_at=iso(now()), state_error="")
+        self.beaten = 0.0
+        if self.seen:
+            self.beat(self.seen[1])
         return built
 
     def health_file(self) -> Path:
@@ -341,21 +345,25 @@ class UIServer(ThreadingHTTPServer):
             write_json(self.health_file(), record)
 
     def watch(self) -> None:
-        seen = (fingerprint(), code_status(self.code))
         while not self.stopping.is_set():
             job_moved = self.jobs.changed.wait(WATCH_INTERVAL_S)
             self.jobs.changed.clear()
             try:
-                current = (fingerprint(), code_status(self.code))
-                self.beat(current[1])
+                self.look(force=job_moved)
             except Exception:
                 traceback.print_exc(file=sys.stderr)
-                continue
-            if job_moved or current != seen:
-                seen = current
-                with self.moved:
-                    self.generation += 1
-                    self.moved.notify_all()
+
+    def look(self, force: bool = False) -> int:
+        """Bump `generation` when the home, a job or the code moved since the last look, and return it. The watcher
+        looks every second; a state request looks first too, so it never answers with a home older than itself."""
+        current = (fingerprint(), code_status(self.code))
+        self.beat(current[1])
+        with self.moved:
+            if force or current != self.seen:
+                self.seen = current
+                self.generation += 1
+                self.moved.notify_all()
+            return self.generation
 
     def wait_change(self, after: int, timeout: float) -> int:
         with self.moved:
