@@ -924,7 +924,7 @@ function decideButton(taskId) {
 async function startRun(taskId, mode) {
   try {
     const r = await post('/api/run', { task: taskId, mode });
-    toast(`started ${mode} run`);
+    toast(r && r.joined ? `${mode} run already going: opened it` : `started ${mode} run`);
     refresh();
     if (r && r.job_id) openJob(r.job_id);
   } catch (e) { toast(`run failed: ${e.message}`); }
@@ -1035,13 +1035,15 @@ function renderInboxRow(it, nested, pos) {
   const handed = it.handed ? el('span', { class: 'muted small', title: `handed over by ${it.handed.by || 'an agent'}: ${it.handed.why || 'no reason given'}` }, it.handed.why ? truncate(it.handed.why, 90) : `handed over by ${it.handed.by || 'an agent'}`) : null;
   const again = it.applied_already ? el('span', { class: 'warnnote', title: it.applied_already }, 'already applied ok, same scripts') : null;
   const shared = (it.same_target || []).length ? el('span', { class: 'muted small', title: `also waiting on the same target: ${it.same_target.join(', ')}. Related runs belong in one plan.` }, `same machine as ${plural(it.same_target.length, 'other item')}`) : null;
+  const prob = ((S.data && S.data.start_problems) || {})[id];
+  const refused = prob ? el('span', { class: 'warnnote', title: `${prob.mode} did not start (${prob.at}): ${prob.why}` }, `${prob.mode} did not start: ${truncate(prob.why, 110)}`) : null;
   const aged = it.stale ? el('span', { class: 'warnnote', title: it.stale }, `waiting ${Math.floor(it.waiting_days)} days: run, supersede or abandon`) : null;
   const stepsNote = (it.steps || []).length ? el('span', { class: 'plan', title: 'a plan: one run does every step below, in this order' }, `plan \u00b7 ${plural(it.steps.length, 'step')} in order`) : null;
   if (S.dev) return el('div', { class: 'ib' + sub, 'data-key': 'i:' + id },
     tree, stepNo, modeTag(it.next), taskLink(id), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')),
-    argsTag(it.args), stepsNote, aged, changed, again, shared, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
+    argsTag(it.args), stepsNote, refused, aged, changed, again, shared, handed, el('span', { class: 'who', title: it.author || '' }, it.author || ''), when(it.created), runButton(id, it.next));
   return el('div', { class: 'sr' + sub, 'data-key': 'i:' + id },
-    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), argsTag(it.args), stepsNote, aged, changed, again, shared, handed,
+    tree, stepNo, taskLink(id), areaTag(t || { id }), el('span', { class: 'purpose', title: it.purpose || '' }, it.purpose || el('span', { class: 'faint' }, 'no purpose')), argsTag(it.args), stepsNote, refused, aged, changed, again, shared, handed,
     el('span', { class: `next ${it.next === 'apply' ? 'apply' : ''}`, title: it.next === 'apply' ? 'the dry run passed; this changes production' : 'a read-only or dry run first; nothing changes' }, nextLabel(it.next)),
     runButton(id, it.next, nested ? 'Run this step alone' : undefined));
 }
@@ -1717,7 +1719,7 @@ async function load() {
       }
       Object.assign(S.data, r.replace || {});
     } else if (r && r.kind !== 'same') { S.version = null; loading = false; return load(); }
-    S.data.jobs = r.jobs; S.data.code = r.code; S.version = r.version;
+    S.data.jobs = r.jobs; S.data.start_problems = r.start_problems || {}; S.data.code = r.code; S.version = r.version;
     S.error = null; S.pageCode = S.pageCode || (r.code && r.code.page);
     retry = 2000;
     if (S.hash === null) applyHash(); else render();

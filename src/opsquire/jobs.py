@@ -5,6 +5,7 @@ as always, marked with the console as their origin; jobs live only in this serve
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
 import pty
@@ -67,13 +68,37 @@ class Job:
         }
 
 
+def last_line(output: bytes | bytearray) -> str:
+    """The job's last words: the runner's or opsquire's own reason for refusing, usually."""
+    lines = [ln.strip() for ln in ANSI_RE.sub("", output.decode("utf-8", "replace")).splitlines() if ln.strip()]
+    return lines[-1][:300] if lines else ""
+
+
 class Jobs:
     def __init__(self) -> None:
         self.jobs: dict[str, Job] = {}
+        self.problems: dict[str, dict[str, str]] = {}
         self.lock = threading.Lock()
         self.changed = threading.Event()
 
     def start(self, task_query: str, mode: str) -> Job:
+        """A job for this run, or the job already running it (a second click joins it). A start that fails leaves its
+        reason on the task until a job of it starts."""
+        try:
+            job = self.launch(task_query, mode)
+        except (OpsquireError, OSError) as e:
+            self.problem(task_query, mode, str(e).splitlines()[0] if str(e) else type(e).__name__)
+            raise
+        self.problems.pop(job.task_id, None)
+        return job
+
+    def problem(self, task: str, mode: str, why: str) -> None:
+        with contextlib.suppress(OpsquireError):
+            task = resolve_task(task).id
+        self.problems[task] = {"mode": mode, "why": why, "at": iso(now())}
+        self.changed.set()
+
+    def launch(self, task_query: str, mode: str) -> Job:
         """A run from the page (mode read, dry or apply), or `judge`: the agent that decides how the task ended."""
         task = resolve_task(task_query)
         if task.meta is None:
@@ -85,8 +110,14 @@ class Jobs:
             raise OpsquireError(f"{task.id} runs in {', '.join(task.meta.modes)} mode, not {mode}")
         args = handover.args_for(task, runs_for(task.id), mode)
         with self.lock:
-            if any(j.task_id == task.id and j.status != "done" for j in self.jobs.values()):
-                raise OpsquireError(f"{task.id} already has a job running")
+            for j in self.jobs.values():
+                if j.task_id == task.id and j.status != "done" and j.proc is not None and j.proc.poll() is not None:
+                    j.status, j.ended = "done", j.ended or iso(now())
+            live = [j for j in self.jobs.values() if j.task_id == task.id and j.status != "done"]
+            if live:
+                if live[0].mode == mode:
+                    return live[0]
+                raise OpsquireError(f"{task.id} already has a {live[0].mode} job running; open it from Jobs")
             if len([j for j in self.jobs.values() if j.status != "done"]) >= MAX_JOBS:
                 raise OpsquireError("too many jobs running")
             job = Job(f"{now():%Y%m%dT%H%M%S%f}"[:-3] + "Z", task.id, mode, iso(now()), args=args)
@@ -123,6 +154,12 @@ class Jobs:
         return job
 
     def pump(self, job: Job) -> None:
+        try:
+            self.read_until_exit(job)
+        finally:
+            self.finish(job)
+
+    def read_until_exit(self, job: Job) -> None:
         proc = job.proc
         assert proc is not None
         while True:
@@ -148,7 +185,6 @@ class Jobs:
             else:
                 self.detect_prompt(job)
                 time.sleep(0.05)
-        self.finish(job)
 
     def detect_helper_prompt(self, job: Job) -> None:
         """A helper's prompt stands until it is answered, wherever it landed in the output: a script's own prompt
@@ -195,6 +231,11 @@ class Jobs:
                 pass
         runs = [r for r in runs_for(job.task_id) if str(r.get("started", "")) >= job.started]
         job.run_id = str(runs[-1]["run_id"]) if runs and job.mode != "judge" else None
+        if code and job.mode != "judge":
+            refused = runs[-1] if runs and runs[-1].get("status") == "blocked" else None
+            if refused or not runs:
+                why = str(refused.get("last_error")) if refused else last_line(job.output)
+                self.problem(job.task_id, job.mode, why or f"exited {code} before any run started")
         self.changed.set()
 
     def get(self, job_id: str) -> Job:

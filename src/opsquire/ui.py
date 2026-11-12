@@ -197,7 +197,12 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     server.health["state_error"] = f"{type(e).__name__}: {e}"
                     raise
-                self.send_json({**answer, "jobs": self.jobs.views(), "code": code_status(server.code)})
+                extra = {
+                    "jobs": self.jobs.views(),
+                    "start_problems": self.jobs.problems,
+                    "code": code_status(server.code),
+                }
+                self.send_json({**answer, **extra})
             elif url.path == "/api/job":
                 self.send_json(self.jobs.read(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/log":
@@ -232,8 +237,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             if url.path == "/api/run":
+                before = set(self.jobs.jobs)
                 job = self.jobs.start(str(body.get("task", "")), str(body.get("mode", "")))
-                self.send_json({"job_id": job.job_id})
+                self.send_json({"job_id": job.job_id, "joined": job.job_id in before})
             elif url.path == "/api/judge":
                 job = self.jobs.start(str(body.get("task", "")), "judge")
                 self.send_json({"job_id": job.job_id})
@@ -255,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except OpsquireError as e:
-            busy = "already has a job" in str(e)
+            busy = "job running" in str(e) or "too many jobs" in str(e)
             self.send_json({"error": str(e)}, HTTPStatus.CONFLICT if busy else HTTPStatus.BAD_REQUEST)
 
     @property

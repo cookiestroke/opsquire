@@ -1374,7 +1374,11 @@ class OpsTest(unittest.TestCase):
             j = wait_job(started["job_id"], "waiting")
             self.assertIn("Really change web1? [y/N]", j["prompt"])
             self.assertIn("Really change web1?", j["text"])
-            self.assertEqual(call("POST", "/api/run", {"task": tid, "mode": "apply"})[0], 409)
+            status, again = call("POST", "/api/run", {"task": tid, "mode": "apply"})
+            self.assertEqual((status, again["job_id"], again["joined"]), (200, started["job_id"], True))
+            status, other = call("POST", "/api/run", {"task": tid, "mode": "dry"})
+            self.assertEqual(status, 409)
+            self.assertIn("already has a apply job running", other["error"])
             self.assertEqual(call("POST", "/api/answer", {"job": started["job_id"], "text": "n"})[0], 200)
             j = wait_job(started["job_id"], "done")
             self.assertEqual(j["exit_code"], 3)
@@ -3862,6 +3866,48 @@ class OpsTest(unittest.TestCase):
         finally:
             ui.send_signal(signal.SIGINT)
             ui.wait(20)
+
+    def test_a_console_run_that_does_not_start_leaves_its_reason_on_the_task(self) -> None:
+        import http.client
+
+        folder = self.new("broken", "print(1)\n", "--changes-prod", "--rollback", "none", "--no-verify")
+        self.assertEqual(self.cli("lint", "broken").returncode, 0)
+        (folder / "main.py").write_text("def f(x):\n    return x\n")
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
+                conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                return resp.status, json.loads(resp.read())
+
+            def problems() -> dict[str, Any]:
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    found: dict[str, Any] = call("GET", "/api/state")[1]["start_problems"]
+                    if found.get(folder.name):
+                        return found
+                    time.sleep(0.2)
+                return {}
+
+            status, started = call("POST", "/api/run", {"task": folder.name, "mode": "dry"})
+            self.assertEqual(status, 200, started)
+            why = problems().get(folder.name) or {}
+            self.assertEqual(why.get("mode"), "dry")
+            self.assertIn("lint", why.get("why", ""))
+            status, refused = call("POST", "/api/run", {"task": folder.name, "mode": "verify"})
+            self.assertEqual(status, 400)
+            self.assertIn("not verify", call("GET", "/api/state")[1]["start_problems"][folder.name]["why"])
+            (folder / "main.py").write_text("print(1)\n")
+            status, started = call("POST", "/api/run", {"task": folder.name, "mode": "dry"})
+            self.assertEqual(status, 200)
+            self.assertNotIn(folder.name, call("GET", "/api/state")[1]["start_problems"])
+        finally:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(20)
 
 
 class ReleaseScripts(unittest.TestCase):
