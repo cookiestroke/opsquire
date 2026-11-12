@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import getpass
 import json
 import os
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from types import FrameType
 from typing import IO, Any
@@ -26,6 +28,7 @@ from .model import (
     Meta,
     OpsquireError,
     Task,
+    by_file,
     compact,
     decision,
     decision_text,
@@ -45,6 +48,7 @@ VERBOSE = os.environ.get("OPSQUIRE_VERBOSE") == "1"
 ALWAYS_SHOWN = {"blocked", "interrupted", "lock_broken", "lock_stale_reclaimed"}
 SCRIPT_EVENTS = {"step", "target", "result", "warn", "error", "confirm", "data", "progress"}
 TARGET_STATUSES = {"ok", "failed", "skipped", "unchanged"}
+CLOCK_SLACK_S = 60.0
 EXIT_CODES = {"ok": 0, "failed": 1, "partial": 1, "blocked": 2, "aborted": 3, "interrupted": 130}
 
 
@@ -91,6 +95,8 @@ class Run:
         self.dry: dict[str, Any] | None = None
         self.script_error = ""
         self.started = now()
+        self.clock = time.monotonic()
+        self.clock_moved = False
         self.run_id = f"{compact(self.started)}_{mode}"
         self.dir = runs_dir() / task.id / self.run_id
         self.seq = 0
@@ -238,7 +244,24 @@ class Run:
             with contextlib.suppress(OSError):
                 os.write(self.sync_w, b"x")
 
+    def check_clock(self) -> None:
+        """The wall clock can jump during a run (a WSL clock resynced after sleep, say). The run's own timer cannot, so
+        when the two disagree the start is moved to match the timer: run order and handovers read it."""
+        elapsed = time.monotonic() - self.clock
+        moved = (now() - self.started).total_seconds() - elapsed
+        if abs(moved) > CLOCK_SLACK_S:
+            self.started = now() - dt.timedelta(seconds=elapsed)
+            if not self.clock_moved:
+                self.clock_moved = True
+                self.event(
+                    "warn",
+                    f"the system clock moved by {moved:+.0f}s during this run; its start is taken "
+                    "from the run's own timer",
+                    level="warn",
+                )
+
     def write_record(self, status: str, exit_code: int | None) -> None:
+        self.check_clock()
         ended = now() if status != "running" else None
         self.record = {
             "schema": SCHEMA,
@@ -607,10 +630,19 @@ def run_task(
     return Run(task, meta, mode, args, break_lock, skip_dry=skip_dry).execute()
 
 
-def load_run(path: Path) -> dict[str, Any]:
+def read_run(path: Path) -> dict[str, Any]:
     with path.open() as f:
         rec: dict[str, Any] = json.load(f)
+    return rec
+
+
+def load_run(path: Path) -> dict[str, Any]:
+    rec = dict(by_file("run", path, lambda: read_run(path)))
     alive = run_alive(int(rec.get("pid", 0)), str(rec.get("host")), path.parent, str(rec.get("pid_ns", "")))
+    started, ended = str(rec.get("started") or ""), str(rec.get("ended") or "")
+    if ended and started > ended:
+        rec["started"] = ended
+        rec["clock_note"] = f"recorded start {started} is after its end: the system clock moved during the run"
     if rec.get("status") == "running" and not alive:
         rec["status"] = "interrupted"
         rec["last_error"] = "runner process vanished without finishing (killed or terminal closed)"

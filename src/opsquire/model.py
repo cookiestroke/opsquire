@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import functools
 import hashlib
 import json
 import os
@@ -10,9 +11,10 @@ import socket
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 SCHEMA = 1
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -118,15 +120,20 @@ def update_config(**values: Any) -> None:
     write_json(config_path(), {**current, **values})
 
 
+@functools.lru_cache(maxsize=16)
+def resolved(path: str) -> Path:
+    return Path(path).expanduser().resolve()
+
+
 def home_dir() -> Path:
     env = os.environ.get("OPSQUIRE_HOME")
     if env:
-        return Path(env).expanduser().resolve()
+        return resolved(env)
     try:
-        configured = read_json(config_path()).get("home")
+        configured = by_file("config", config_path(), functools.partial(read_json, config_path())).get("home")
     except (OSError, ValueError, AttributeError):
         configured = None
-    return Path(configured).expanduser().resolve() if isinstance(configured, str) else DEFAULT_HOME
+    return resolved(configured) if isinstance(configured, str) else DEFAULT_HOME
 
 
 def main_home() -> Path:
@@ -517,7 +524,9 @@ class Task:
         """Content hashes of every file that runs. meta.json is hashed without its annotations (`outcome`,
         `judged`): closing or judging a task does not change what it does, so it must not make it draft."""
         home = home_dir()
-        return {str(p.relative_to(home)): hashlib.sha256(content_for_hash(p)).hexdigest() for p in self.files()}
+        return {
+            str(p.relative_to(home)): by_file("sha256", p, functools.partial(content_digest, p)) for p in self.files()
+        }
 
     def content_hash(self) -> str:
         h = hashlib.sha256()
@@ -529,6 +538,24 @@ class Task:
 ANNOTATIONS = ("outcome", "judged", "handover")
 
 
+T = TypeVar("T")
+FILE_CACHE: dict[tuple[str, str], tuple[tuple[int, int], Any]] = {}
+
+
+def by_file(kind: str, path: Path, build: Callable[[], T]) -> T:
+    """What build() derives from one file, computed again only when the file's mtime or size changed: the console
+    rebuilds its state from the same thousands of unchanged files on every refresh."""
+    st = os.stat(path)
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = FILE_CACHE.get((kind, str(path)))
+    if hit and hit[0] == stamp:
+        value: T = hit[1]
+        return value
+    fresh = build()
+    FILE_CACHE[(kind, str(path))] = (stamp, fresh)
+    return fresh
+
+
 def code_version(files: dict[str, str]) -> str:
     """What a task's run record or current files do, for comparing runs: the hashes of `file_hashes` without the
     Markdown, since closing a task appends its `## Result` to design.md. "" when the record has no files."""
@@ -536,6 +563,10 @@ def code_version(files: dict[str, str]) -> str:
     if not code:
         return ""
     return hashlib.sha256(json.dumps(code, sort_keys=True).encode()).hexdigest()
+
+
+def content_digest(path: Path) -> str:
+    return hashlib.sha256(content_for_hash(path)).hexdigest()
 
 
 def content_for_hash(path: Path) -> bytes:
@@ -552,6 +583,17 @@ def content_for_hash(path: Path) -> bytes:
 
 
 def load_task(folder: Path) -> Task:
+    """A task as its folder holds it now. Parsed again only when meta.json or the folder's file list changed (a
+    verify script appearing, say), which is what validation reads; each caller gets its own copy of the raw meta."""
+    try:
+        stamp = os.stat(folder).st_mtime_ns
+        task = by_file(f"task:{stamp}", folder / "meta.json", functools.partial(read_task, folder))
+    except OSError:
+        task = read_task(folder)
+    return Task(task.folder, dict(task.raw), task.meta, list(task.errors))
+
+
+def read_task(folder: Path) -> Task:
     meta_path = folder / "meta.json"
     try:
         raw = read_json(meta_path)

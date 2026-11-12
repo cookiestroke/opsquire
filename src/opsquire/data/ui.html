@@ -675,7 +675,7 @@ function fallbackCopy(text) {
   ta.remove(); return ok;
 }
 async function api(path, opts) {
-  const r = await fetch(path, opts);
+  const r = await fetch(path, { signal: AbortSignal.timeout(path === '/api/state' ? 60000 : 30000), ...opts });
   let body = null;
   try { body = await r.json(); } catch (e) { body = null; }
   if (!r.ok) throw new Error((body && body.error) || `${r.status} ${r.statusText}`);

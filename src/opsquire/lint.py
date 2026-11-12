@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import re
 import shutil
@@ -19,6 +20,7 @@ from .model import (
     HELPERS_DIR,
     LINT_FILE,
     Task,
+    by_file,
     home_dir,
     iso,
     load_task,
@@ -84,6 +86,10 @@ PY_CONFIRM = re.compile(r"(?<!def )(?<![\w.])(?:sq\.)?confirm\(")
 SH_CONFIRM = re.compile(r"^[^#\n]*\bsq_confirm\b(?!\s*\(\))", re.M)
 
 
+def asks_in(path: Path) -> bool:
+    return bool((PY_CONFIRM if path.suffix == ".py" else SH_CONFIRM).search(path.read_text()))
+
+
 def asks_first(task: Task) -> bool:
     """Whether the task's scripts, or the general scripts it uses, ask the operator for a yes somewhere. Tests and
     the verify check (read-only) do not count."""
@@ -95,7 +101,7 @@ def asks_first(task: Task) -> bool:
             if f.name.startswith("test_") or (folder == task.folder and f.name == task.meta.verify):
                 continue
             with contextlib.suppress(OSError, UnicodeDecodeError):
-                if (PY_CONFIRM if f.suffix == ".py" else SH_CONFIRM).search(f.read_text()):
+                if by_file("asks", f, functools.partial(asks_in, f)):
                     return True
     return False
 

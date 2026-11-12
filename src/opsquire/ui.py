@@ -41,15 +41,20 @@ def page() -> bytes:
 
 def fingerprint() -> str:
     """Changes when anything the page shows may have moved: any file of a task or general script (its lint stamp
-    and scripts included, since they decide draft or ready), run records, locks, asks and thread results."""
+    and scripts included, since they decide draft or ready), run records, locks, asks and thread results. A new run is
+    a new folder, which changes its task's runs folder; a finished run's record never changes again, so only each
+    task's latest one is read."""
     home, var = home_dir(), var_dir()
     paths: list[str] = []
     for root in (home / "tasks", home / "general", home / "threads", var / "asks", var / "locks"):
         for folder, dirs, files in os.walk(root):
             dirs[:] = [d for d in dirs if d not in IGNORED_PARTS]
             paths += (os.path.join(folder, f) for f in files)
-    for run in runs_dir().glob("*/*/run.json"):
-        paths.append(str(run))
+    for task_runs in runs_dir().glob("*/"):
+        paths.append(str(task_runs))
+        latest = max(task_runs.glob("*/run.json"), default=None, key=lambda p: p.parent.name)
+        if latest:
+            paths.append(str(latest))
     h = hashlib.sha256()
     for path in sorted(paths):
         try:

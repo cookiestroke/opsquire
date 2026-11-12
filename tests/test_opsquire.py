@@ -3613,6 +3613,25 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("run", "probe").returncode, 0)
         self.assertIsNone(self.inbox_item(folder.name), "a read that ended ok is done")
 
+    def test_a_run_stamped_in_the_future_by_a_clock_jump_does_not_count_as_the_latest(self) -> None:
+        folder = self.new("move", "print(1)\n", "--changes-prod", "--rollback", "none", "--no-verify")
+        self.assertEqual(self.cli("lint", "move").returncode, 0)
+        self.assertEqual(self.cli("run", "move").returncode, 0)
+        first = self.last("move")
+        jumped = Path(first["paths"]["dir"]).with_name("20991231T000000000Z_dry")
+        shutil.copytree(first["paths"]["dir"], jumped)
+        rec = json.loads((jumped / "run.json").read_text())
+        rec.update(
+            run_id=jumped.name, status="failed", started="2099-12-31T00:00:00.000Z", ended="2000-01-01T00:00:00.000Z"
+        )
+        (jumped / "run.json").write_text(json.dumps(rec))
+        self.assertEqual(self.cli("run", "move").returncode, 0)
+        recs = json.loads(self.cli("runs", "move", "--json").stdout)
+        self.assertEqual(recs[0]["run_id"], jumped.name, "ordered by when it really ran")
+        self.assertIn("system clock moved", recs[0]["clock_note"])
+        item = self.inbox_item(folder.name)
+        self.assertEqual(item and item["next"], "apply")
+
 
 class ReleaseScripts(unittest.TestCase):
     """scripts/release.py and scripts/signed_commit.py: what the release workflow and every push to main rely on."""

@@ -34,7 +34,7 @@ def runs_for(task_id: str) -> list[dict[str, Any]]:
             out.append(load_run(p))
         except (OSError, ValueError):
             continue
-    return out
+    return sorted(out, key=lambda r: str(r.get("started")))
 
 
 def all_runs() -> list[dict[str, Any]]:
