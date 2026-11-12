@@ -1863,7 +1863,7 @@ class OpsTest(unittest.TestCase):
         self.assertEqual([s["next"] for s in inbox[0]["steps"]], ["apply", "apply"])
         self.assertEqual(self.cli("close", "cutover", "--outcome", "abandoned", "--note", "by hand").returncode, 0)
         inbox = json.loads(self.cli("threads", "--json").stdout)["inbox"]
-        self.assertEqual([(i["task_id"], i["steps"]) for i in inbox], [(a.name, []), (b.name, [])])
+        self.assertEqual(sorted((i["task_id"], i["steps"]) for i in inbox), sorted([(a.name, []), (b.name, [])]))
 
     def milestones(self, *args: str) -> list[dict[str, Any]]:
         r = self.cli("milestones", "--since", "2020-01-01", "--json", *args)
