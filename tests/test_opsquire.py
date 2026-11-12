@@ -3601,6 +3601,18 @@ class OpsTest(unittest.TestCase):
         self.assertIn("RuntimeError: disk full on web1", rec["last_error"])
         self.assertIn("cleaned up", [e["msg"] for e in self.events(rec)])
 
+    def test_a_read_that_failed_comes_back_to_the_inbox_once_it_is_fixed(self) -> None:
+        folder = self.new("probe", "raise SystemExit(1)\n")
+        self.assertEqual(self.cli("lint", "probe").returncode, 0)
+        self.assertEqual(self.cli("run", "probe").returncode, 1)
+        self.assertIsNone(self.inbox_item(folder.name), "not again with the same scripts")
+        (folder / "main.py").write_text("print('fixed')\n")
+        self.assertEqual(self.cli("lint", "probe").returncode, 0)
+        item = self.inbox_item(folder.name)
+        self.assertEqual(item and item["next"], "read")
+        self.assertEqual(self.cli("run", "probe").returncode, 0)
+        self.assertIsNone(self.inbox_item(folder.name), "a read that ended ok is done")
+
 
 class ReleaseScripts(unittest.TestCase):
     """scripts/release.py and scripts/signed_commit.py: what the release workflow and every push to main rely on."""

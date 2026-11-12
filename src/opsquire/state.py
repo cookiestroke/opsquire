@@ -300,23 +300,24 @@ def argv_of(run: dict[str, Any]) -> list[str]:
 
 
 def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None:
-    """The run the operator owes a task: its first read or dry run when it is ready and never ran, the apply after
-    a dry run of its current scripts that ended ok, the verify check after an apply that did not close the task (or
-    when the judge asked for it), else a fresh dry run. None when nothing waits: read-only tasks that ran, closed
-    tasks, and a task whose verify check failed (that one needs a decision)."""
+    """The run the operator owes a task: its first read or dry run when it is ready and never ran, a read again when
+    the last one did not end ok and its scripts changed since, the apply after a dry run of its current scripts that
+    ended ok, the verify check after an apply that did not close the task (or when the judge asked for it), else a
+    fresh dry run. None when nothing waits: a read that ended ok or was not fixed since, closed tasks, and a task
+    whose verify check failed (that one needs a decision)."""
     m = task.meta
     if m is None or task.kind == "general" or status in CLOSED or status == "draft":
         return None
     runs = [r for r in runs if r.get("status") != "blocked"]
     if not runs:
         return "dry" if m.changes_prod else "read"
+    last = runs[-1]
+    same_scripts = code_version(last.get("files") or {}) == code_version(task.file_hashes())
     if not m.changes_prod:
-        return None
+        return "read" if last.get("status") not in ("ok", "running") and not same_scripts else None
     judged = task.raw.get("judged") or {}
     if m.verify and judged.get("decision") == "verify":
         return "verify"
-    last = runs[-1]
-    same_scripts = code_version(last.get("files") or {}) == code_version(task.file_hashes())
     if last.get("mode") == "dry" and last.get("status") == "ok":
         return "apply" if same_scripts else "dry"
     if last.get("mode") == "verify":
