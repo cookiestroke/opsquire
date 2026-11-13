@@ -77,6 +77,8 @@ opsquire ask --max-agents 2 ...    at most 2 agents at once; --budget 20 [--stri
 opsquire ask --model quick ...      a tier the agent's retinue entry defines (quick, default, deep) or a model id;
                                    --agent picks another agent from retinue.json. Spend is what the agent reports
                                    at API list prices; its retinue entry says whether that is a plan or an API key
+opsquire ask --resume <id> --fresh "..."   continue a chat in a new agent session briefed from its records; the
+                                   console does this for follow-ups once a chat turn cost $5 (Settings changes it)
 opsquire repo checkout|pr ...      (for agents) change a registered repo through a GitHub-signed PR
 ```
 

@@ -15,6 +15,12 @@ from .model import iso, parse_iso
 
 FOLLOW_DAYS = 3.0
 RESET_MARGIN = dt.timedelta(minutes=2)
+REPORT_HEAD = "The operator ran what you handed over (the console sends this when the runs finish):"
+FRESH_NOTE = (
+    "This chat continues in a new agent session: the earlier one had grown long, so this brief from the records "
+    "replaces it. Read the records it names before you act."
+)
+LAST_ANSWER_CHARS = 6000
 LIMIT_NOTE = (
     "Your last turn stopped at the agent's usage limit before you could answer, and the limit has reset. "
     "The message you were answering:"
@@ -123,9 +129,31 @@ def continuations(
     return out
 
 
+def brief(asks: list[dict[str, Any]], message: str) -> str:
+    """What a fresh agent session of a conversation starts from instead of the whole chat: the operator's request and
+    every later word of theirs, the tasks the chat handed over, the agent's last answer, then `message`."""
+    items = sorted(asks, key=lambda a: str(a.get("started") or ""))
+    lines = [FRESH_NOTE]
+    if items:
+        lines += ["", f"The operator's request: {items[0].get('prompt') or ''}"]
+        said = [str(a.get("prompt") or "") for a in items[1:]]
+        said = [p for p in said if p and not p.startswith((REPORT_HEAD, LIMIT_NOTE, FRESH_NOTE))]
+        if said:
+            lines += ["", "What the operator said since, in order:", *(f"- {p}" for p in said)]
+        tasks = handed_tasks(items)
+        if tasks:
+            lines += ["", "Tasks this chat handed over (read each: `opsquire show <task>`, its design.md):"]
+            lines += [f"- {t}" for t in tasks]
+        last = next((str(a["text"]) for a in reversed(items) if a.get("text")), "")
+        if last:
+            cut = last if len(last) <= LAST_ANSWER_CHARS else last[:LAST_ANSWER_CHARS] + "\n[...]"
+            lines += ["", "Your last answer:", cut]
+    return "\n".join([*lines, "", "Now:", message])
+
+
 def report(runs: list[dict[str, Any]]) -> str:
     """The message that resumes the conversation: what ran and how it ended, then what is expected."""
-    lines = ["The operator ran what you handed over (the console sends this when the runs finish):"]
+    lines = [REPORT_HEAD]
     for r in runs:
         flag = {"apply": " --apply", "verify": " --verify"}.get(str(r.get("mode")), "")
         args = [str(x) for x in r.get("argv") or []]

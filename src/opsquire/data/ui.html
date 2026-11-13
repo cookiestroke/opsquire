@@ -1697,9 +1697,32 @@ function globMatch(pattern, text) {
   const re = new RegExp('^' + pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
   return re.test(text);
 }
+/* settings kept in the config file (opsquire init writes the same ones) */
+function loadSettings() {
+  S.settingsBusy = true;
+  api('/api/settings').then(r => { S.settings = r; S.settingsError = null; }, e => { S.settingsError = e.message; }).finally(() => { S.settingsBusy = false; render(); });
+}
+async function saveSettings(body) {
+  try { S.settings = await post('/api/settings', body); } catch (e) { toast(`cannot save the setting: ${e.message}`); }
+  render();
+}
+function renderFollowUps() {
+  if (!S.settings && !S.settingsBusy && !S.settingsError) loadSettings();
+  const v = S.settings ? S.settings.follow_up_fresh_after_usd : undefined, on = v !== null && v !== undefined;
+  const setAmount = e => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n) && n >= 0) { S.lastFresh = n; saveSettings({ follow_up_fresh_after_usd: n }); } else toast('a number of dollars, 0 or more'); };
+  return [sec('Follow-ups'), el('div', { class: 'block pad' },
+    S.settingsError ? el('div', { class: 'err' }, `Cannot read the settings: ${S.settingsError}`) : null,
+    el('div', { class: 'rule' },
+      el('label', { class: 'switch', title: on ? 'switch off: follow-ups always resume the whole chat' : 'switch on' },
+        el('input', { type: 'checkbox', checked: on, disabled: !S.settings, onchange: e => saveSettings({ follow_up_fresh_after_usd: e.target.checked ? (S.lastFresh ?? 5) : null }) }),
+        el('strong', {}, 'Fresh sessions for long chats')),
+      el('span', { class: 'grow' }),
+      on ? el('label', { class: 'small' }, 'once a turn cost $ ', el('input', { id: 'freshafter', type: 'number', min: '0', step: '0.5', value: String(v), style: 'width:5em', onchange: setAmount })) : null),
+    el('div', { class: 'faint small' }, "When a run a chat handed over finishes, the console wakes the chat's agent. Once the chat's last turn cost this much, it starts a new agent session briefed from the records instead of resuming the whole chat, which spares the plan's usage limit. Off: it always resumes the whole chat."))];
+}
 function renderSettings() {
   if (!S.tools && !S.toolsBusy && !S.toolsError) loadTools(false);
-  const t = S.tools, parts = [];
+  const t = S.tools, parts = [...renderFollowUps()];
   parts.push(sec('Tools for ask agents', null, el('span', {}, btn(S.toolsBusy === 'checking' ? 'checking…' : 'Check servers', () => loadTools(true), 'sm', { disabled: !!S.toolsBusy, title: "ask the agent's CLI which servers it has (takes a few seconds)" }))));
   if (S.toolsError) parts.push(el('div', { class: 'err' }, `Cannot read the tool settings: ${S.toolsError}`));
   if (!t) { parts.push(el('div', { class: 'quiet' }, S.toolsBusy ? 'Loading…' : '')); return el('div', { class: 'settings' }, parts); }

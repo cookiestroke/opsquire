@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import contract
-from .ask import DEFAULT_BUDGET_USD, configured_budget
+from .ask import DEFAULT_BUDGET_USD, configured_budget, configured_fresh_after
 from .integrate import integrate
 from .lint import find_tool, lint_task, save_lint
 from .model import (
@@ -64,7 +64,14 @@ TOOLS = (
 )
 
 
-def init(path: str | None, budget: float | None, dry: bool, offboard_days: float | None = None) -> list[str]:
+def init(
+    path: str | None,
+    budget: float | None,
+    dry: bool,
+    offboard_days: float | None = None,
+    fresh_after: float | None = None,
+) -> list[str]:
+    """`fresh_after`: a negative number turns fresh follow-up sessions off."""
     lines: list[str] = []
     would = "would be " if dry else ""
     if path:
@@ -89,6 +96,14 @@ def init(path: str | None, budget: float | None, dry: bool, offboard_days: float
         if not dry:
             write_text(local, (DATA_DIR / "LOCAL.template.md").read_text())
         lines.append(f"local rules: {would}written from the template ({local}); edit it: operator, areas, tools")
+    if fresh_after is not None and not dry:
+        update_config(follow_up_fresh_after_usd=False if fresh_after < 0 else fresh_after)
+    shown = configured_fresh_after() if not dry or fresh_after is None else (None if fresh_after < 0 else fresh_after)
+    fresh = f"start a fresh, briefed agent session once a chat turn cost ${shown:.2f}" if shown is not None else ""
+    lines.append(
+        f"follow-ups: {fresh or 'always resume the whole chat'}"
+        + (" (`opsquire init --fresh-after N` changes it; -1 turns it off)" if fresh_after is None else "")
+    )
     current = configured_budget()
     chosen = budget if budget is not None else current
     if budget is not None and not dry:

@@ -138,6 +138,25 @@ def tools_view(refresh: bool) -> dict[str, Any]:
     return {**tools.view(spec, LISTED["servers"]), "listed_at": LISTED["at"]}
 
 
+def settings_view() -> dict[str, Any]:
+    from .ask import configured_fresh_after
+
+    return {"follow_up_fresh_after_usd": configured_fresh_after()}
+
+
+def change_settings(body: dict[str, Any]) -> dict[str, Any]:
+    """Settings the page changes in the config file: the cost of a chat's last turn after which a follow-up starts a
+    fresh, briefed agent session (null turns it off)."""
+    from .model import update_config
+
+    if "follow_up_fresh_after_usd" in body:
+        value = body["follow_up_fresh_after_usd"]
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+            raise OpsquireError("follow_up_fresh_after_usd must be a number of dollars, 0 or more, or null for off")
+        update_config(follow_up_fresh_after_usd=False if value is None else float(value))
+    return settings_view()
+
+
 def ask_chat(ask_id: str, offset: int) -> dict[str, Any]:
     """The conversation an ask belongs to, from line `offset` on, for the console's chat. A follow-up writes into
     its conversation's chat (the first ask's), so any ask of it reads the whole conversation."""
@@ -247,6 +266,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({**answer, **extra})
             elif url.path == "/api/tools":
                 self.send_json(tools_view(q.get("refresh") == "1"))
+            elif url.path == "/api/settings":
+                self.send_json(settings_view())
             elif url.path == "/api/askchat":
                 self.send_json(ask_chat(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/job":
@@ -309,6 +330,8 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/interrupt":
                 self.jobs.interrupt(str(body.get("job", "")))
                 self.send_json({"ok": True})
+            elif url.path == "/api/settings":
+                self.send_json(change_settings(body))
             elif url.path == "/api/chatread":
                 from .state import load_asks
 

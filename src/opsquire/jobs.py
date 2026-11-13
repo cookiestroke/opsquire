@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import followup, handover
+from .ask import configured_fresh_after
 from .model import ORIGIN_CONSOLE, ORIGIN_ENV, OpsquireError, iso, now, resolve_task
 from .query import runs_for
 
@@ -132,8 +133,15 @@ class Jobs:
         busy_tasks = {j.task_id for j in live if j.task_id}
         at = now()
         held = followup.held_agents(asks, at)
+        limit = configured_fresh_after()
+        cost = {str(a.get("ask_id")): a.get("cost_usd") for a in asks}
+
+        def long(ask_id: str) -> bool:
+            spent = cost.get(ask_id)
+            return limit is not None and isinstance(spent, (int, float)) and spent >= limit
+
         wakes = [
-            (ask_id, followup.report(runs), False)
+            (ask_id, followup.report(runs), long(ask_id))
             for ask_id, runs in followup.due(asks, runs_for, busy_conversations, busy_tasks, at, held)
         ]
         wakes += followup.continuations(asks, runs_for, busy_conversations, held, at)

@@ -302,7 +302,12 @@ processes. The one thing that stays is the record of the interrupted run.
   resumes that task's conversation; `opsquire ask --resume <ask-id> ["answer"]` continues an interrupted
   or waiting ask. An ask ends on its RUN lines without waiting; while the console (`opsquire ui`) is up, it follows
   them instead: when a run of a task the conversation handed over finishes, it resumes the conversation with the
-  run's outcome, and the agent reads that record and continues from it as step 6 asks.
+  run's outcome, and the agent reads that record and continues from it as step 6 asks. Once the chat's last turn
+  cost `follow_up_fresh_after_usd` (default $5; the console's Settings or `opsquire init --fresh-after N`, -1 off),
+  it starts a new agent session in the conversation instead, briefed from the records: the request, the operator's
+  later words, the tasks handed over and the last answer (`opsquire ask --resume <ask-id> --fresh "..."` does the
+  same by hand). While the agent's usage limit holds (the retinue's `limit_re`), follow-ups wait, and each chat
+  that stopped at the limit continues once at the reset.
 
 ### The interview (grill), on by default
 

@@ -780,7 +780,7 @@ def cmd_wait(a: argparse.Namespace) -> int:
 def cmd_init(a: argparse.Namespace) -> int:
     if a.offboard_days is not None and a.offboard_days < 0:
         raise OpsquireError("--offboard-days must be 0 (never automatically) or more")
-    for line in init(a.path, a.budget, a.dry_run, a.offboard_days):
+    for line in init(a.path, a.budget, a.dry_run, a.offboard_days, a.fresh_after):
         print(line)
     return 0
 
@@ -1232,6 +1232,13 @@ def parser() -> argparse.ArgumentParser:
     ini = sub.add_parser("init", help="set up a machine: home, local rules, config, credentials, skill, first task")
     ini.add_argument("path", nargs="?", help="the home to use (default: the configured or default home)")
     ini.add_argument("--budget", type=float, metavar="USD", help="spending reminder per `opsquire ask`")
+    ini.add_argument(
+        "--fresh-after",
+        type=float,
+        metavar="USD",
+        help="the console's follow-ups start a fresh, briefed agent session once a chat's last turn cost this much "
+        "(default 5; -1 turns it off)",
+    )
     ini.add_argument(
         "--offboard-days",
         type=float,

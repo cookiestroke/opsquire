@@ -117,6 +117,22 @@ def configured_budget() -> float:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else DEFAULT_BUDGET_USD
 
 
+DEFAULT_FRESH_AFTER_USD = 5.0
+
+
+def configured_fresh_after() -> float | None:
+    """The console's follow-ups start a fresh, briefed agent session once the chat's last turn cost this much
+    (`follow_up_fresh_after_usd` in the config file; false turns it off: None)."""
+    try:
+        value = read_json(config_path()).get("follow_up_fresh_after_usd", DEFAULT_FRESH_AFTER_USD)
+    except (OSError, ValueError, AttributeError):
+        value = DEFAULT_FRESH_AFTER_USD
+    if value is False:
+        return None
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+    return float(value) if ok else DEFAULT_FRESH_AFTER_USD
+
+
 Answerer = Callable[[str, str], "str | None"]
 
 
@@ -662,7 +678,12 @@ def ask(
         session = session_for_task(task_id)
     if task_id and not session:
         prompt = f"This is about opsquire task {task_id}.\n\n{prompt}"
-    can_split = split and not session and not task_id and homegit.is_repo(home)
+    sent = prompt
+    if fresh and copies:
+        from .followup import brief
+
+        sent = brief([r for r in ask_records() if str(r.get("copies") or r.get("ask_id")) == copies], prompt)
+    can_split = split and not session and not task_id and not resume_ask and homegit.is_repo(home)
     copies = copies or res.ask_id
     for repo in repos.registry().values():
         repos.fetch(repo, repo.base)
@@ -671,7 +692,7 @@ def ask(
     conv.model = model_for(model, agent)
     conv.session = session
     try:
-        turn = converse(conv, prompt, grill, tty_answer, budget, res.rounds, allow_split=can_split)
+        turn = converse(conv, sent, grill, tty_answer, budget, res.rounds, allow_split=can_split)
     except KeyboardInterrupt:
         turn = AskResult(interrupted=True, exit_code=130)
     except BudgetSpent as e:

@@ -2978,6 +2978,99 @@ class OpsTest(unittest.TestCase):
         self.assertIn("usage limit before you could answer", calls[0]["prompt"])
         self.assertIn("and web2?", calls[0]["prompt"])
 
+    def test_a_fresh_session_is_briefed_with_the_operators_words_and_the_records(self) -> None:
+        from opsquire import followup
+
+        def ask(ask_id: str, start: str, prompt: str, **extra: Any) -> dict[str, Any]:
+            return {"ask_id": ask_id, "started": f"2026-11-13T{start}:00.000Z", "prompt": prompt} | extra
+
+        asks = [
+            ask("a3", "18:20", "also look at web3", copies="a1", text="old answer"),
+            ask("a1", "18:00", "check web1 and web2", actions=[{"kind": "RUN", "text": "opsquire run t1 -- web1"}]),
+            ask("a2", "18:10", followup.REPORT_HEAD + "\n- `opsquire run t1` ended ok", copies="a1"),
+            ask("a4", "18:30", followup.LIMIT_NOTE + "\n\nx", copies="a1", text="Done: web1 ok\n" + "y" * 7000),
+        ]
+        text = followup.brief(asks, "NEW MESSAGE")
+        self.assertTrue(text.startswith(followup.FRESH_NOTE), text)
+        self.assertIn("The operator's request: check web1 and web2", text)
+        self.assertIn(
+            "What the operator said since, in order:\n- also look at web3\n\n", text, "never the console's notes"
+        )
+        self.assertIn("handed over (read each: `opsquire show <task>`, its design.md):\n- t1\n", text)
+        self.assertIn("Your last answer:\nDone: web1 ok", text)
+        self.assertNotIn("old answer", text)
+        self.assertLess(len(text), 6500, "a long last answer is cut")
+        self.assertTrue(text.endswith("\n\nNow:\nNEW MESSAGE"), text[-60:])
+
+    def test_a_follow_up_after_a_costly_turn_starts_a_fresh_briefed_session(self) -> None:
+        self.agents_file()
+        log = self.tmp / "agent.jsonl"
+        self.env |= {"FAKE_LOG": str(log), "XDG_CONFIG_HOME": str(self.tmp / "cfg")}
+        tid = self.new("check", "print(1)\n").name
+        self.assertEqual(self.cli("lint", tid).returncode, 0)
+        asks = self.home / "var/asks"
+        asks.mkdir(parents=True)
+        at = (dt.datetime.now(dt.UTC) - dt.timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        first: dict[str, Any] = {
+            "ask_id": "a1",
+            "agent": "fake",
+            "status": "ok",
+            "started": at,
+            "ended": at,
+            "session": "sess-a1",
+        }
+        first |= {
+            "prompt": "check web1",
+            "cost_usd": 6.0,
+            "text": "Built it.",
+            "actions": [{"kind": "RUN", "text": f"opsquire run {tid}"}],
+        }
+        (asks / "a1.json").write_text(json.dumps(first))
+        self.assertEqual(self.cli("run", tid).returncode, 0)
+        proc, call = self.console()
+        try:
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                mine = [a for a in call("/api/state")["asks"] if a["conversation"] == "a1" and a["ask_id"] != "a1"]
+                if mine and mine[0]["status"] == "ok":
+                    break
+                time.sleep(0.3)
+            else:
+                self.fail("the chat was not followed up")
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("--resume", calls[0]["argv"], "a new agent session")
+        sent = calls[0]["prompt"]
+        self.assertIn("The operator's request: check web1", sent)
+        self.assertIn(f"- {tid}\n", sent)
+        self.assertIn("Your last answer:\nBuilt it.", sent)
+        self.assertIn(f"`opsquire run {tid}` ended ok", sent)
+        self.assertTrue(
+            mine[0]["prompt"].startswith("The operator ran what you handed over"), "the chat keeps the short message"
+        )
+
+    def test_the_fresh_session_threshold_is_a_setting(self) -> None:
+        self.env["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
+        config = self.tmp / "cfg/opsquire/config.json"
+        proc, call = self.console()
+        try:
+            self.assertEqual(call("/api/settings"), {"follow_up_fresh_after_usd": 5.0}, "on at $5 by default")
+            self.assertEqual(
+                call("/api/settings", {"follow_up_fresh_after_usd": 7.5}), {"follow_up_fresh_after_usd": 7.5}
+            )
+            self.assertEqual(json.loads(config.read_text())["follow_up_fresh_after_usd"], 7.5)
+            self.assertEqual(
+                call("/api/settings", {"follow_up_fresh_after_usd": None}), {"follow_up_fresh_after_usd": None}
+            )
+            self.assertIs(json.loads(config.read_text())["follow_up_fresh_after_usd"], False)
+            self.assertIn("0 or more", call("/api/settings", {"follow_up_fresh_after_usd": -1})["error"])
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+
     def test_threads_writing_one_file_never_share_a_temporary_file(self) -> None:
         from opsquire.model import write_json
 
