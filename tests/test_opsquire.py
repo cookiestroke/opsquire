@@ -2849,6 +2849,31 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(errors, [], "the pieces of a split ask write one approvals config at once")
         self.assertEqual([p.name for p in self.tmp.iterdir() if p.name.endswith(".tmp")], [])
 
+    def test_an_ask_where_var_is_not_writable_says_so(self) -> None:
+        self.agents_file()
+        var = self.home / "var"
+        var.mkdir()
+        var.chmod(0o555)
+        try:
+            r = self.cli("ask", "--no-grill", "--no-split", "hello")
+        finally:
+            var.chmod(0o755)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn(f"cannot start an ask here: {var / 'asks'} is not writable", r.stderr)
+
+    def test_a_failed_agent_says_so_and_how_to_continue(self) -> None:
+        self.agents_file()
+        self.env["FAKE_ERROR"] = "You've hit your limit"
+        r = self.cli("ask", "--no-grill", "--no-split", "hello")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout.strip(), "You've hit your limit")
+        ask_id = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())["ask_id"]
+        self.assertIn(
+            f"the agent failed (exit 1); once what it says above is fixed, run opsquire ask --resume {ask_id}", r.stderr
+        )
+        self.assertNotIn("follow up:", r.stderr)
+
     def test_a_chat_with_a_reply_is_unread_for_the_whole_home_until_opened(self) -> None:
         asks = self.home / "var/asks"
         asks.mkdir(parents=True)

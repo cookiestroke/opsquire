@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from . import pinned, tools
-from .model import read_json, var_dir, write_json
+from .model import OpsquireError, read_json, var_dir, write_json
 
 POLL_S = 0.3
 YES = {"y", "yes", "allow", "ok"}
@@ -170,7 +170,13 @@ class Watcher:
         self.thread = threading.Thread(target=self._loop, name="opsquire-approvals", daemon=True)
 
     def __enter__(self) -> Watcher:
-        self.box.mkdir(parents=True, exist_ok=True)
+        try:
+            self.box.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise OpsquireError(
+                f"cannot start an ask here: {self.box.parent} is not writable ({e.strerror}); an ask keeps its "
+                "approvals and record in the home's var/"
+            ) from None
         Active.key = self.key
         self.thread.start()
         return self

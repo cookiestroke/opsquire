@@ -33,6 +33,10 @@ def opsquire(*args: str) -> str:
     return r.stdout.strip()
 
 
+if os.environ.get("FAKE_ERROR"):
+    print(json.dumps({"type": "result", "result": os.environ["FAKE_ERROR"], "session_id": session, "is_error": True}))
+    sys.exit(1)
+
 if os.environ.get("FAKE_SLEEP") and (("slow" in piece) if piece else not os.environ.get("FAKE_SPLIT")):
     try:
         time.sleep(float(os.environ["FAKE_SLEEP"]))

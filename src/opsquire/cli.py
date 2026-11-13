@@ -683,13 +683,20 @@ def cmd_ask(a: argparse.Namespace) -> int:
             f"opsquire: agent failed (exit {res.exit_code}) without an answer; see its messages above", file=sys.stderr
         )
         return 1
-    print(res.text.strip())
+    print(res.text.strip(), flush=True)
+    if res.exit_code:
+        again = f"opsquire ask --resume {res.ask_id}" if res.session else "the same ask again"
+        print(
+            f"\nopsquire: the agent failed (exit {res.exit_code}); once what it says above is fixed, run {again}",
+            file=sys.stderr,
+        )
+        return 1
     if res.session:
         hint = f'\nfollow up: opsquire ask --resume {res.ask_id} "..."'
         for tid in res.task_ids:
             hint += f'\n       or: opsquire ask --task {tid} "..."'
         print(hint, file=sys.stderr)
-    return 0 if res.exit_code == 0 else 1
+    return 0
 
 
 def cmd_wait(a: argparse.Namespace) -> int:
