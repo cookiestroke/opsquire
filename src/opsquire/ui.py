@@ -283,7 +283,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path == "/api/run":
                 before = set(self.jobs.jobs)
-                job = self.jobs.start(str(body.get("task", "")), str(body.get("mode", "")))
+                expect = body.get("expect")
+                if expect is not None and not (isinstance(expect, list) and all(isinstance(x, str) for x in expect)):
+                    raise OpsquireError("expect must be a list of strings")
+                job = self.jobs.start(str(body.get("task", "")), str(body.get("mode", "")), expect)
                 self.send_json({"job_id": job.job_id, "joined": job.job_id in before})
             elif url.path == "/api/judge":
                 job = self.jobs.start(str(body.get("task", "")), "judge")
@@ -360,6 +363,7 @@ class UIServer(ThreadingHTTPServer):
         self.jobs = Jobs()
         self.code = code_hashes()
         self.generation = 0
+        self.followed = -1
         self.seen: tuple[str, dict[str, Any]] | None = None
         self.moved = threading.Condition()
         self.health: dict[str, Any] = {"state_s": None, "state_at": None, "state_error": ""}
@@ -405,7 +409,10 @@ class UIServer(ThreadingHTTPServer):
             job_moved = self.jobs.changed.wait(WATCH_INTERVAL_S)
             self.jobs.changed.clear()
             try:
-                self.look(force=job_moved)
+                seen = self.look(force=job_moved)
+                if seen != self.followed:
+                    self.followed = seen
+                    self.jobs.follow_up()
             except Exception:
                 traceback.print_exc(file=sys.stderr)
 

@@ -385,7 +385,10 @@ html.dev .tile .num { font-size: 1.5rem; }
 .choice button.on.c-inherit { background: var(--panel2); color: var(--fg); }
 .msg .quick button { white-space: normal; text-align: left; max-width: 100%; overflow-wrap: anywhere; }
 .runs-cards { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
-.runcard { display: block; padding: 4px 10px; border-radius: var(--r-btn); border-left: 4px solid var(--k); background: var(--kb); color: var(--k); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; overflow-wrap: anywhere; }
+.runcard { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-radius: var(--r-btn); border-left: 4px solid var(--k); background: var(--kb); }
+.runcard .cmdline { color: var(--k); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; overflow-wrap: anywhere; }
+.runcard .runstate { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--fg); }
+.runcard .runerr { color: var(--bad); overflow-wrap: anywhere; min-width: 0; flex: 1 1 200px; }
 .msg.answerbox form, .follow { display: flex; gap: 6px; width: 100%; }
 .msg.answerbox input, .follow input { flex: 1 1 auto; min-width: 0; }
 .msg.answerbox { padding-left: 48px; }
@@ -900,7 +903,7 @@ function applyHash() {
     S.pane = { kind: 'task', id };
   } else if (kind === 'run') openLog(id, undefined, true);
   else if (kind === 'job') openJob(id, true);
-  else if (kind === 'ask') { S.pane = { kind: 'ask', id, built: false }; }
+  else if (kind === 'ask') { const live = liveAskJob(conversationOf(id)); if (live) openJob(live.job_id, true, 'ask'); else S.pane = { kind: 'ask', id, built: false }; }
   render();
 }
 function toggle(key, hash) {
@@ -1098,12 +1101,12 @@ function decideButton(taskId) {
   if (activeJobFor(taskId)) return null;
   return btn('Decide', () => decide(taskId).catch(() => {}), 'sm decide', { title: 'an agent reads the record and closes the task, or says why it stays open' });
 }
-async function startRun(taskId, mode) {
+async function startRun(taskId, mode, expect, back) {
   try {
-    const r = await post('/api/run', { task: taskId, mode });
+    const r = await post('/api/run', expect ? { task: taskId, mode, expect } : { task: taskId, mode });
     toast(r && r.joined ? `${mode} run already going: opened it` : `started ${mode} run`);
     refresh();
-    if (r && r.job_id) openJob(r.job_id);
+    if (r && r.job_id) openJob(r.job_id, false, null, back);
   } catch (e) { toast(`run failed: ${e.message}`); }
 }
 async function answer(jobId, text) {
@@ -1191,7 +1194,8 @@ function renderInbox() {
     parts.push(sec('Recent asks', null, convs.length > 4 ? btn(S.allAsks ? 'fewer' : `all ${convs.length}`, () => { S.allAsks = !S.allAsks; render(); }, 'sm') : null));
     parts.push(el('div', { class: 'block' }, recentAsks.map(c => {
       const a = c.last, live = liveAskJob(c.id);
-      const state = live ? (live.status === 'waiting' ? ['warn', 'waiting for you'] : ['live', 'working']) : a.status === 'ok' ? ['good', 'answered'] : a.status === 'waiting' ? ['warn', 'waiting for you'] : ['bad', a.status || '?'];
+      const runs = !live && a.status === 'ok' ? runsState(a.actions, a.ended) : 'none';
+      const state = live ? (live.status === 'waiting' ? ['warn', 'waiting for you'] : ['live', 'working']) : runs === 'unrun' ? ['warn', 'run waiting'] : runs === 'going' ? ['live', 'run going'] : a.status === 'ok' ? ['good', 'answered'] : a.status === 'waiting' ? ['warn', 'waiting for you'] : ['bad', a.status || '?'];
       return el('div', { class: 'lrow', role: 'button', tabindex: '0', title: c.first.prompt || '', onclick: () => live ? openJob(live.job_id, false, 'ask') : openAsk(c.id), onkeydown: e => { if (e.key === 'Enter') e.currentTarget.click(); } },
         el('span', { class: 'askhead' }, squire(!!live && live.status !== 'waiting')),
         el('div', { class: 'lmain' }, el('div', { class: 'lline', style: 'color:var(--fg)' }, c.first.prompt || '(follow-up)'),
@@ -1781,7 +1785,8 @@ function renderPane() {
 }
 function backTo(p) {
   if (!p.back) return null;
-  return { label: p.back.kind === 'task' ? 'task' : p.back.kind === 'job' ? 'job' : 'back', go: () => { stopPane(); S.pane = p.back; if (p.back.kind === 'task') setHash('task/' + encodeURIComponent(p.back.id)); else if (p.back.kind === 'job') setHash('job/' + encodeURIComponent(p.back.id)); p.back.built = false; render(); } };
+  const chat = p.back.kind === 'ask' || p.back.mode === 'ask';
+  return { label: p.back.kind === 'task' ? 'task' : chat ? 'chat' : p.back.kind === 'job' ? 'job' : 'back', go: () => { stopPane(); S.pane = p.back; if (p.back.kind === 'task') setHash('task/' + encodeURIComponent(p.back.id)); else if (p.back.kind === 'ask') setHash('ask/' + encodeURIComponent(p.back.id)); else if (p.back.kind === 'job') setHash('job/' + encodeURIComponent(p.back.id)); p.back.built = false; render(); } };
 }
 function renderTaskPane(t) {
   const parts = [], closable = t.kind !== 'general' && !t.archived;
@@ -1995,10 +2000,10 @@ async function openFile(t, name) {
   } catch (e) { body.replaceWith(el('div', { class: 'err' }, e.message)); }
 }
 /* a job (a run started from this page) in the pane: live terminal output, prompt answers */
-function openJob(jobId, quiet, mode) {
+function openJob(jobId, quiet, mode, back) {
   if (S.pane && S.pane.kind === 'job' && S.pane.id === jobId) { if (!quiet) render(); return; }
   stopPane();
-  S.pane = { kind: 'job', id: jobId, built: false, mode: mode || null };
+  S.pane = { kind: 'job', id: jobId, built: false, mode: mode || null, back: back || null };
   setHash('job/' + encodeURIComponent(jobId));
   if (!quiet) render();
 }
@@ -2023,7 +2028,7 @@ function buildJobPane(d) {
     askView(d, S.askView || 'chat');
   } else {
     paneShell([el('span', { class: 'muted small' }, 'job '), j ? [taskLink(j.task_id || '?'), ' ', modeTag(j.mode), ' ', argsTag(j.args), ' '] : [el('span', { class: 'id' }, d.id), ' '], d.pill],
-      d.pre, 'log', d.foot);
+      d.pre, 'log', d.foot, backTo(d));
   }
   pollJob(d);
 }
@@ -2038,7 +2043,7 @@ function jobFoot(d) {
   const parts = promptControls(d.id, d.status, inChat ? '' : d.prompt, 'pane');
   if (d.status === 'done') {
     parts.push(el('span', { class: 'muted small' }, 'finished', d.exit === null || d.exit === undefined ? '' : `, exit ${d.exit}`));
-    if (d.run_id) parts.push(btn('open run record', () => openLog(d.run_id, { kind: 'job', id: d.id }), 'sm'));
+    if (d.run_id) parts.push(btn('open run record', () => openLog(d.run_id, { kind: 'job', id: d.id, mode: d.ask ? 'ask' : null, back: d.back || null }), 'sm'));
   }
   fill(d.ctl, parts);
   d.ctl.hidden = !parts.length;
@@ -2064,6 +2069,7 @@ async function pollJob(d) {
     if (!d.doneNode.data && !d.tailNode.data && d.status === 'done') d.tailNode.data = '(no output)';
     if (d.ask) {
       d.ask_id = d.ask_id || r.ask_id || null;
+      if (d.ask_id) setHash('ask/' + encodeURIComponent(conversationOf(d.ask_id)));
       const moved = await pollAskChat(d).catch(() => false);
       if (moved || changed || d.first) renderChat(d);
     }
@@ -2127,7 +2133,13 @@ function squire(talking) {
 function chatItem(d, it) {
   if (it.kind === 'you') return el('div', { class: 'msg you' }, el('div', { class: 'bubble' }, it.text));
   if (it.kind === 'step') return el('div', { class: 'msg step' }, `${it.piece ? it.piece + ' · ' : ''}${it.text}`);
-  if (it.kind === 'end') return el('div', { class: `msg end ${it.text === 'ok' ? 'good' : 'warn'}` }, it.text === 'ok' ? 'done' : it.waiting ? `waiting: ${it.waiting}` : it.text);
+  if (it.kind === 'end') {
+    const runs = it.last && it.text === 'ok' && it.reply ? runsState(it.reply.actions, it.reply.at) : 'none';
+    if (runs === 'unrun') return el('div', { class: 'msg end warn' }, 'waiting for your run');
+    if (runs === 'going') return el('div', { class: 'msg end warn' }, 'your run is going');
+    if (runs === 'ran') return el('div', { class: 'msg end good' }, 'your run finished');
+    return el('div', { class: `msg end ${it.text === 'ok' ? 'good' : 'warn'}` }, it.text === 'ok' ? 'done' : it.waiting ? `waiting: ${it.waiting}` : it.text);
+  }
   if (it.kind === 'approve') return el('div', { class: 'msg agent approve' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' },
     el('div', {}, 'Wants to use ', el('strong', {}, it.text)),
     it.detail ? el('div', { class: 'what' }, it.detail) : null,
@@ -2138,10 +2150,7 @@ function chatItem(d, it) {
     body.push(el('div', { class: 'quick' }, btn(`✓ ${it.recommend || 'recommended'}`, () => replyAsk(d, ''), 'sm primary', { title: 'accept the recommended answer' })));
   }
   const runs = (it.actions || []).filter(a => a.kind === 'RUN');
-  if (runs.length) body.push(el('div', { class: 'runs-cards' }, runs.map(a => {
-    const m = /opsquire run (\S+)(.*)/.exec(a.text || ''), id = m ? m[1] : '';
-    return el('a', { class: `runcard k-${/--apply/.test(a.text) ? 'apply' : /--verify/.test(a.text) ? 'verify' : 'dry'}`, href: '#inbox', onclick: e => { e.preventDefault(); if (id && task(id)) selectTask(id); else switchView('inbox'); } }, `▶ ${a.text}`);
-  })));
+  if (runs.length) body.push(el('div', { class: 'runs-cards' }, runs.map(a => runCard(d, a, it.at))));
   if (it.cost_usd || it.model) body.push(el('div', { class: 'faint small', title: 'What the agent reported for the tokens this ask used, at API list prices. Whether that is money depends on how the agent is billed, which its retinue entry says.' },
     [it.agent && retinue().length > 1 ? `${it.agent} · ` : '', it.model ? `${modelName(it.model)} · ` : '', spentText(it)].join('').replace(/ · $/, '')));
   return el('div', { class: 'msg agent' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' }, body));
@@ -2158,6 +2167,91 @@ function conversations(asks) {
 }
 const conversationOf = askId => ((S.data.asks || []).find(a => a.ask_id === askId) || {}).conversation || askId;
 const liveAskJob = convId => jobs().find(j => j.mode === 'ask' && j.status !== 'done' && j.ask_id && conversationOf(j.ask_id) === convId) || null;
+/* the conversation the pane shows: a chat, or a run started from one once it ended (its chat comes back when the
+   agent resumes); null for anything else */
+function paneConversation(p) {
+  if (!p) return null;
+  if (p.kind === 'ask') return conversationOf(p.id);
+  if (p.kind !== 'job') return null;
+  const j = jobById(p.id), askId = p.ask_id || (j && j.mode === 'ask' && j.ask_id);
+  if (askId) return conversationOf(askId);
+  if (p.back && (p.back.kind === 'ask' || p.back.mode === 'ask') && (!j || j.status === 'done')) return paneConversation(p.back);
+  return null;
+}
+/* a job that starts waiting opens by itself only where it does not take the place of something else */
+function mayTakePane(j) {
+  const p = S.pane;
+  if (!p || (p.kind === 'job' && p.id === j.job_id)) return true;
+  if (j.mode === 'ask') return !!j.ask_id && paneConversation(p) === conversationOf(j.ask_id);
+  const shown = p.kind === 'task' ? p.id : p.kind === 'job' ? (jobById(p.id) || {}).task_id : null;
+  return !!j.task_id && shown === j.task_id;
+}
+function shlexSplit(text) {
+  const out = []; let cur = null, q = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === q) q = null; else if (c === '\\' && q === '"' && i + 1 < text.length) cur += text[++i]; else cur += c; continue; }
+    if (/\s/.test(c)) { if (cur !== null) { out.push(cur); cur = null; } continue; }
+    if (cur === null) cur = '';
+    if (c === "'" || c === '"') q = c; else if (c === '\\' && i + 1 < text.length) cur += text[++i]; else cur += c;
+  }
+  if (cur !== null) out.push(cur);
+  return out;
+}
+/* a RUN line an agent ended with: the run it means, and what became of it since the agent said it */
+function runLine(text) {
+  const m = /^opsquire run (\S+)((?:\s+--\w[\w-]*)*)(?:\s+--\s+(.*))?\s*$/.exec(String(text || '').trim());
+  if (!m) return null;
+  const flags = (m[2] || '').trim().split(/\s+/), t = task(m[1]);
+  const mode = flags.includes('--apply') ? 'apply' : flags.includes('--verify') ? 'verify' : t && !t.changes_prod ? 'read' : 'dry';
+  return { task: m[1], mode, args: m[3] ? shlexSplit(m[3]) : [] };
+}
+function runOfLine(line, since) {
+  const t = task(line.task), walk = !line.args.length && t && (t.stages || []).length && line.mode === 'apply';
+  const modes = walk ? ['dry', 'apply', 'verify'] : [line.mode];
+  const live = jobs().find(j => j.task_id === line.task && modes.includes(j.mode) && j.status !== 'done') || null;
+  const same = r => r.task_id === line.task && modes.includes(r.mode) && String(r.started || '') >= String(since || '')
+    && (walk || JSON.stringify(r.argv || []) === JSON.stringify(line.args));
+  const runs = Object.values((S.data && S.data.runs) || {}).filter(same).sort((a, b) => String(a.started || '').localeCompare(String(b.started || '')));
+  return { live, run: runs[runs.length - 1] || null };
+}
+/* where the runs an agent's reply handed over stand: 'none' (no RUN lines), 'unrun', 'going' or 'ran' */
+function runsState(actions, since) {
+  const lines = (actions || []).filter(a => a.kind === 'RUN').map(a => runLine(a.text)).filter(Boolean);
+  if (!lines.length) return 'none';
+  const seen = lines.map(l => runOfLine(l, since));
+  if (seen.some(x => x.live || (x.run && x.run.status === 'running'))) return 'going';
+  return seen.some(x => !x.run) ? 'unrun' : 'ran';
+}
+/* what the chat's run cards show, so a change in a run or job redraws the chat and nothing else does */
+function runsKey(d) {
+  return JSON.stringify((d.chatItems || []).filter(it => it.kind === 'agent' && (it.actions || []).length).map(it => (it.actions || []).map(a => {
+    const line = a.kind === 'RUN' && runLine(a.text); if (!line) return null;
+    const { live, run } = runOfLine(line, it.at);
+    const problem = cardProblem(line);
+    return [live && live.status, run && run.run_id, run && run.status, problem && problem.at];
+  })));
+}
+function cardProblem(line) { const p = ((S.data && S.data.start_problems) || {})[line.task]; return p && p.mode === line.mode ? p : null; }
+function chatBack(d) { return d.kind === 'ask' ? { kind: 'ask', id: d.id, built: false } : { kind: 'job', id: d.id, built: false, mode: 'ask' }; }
+function runCard(d, a, since) {
+  const line = runLine(a.text), kind = line ? line.mode : 'dry';
+  const head = el('div', { class: 'cmdline' }, `▶ ${a.text}`);
+  if (!line || !task(line.task)) return el('div', { class: `runcard k-${kind}` }, head, el('div', { class: 'runstate faint small' }, line ? 'this task is not in the home' : ''));
+  const { live, run } = runOfLine(line, since), back = chatBack(d);
+  const state = [];
+  if (live) state.push(btn(live.status === 'waiting' ? 'waiting for you' : 'running…', () => openJob(live.job_id, false, null, back), 'sm', { title: 'open the run' }));
+  else if (run) {
+    state.push(el('span', { class: `pill ${tone(run.status)}` }, run.status || '?'));
+    if (run.last_error && run.status !== 'ok') state.push(el('span', { class: 'small runerr', title: run.last_error }, truncate(run.last_error, 140)));
+    state.push(btn('record', () => openLog(run.run_id, back), 'sm', { title: 'open the run record' }));
+  } else state.push(el('span', { class: 'faint small' }, 'not run yet'));
+  const problem = !live && cardProblem(line);
+  if (problem) state.push(el('span', { class: 'small runerr', title: problem.why }, `did not start: ${truncate(problem.why, 160)}`));
+  const settled = run && run.status === 'ok' && line.mode === 'apply';
+  if (!live && !settled) state.push(btn(run ? 'run again' : 'Run', () => startRun(line.task, line.mode, line.args, back), `sm ${run ? '' : 'primary'}`, { title: `run it here: ${a.text}` }));
+  return el('div', { class: `runcard k-${kind}` }, head, el('div', { class: 'runstate' }, state));
+}
 function renderChat(d) {
   const focused = document.activeElement && document.activeElement.id === 'askreply' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const talking = d.status && d.status !== 'done' && d.status !== 'waiting';
@@ -2174,7 +2268,13 @@ function renderChat(d) {
   };
   const lastApprove = d.chatItems.map(it => it.kind).lastIndexOf('approve');
   const pendingApprove = d.status === 'waiting' && lastApprove >= 0 && !d.chatItems.slice(lastApprove + 1).some(it => it.kind === 'you');
-  d.chatItems.forEach((it, i) => { if (it.kind === 'step') { steps.push(it); return; } flush(); kids.push(chatItem(d, i === lastApprove ? { ...it, pending: pendingApprove } : it)); });
+  let lastReply = null;
+  d.chatItems.forEach((it, i) => {
+    if (it.kind === 'step') { steps.push(it); return; }
+    if (it.kind === 'agent') lastReply = it; else if (it.kind === 'you') lastReply = null;
+    flush();
+    kids.push(chatItem(d, i === lastApprove ? { ...it, pending: pendingApprove } : it.kind === 'end' ? { ...it, reply: lastReply, last: i === d.chatItems.length - 1 } : it));
+  });
   flush();
   const agents = [...kids].filter(n => n.classList.contains('agent'));
   const typing = talking && (!agents.length || d.chatItems[d.chatItems.length - 1].kind !== 'agent');
@@ -2183,6 +2283,7 @@ function renderChat(d) {
   if (d.status === 'waiting' && d.prompt && !pendingApprove) kids.push(el('div', { class: 'msg answerbox' }, el('form', { onsubmit: e => { e.preventDefault(); replyAsk(d, e.target.reply.value); } },
     writeBox('reply.' + d.id, { name: 'reply', id: 'askreply', placeholder: 'your answer (empty = the recommended one)' }, t => replyAsk(d, t.value)), btn('Send', null, 'sm primary', { type: 'submit' }))));
   fill(d.chat, kids);
+  d.runsKey = runsKey(d);
   const reply = focused && document.getElementById('askreply');
   if (reply) { reply.focus({ preventScroll: true }); reply.setSelectionRange(focused[0], focused[1]); }
 }
@@ -2241,7 +2342,10 @@ async function load() {
     } else if (r && r.kind !== 'same') { S.version = null; loading = false; return load(); }
     S.data.jobs = r.jobs; S.data.start_problems = r.start_problems || {}; S.data.code = r.code; S.version = r.version;
     const asking = (r.jobs || []).find(j => j.status === 'waiting' && !S.shownPrompts.has(j.job_id));
-    if (asking) { S.shownPrompts.add(asking.job_id); if (!(S.pane && S.pane.kind === 'job' && S.pane.id === asking.job_id)) openJob(asking.job_id, true); }
+    if (asking) { S.shownPrompts.add(asking.job_id); if (mayTakePane(asking)) openJob(asking.job_id, true, asking.mode === 'ask' ? 'ask' : null); else toast(`${asking.mode === 'ask' ? 'an ask' : asking.task_id} is waiting for you`); }
+    if (S.pane && S.pane.built && S.pane.chat && S.pane.runsKey !== runsKey(S.pane)) renderChat(S.pane);
+    const conv = paneConversation(S.pane), live = conv && liveAskJob(conv);
+    if (live && !(S.pane.kind === 'job' && S.pane.id === live.job_id)) openJob(live.job_id, true, 'ask');
     S.error = null; S.pageCode = S.pageCode || (r.code && r.code.page);
     retry = 2000;
     if (S.hash === null) applyHash(); else render();

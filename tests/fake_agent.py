@@ -132,9 +132,10 @@ if os.environ.get("FAKE_REPO"):
 
 tool = {"type": "tool_use", "name": "Bash", "input": {"command": "opsquire find web1 restart"}}
 print(json.dumps({"type": "assistant", "message": {"content": [tool]}}), flush=True)
+reused = os.environ.get("FAKE_TASK", "20261030-1749_web1_restart-bots")
 text = (
-    f"Reusing 20261030-1749_web1_restart-bots. author={os.environ.get('OPSQUIRE_AUTHOR')} argv={json.dumps(argv)}\n"
-    "RUN: opsquire run 20261030-1749_web1_restart-bots\n"
-    "RUN: opsquire run 20261030-1749_web1_restart-bots --apply" + pr_line
+    f"Reusing {reused}. author={os.environ.get('OPSQUIRE_AUTHOR')} argv={json.dumps(argv)}\n"
+    f"RUN: opsquire run {reused}\n"
+    f"RUN: opsquire run {reused} --apply" + pr_line
 )
 print(json.dumps({"type": "result", "result": text, "session_id": session, "total_cost_usd": 0.01}), flush=True)

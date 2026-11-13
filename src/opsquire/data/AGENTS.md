@@ -296,7 +296,9 @@ processes. The one thing that stays is the record of the interrupted run.
 - **From the operator's terminal**: `opsquire ask "<request>"` starts a headless agent in the home that
   does the same and prints `RUN:` lines (or `NEED:` when blocked). `opsquire ask --task <id> "..."`
   resumes that task's conversation; `opsquire ask --resume <ask-id> ["answer"]` continues an interrupted
-  or waiting ask.
+  or waiting ask. An ask ends on its RUN lines without waiting; while the console (`opsquire ui`) is up, it follows
+  them instead: when a run of a task the conversation handed over finishes, it resumes the conversation with the
+  run's outcome, and the agent reads that record and continues from it as step 6 asks.
 
 ### The interview (grill), on by default
 

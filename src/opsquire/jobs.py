@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import handover
+from . import followup, handover
 from .model import ORIGIN_CONSOLE, ORIGIN_ENV, OpsquireError, iso, now, resolve_task
 from .query import runs_for
 
@@ -85,11 +85,11 @@ class Jobs:
         self.lock = threading.Lock()
         self.changed = threading.Event()
 
-    def start(self, task_query: str, mode: str) -> Job:
+    def start(self, task_query: str, mode: str, expect: list[str] | None = None) -> Job:
         """A job for this run, or the job already running it (a second click joins it). A start that fails leaves its
         reason on the task until a job of it starts."""
         try:
-            job = self.launch(task_query, mode)
+            job = self.launch(task_query, mode, expect)
         except (OpsquireError, OSError) as e:
             self.problem(task_query, mode, str(e).splitlines()[0] if str(e) else type(e).__name__)
             raise
@@ -119,14 +119,34 @@ class Jobs:
         self.spawn(job, argv)
         return job
 
+    def follow_up(self) -> list[Job]:
+        """Resume every ask conversation whose handed-over runs finished since its last answer (see followup)."""
+        from .state import load_asks
+
+        asks = load_asks()
+        conv = {str(a.get("ask_id")): followup.conversation_of(a) for a in asks}
+        with self.lock:
+            live = [j for j in self.jobs.values() if j.status != "done"]
+        busy_conversations = {conv.get(str(j.ask_id), str(j.ask_id)) for j in live if j.mode == "ask" and j.ask_id}
+        busy_tasks = {j.task_id for j in live if j.task_id}
+        started = []
+        for ask_id, runs in followup.due(asks, runs_for, busy_conversations, busy_tasks, now()):
+            try:
+                started.append(self.start_ask(followup.report(runs), ask_id))
+            except OpsquireError:
+                break
+        return started
+
     def problem(self, task: str, mode: str, why: str) -> None:
         with contextlib.suppress(OpsquireError):
             task = resolve_task(task).id
         self.problems[task] = {"mode": mode, "why": why, "at": iso(now())}
         self.changed.set()
 
-    def launch(self, task_query: str, mode: str) -> Job:
-        """A run from the page (mode read, dry or apply), or `judge`: the agent that decides how the task ended."""
+    def launch(self, task_query: str, mode: str, expect: list[str] | None = None) -> Job:
+        """A run from the page (mode read, dry or apply), or `judge`: the agent that decides how the task ended. A run
+        takes the arguments its inbox item shows, never any the page sends; a chat's RUN line sends the ones it shows
+        as `expect`, and a run that would take others is refused rather than started with them."""
         task = resolve_task(task_query)
         if task.meta is None:
             raise OpsquireError(f"{task.id} has invalid meta.json: " + "; ".join(task.errors))
@@ -136,6 +156,11 @@ class Jobs:
         elif mode not in MODES or mode not in task.meta.modes:
             raise OpsquireError(f"{task.id} runs in {', '.join(task.meta.modes)} mode, not {mode}")
         args = handover.args_for(task, runs_for(task.id), mode)
+        if expect is not None and list(expect) != args:
+            raise OpsquireError(
+                f"the console would run it with `{shlex.join(args)}`, not `{shlex.join(expect)}`; "
+                f"run it in a terminal: {handover.command(task.id, mode, list(expect))}"
+            )
         with self.lock:
             for j in self.jobs.values():
                 if j.task_id == task.id and j.status != "done" and j.proc is not None and j.proc.poll() is not None:

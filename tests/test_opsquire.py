@@ -4123,6 +4123,100 @@ class OpsTest(unittest.TestCase):
             proc.send_signal(signal.SIGINT)
             proc.wait(20)
 
+    def test_the_console_resumes_a_chat_once_the_run_it_handed_over_finishes(self) -> None:
+        import http.client
+
+        self.agents_file()
+        body = "import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'looked')\n"
+        folder = self.new("restart-bots", body, *self.CHANGING)
+        self.assertEqual(self.cli("lint", "restart-bots").returncode, 0)
+        self.env["FAKE_TASK"] = folder.name
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
+                conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                return resp.status, json.loads(resp.read())
+
+            def until(what: Any, label: str) -> Any:
+                deadline = time.time() + 60
+                while time.time() < deadline:
+                    found = what()
+                    if found:
+                        return found
+                    time.sleep(0.25)
+                self.fail(label)
+
+            def asks() -> list[dict[str, Any]]:
+                found: list[dict[str, Any]] = call("GET", "/api/state")[1]["asks"]
+                return sorted(found, key=lambda a: str(a["started"]))
+
+            def idle() -> bool:
+                return all(j["status"] == "done" for j in call("GET", "/api/state")[1]["jobs"])
+
+            status, started = call("POST", "/api/ask", {"request": "restart web1 bots"})
+            self.assertEqual(status, 200, started)
+            until(lambda: asks() and asks()[0]["status"] == "ok" and idle(), "the ask ends")
+            first = asks()[0]
+            self.assertEqual(call("POST", "/api/run", {"task": folder.name, "mode": "dry", "expect": "x"})[0], 400)
+            status, refused = call("POST", "/api/run", {"task": folder.name, "mode": "dry", "expect": ["web2"]})
+            self.assertEqual(status, 400, refused)
+            self.assertIn(f"run it in a terminal: opsquire run {folder.name} -- web2", refused["error"])
+            status, run = call("POST", "/api/run", {"task": folder.name, "mode": "dry", "expect": []})
+            self.assertEqual(status, 200, run)
+            follow = until(lambda: len(asks()) > 1 and asks()[1]["status"] == "ok" and idle() and asks()[1], "resumed")
+            self.assertEqual(follow["conversation"], first["ask_id"])
+            dry = self.last(folder.name)
+            self.assertEqual((dry["mode"], dry["status"], dry["origin"]), ("dry", "ok", "console"))
+            self.assertIn(f"`opsquire run {folder.name}` ended ok (run {dry['run_id']})", follow["prompt"])
+            chat = call("GET", f"/api/askchat?id={first['ask_id']}&offset=0")[1]["items"]
+            self.assertIn(follow["prompt"], [c["text"] for c in chat if c["kind"] == "you"])
+            time.sleep(3)
+            self.assertEqual(len(asks()), 2, "a run is reported to its chat once")
+        finally:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(20)
+
+    def test_a_chat_is_resumed_only_for_runs_it_has_not_seen(self) -> None:
+        from opsquire import followup
+
+        at = dt.datetime(2026, 11, 13, 16, 0, tzinfo=dt.UTC)
+        run_line = [{"kind": "RUN", "text": "opsquire run t1 --apply -- build"}, {"kind": "PR", "text": "x"}]
+        first: dict[str, Any] = {"ask_id": "a1", "status": "ok", "started": "2026-11-13T15:50:00.000Z"}
+        first |= {"ended": "2026-11-13T15:54:00.000Z", "actions": run_line}
+        run: dict[str, Any] = {"run_id": "r1", "task_id": "t1", "mode": "apply", "argv": ["build"], "status": "failed"}
+        run |= {
+            "started": "2026-11-13T15:55:00.000Z",
+            "ended": "2026-11-13T15:56:00.000Z",
+            "last_error": "ssh: timeout",
+        }
+        runs = {"t1": [run]}
+
+        def due(asks: list[dict[str, Any]], convs: tuple[str, ...] = (), tasks: tuple[str, ...] = ()) -> list[Any]:
+            return followup.due(asks, lambda t: runs.get(t, []), set(convs), set(tasks), at)
+
+        self.assertEqual(due([first]), [("a1", [run])])
+        text = followup.report([run])
+        self.assertIn("`opsquire run t1 --apply -- build` ended failed (run r1): ssh: timeout", text)
+        self.assertEqual(due([first], convs=("a1",)), [], "its agent is answering")
+        self.assertEqual(due([first], tasks=("t1",)), [], "a job of the task still goes (a walk between stages)")
+        self.assertEqual(due([{**first, "status": "waiting"}]), [], "it waits for the operator")
+        self.assertEqual(due([{**first, "ended": "2026-11-09T15:54:00.000Z"}]), [], "too old to wake")
+        self.assertEqual(due([{**first, "actions": []}]), [], "it handed nothing over")
+        runs["t1"] = [{**run, "ended": "2026-11-13T15:53:00.000Z"}]
+        self.assertEqual(due([first]), [], "the agent saw a run that ended before it answered")
+        runs["t1"] = [run, {**run, "run_id": "r2", "status": "running", "ended": None}]
+        self.assertEqual(due([first]), [], "wait for the run still going")
+        runs["t1"] = [run]
+        later: dict[str, Any] = {"ask_id": "a2", "copies": "a1", "status": "ok", "started": "2026-11-13T15:57:00.000Z"}
+        later |= {"ended": "2026-11-13T15:58:00.000Z", "actions": []}
+        self.assertEqual(due([later, first]), [], "the resumed agent read it")
+        self.assertEqual(due([{**later, "ended": "2026-11-13T15:55:30.000Z"}, first]), [("a2", [run])])
+
     def test_an_ask_runs_on_the_chosen_model_and_says_how_it_was_billed(self) -> None:
         tiers = {t: {"id": f"model-{t}", "label": t.title()} for t in ("quick", "default", "deep")}
         self.agents_file(model_argv=["--model", "{model}"], models=tiers, billing={"key_env": "FAKE_PROVIDER_KEY"})
