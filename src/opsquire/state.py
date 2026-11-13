@@ -607,8 +607,7 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
         if nxt in ("dry", "apply") and stages and not (handed and handed.get("args")):
             nxt = "apply"
         if nxt:
-            whole = bool(stages) and nxt == "apply" and not (handed and handed.get("args"))
-            args: list[str] = [] if whole else handover.args_for(t, task_runs, nxt)
+            args = handover.args_for(t, task_runs, nxt)
             same = handover.same_apply(t, task_runs, args) if nxt == "apply" else None
             since = waiting_since(t, task_runs, handed)
             waited = days_since(since, at)

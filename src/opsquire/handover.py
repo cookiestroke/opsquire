@@ -159,16 +159,19 @@ def pending(task: Task, runs: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def args_for(task: Task, runs: list[dict[str, Any]], mode: str) -> list[str]:
-    """What a run in this mode takes from the inbox: the arguments of the handed-over run it shows, and for an apply
-    nobody handed over those of the dry run it follows (an apply is covered only by a dry run with its arguments).
-    Any other run of the task has none."""
+    """What a run in this mode takes from the inbox, and the console runs: the arguments of the handed-over run it
+    shows; for a staged task's apply nobody handed arguments to, none, so it walks every stage left with each stage's
+    own dry run; for any other apply nobody handed over, those of the dry run it follows (an apply is covered only by
+    a dry run with its arguments); a staged task's dry run is of its next stage. Any other run of the task has none."""
     h = pending(task, runs)
     if h:
         return [str(x) for x in h.get("args") or []] if h.get("mode") == mode else []
+    if mode == "apply" and task.meta and task.meta.stages:
+        return []
     ran = [r for r in runs if r.get("status") != "blocked"]
     if mode == "apply" and ran and ran[-1].get("mode") == "dry":
         return [str(x) for x in ran[-1].get("argv") or []]
-    stage = next_stage(task.meta, ran) if task.meta and mode in ("dry", "apply") else None
+    stage = next_stage(task.meta, ran) if task.meta and mode == "dry" else None
     return [stage] if stage else []
 
 

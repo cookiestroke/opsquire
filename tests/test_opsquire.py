@@ -3666,6 +3666,47 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(json.loads((folder / "meta.json").read_text())["outcome"]["state"], "done")
         self.assertIsNone(self.inbox_item(folder.name))
 
+    def console_apply(self, task_id: str) -> tuple[list[str], int]:
+        code = (
+            "import json, sys\nfrom opsquire.jobs import Jobs\n"
+            f"job = Jobs().start({task_id!r}, 'apply')\nassert job.proc\n"
+            "print(json.dumps([job.args, job.proc.wait(timeout=100)]))"
+        )
+        r = subprocess.run([sys.executable, "-c", code], env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        args, exit_code = json.loads(r.stdout)
+        return args, exit_code
+
+    def test_the_console_runs_the_staged_apply_its_inbox_shows(self) -> None:
+        body = "import sys\n\nimport opsquire_helpers as sq\n\nsq.target('web1', 'ok', sys.argv[1])\n"
+        folder = self.new(
+            "consoled", body, "--changes-prod", "--rollback", "none", "--stage", "build", "--stage", "deploy"
+        )
+        self.assertEqual(self.cli("lint", "consoled").returncode, 0)
+        item = self.inbox_item(folder.name)
+        assert item is not None
+        self.assertEqual((item["next"], item["args"]), ("apply", ""), "a staged task never run walks every stage")
+        self.assertEqual(self.console_apply(folder.name), ([], 0))
+        modes = [(x["mode"], x["argv"]) for x in json.loads(self.cli("runs", "consoled", "--json").stdout)]
+        self.assertEqual(
+            modes,
+            [("dry", ["build"]), ("apply", ["build"]), ("dry", ["deploy"]), ("apply", ["deploy"]), ("verify", [])],
+        )
+
+        folder = self.new(
+            "handed", body, "--changes-prod", "--rollback", "none", "--stage", "build", "--stage", "deploy"
+        )
+        self.assertEqual(self.cli("lint", "handed").returncode, 0)
+        self.assertEqual(self.cli("run", "handed", "--", "build").returncode, 0)
+        r = self.cli("handover", "handed", "--apply", "--why", "build only", "--", "build")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        item = self.inbox_item(folder.name)
+        assert item is not None
+        self.assertEqual((item["next"], item["args"]), ("apply", "build"), "a handed-over stage keeps its arguments")
+        self.assertEqual(self.console_apply(folder.name), (["build"], 0))
+        modes = [(x["mode"], x["argv"]) for x in json.loads(self.cli("runs", "handed", "--json").stdout)]
+        self.assertEqual(modes, [("dry", ["build"]), ("apply", ["build"])])
+
     def test_one_apply_walks_every_stage_and_stops_at_the_first_failure(self) -> None:
         body = (
             "import sys\n\nimport opsquire_helpers as sq\n\nstage = sys.argv[1]\n"
