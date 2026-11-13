@@ -193,6 +193,14 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: .95em; }
 .md code { background: var(--code-bg); padding: 0 3px; border-radius: 3px; }
 .md pre code { padding: 0; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
+.md .md-table { overflow-x: auto; margin: 6px 0; }
+.md table { border-collapse: collapse; font-size: .95em; font-variant-numeric: tabular-nums; }
+.md th, .md td { text-align: left; padding: 3px 12px 3px 0; vertical-align: top; border-top: 1px solid var(--line2); overflow-wrap: normal; }
+.md th:last-child, .md td:last-child { padding-right: 0; }
+.md th { color: var(--muted); font-weight: 600; font-size: .9em; border-top: 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.md th.r, .md td.r { text-align: right; white-space: nowrap; }
+.md th.c, .md td.c { text-align: center; }
+.msg .bubble:has(.md-table) { max-width: min(92%, 960px); }
 .result { background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
 #toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 14px; border-radius: 6px; z-index: 20; font-size: .95em; opacity: 0; transition: opacity .15s; pointer-events: none; }
 #toast.show { opacity: 1; }
@@ -733,7 +741,7 @@ function todayStats(data, today) {
   out.spend = Math.round(out.spend * 100) / 100; out.billed = Math.round(out.billed * 100) / 100;
   return out;
 }
-/* minimal markdown: headings, paragraphs, lists, fenced code, rules, inline code, links, bold. Only text nodes, never HTML. */
+/* minimal markdown: headings, paragraphs, lists, tables, fenced code, rules, inline code, links, bold. Only text nodes, never HTML. */
 const extLink = (href, label) => el('a', { href, target: '_blank', rel: 'noopener' }, label);
 /* Plain text with its links made clickable: bare URLs, owner/repo#123, and name#123 for a repo in the home's repos.json. */
 function linkify(text) {
@@ -763,6 +771,33 @@ function inlineMd(text) {
   if (last < text.length) out.push(...linkify(text.slice(last)));
   return out;
 }
+/* A GFM table row's cells: the outer pipes are optional and `\|` is a pipe inside a cell. */
+function tableCells(line) {
+  const s = line.trim().replace(/^\|/, ''), cells = [];
+  let cur = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && s[i + 1] === '|') { cur += '|'; i++; }
+    else if (s[i] === '|') { cells.push(cur.trim()); cur = ''; }
+    else cur += s[i];
+  }
+  if (cur.trim() || !s.endsWith('|')) cells.push(cur.trim());
+  return cells;
+}
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const NUMERIC_CELL = /^[-+−]?[$€£]?(\d[\d,]*)?\.?\d+(e[-+]?\d+)?\s*(%|[a-zµ]{1,3})?$/i;
+/* A column without its own alignment is right-aligned when every filled cell in it is a number. */
+function mdTable(header, sep, rows) {
+  const align = tableCells(sep).map(c => (c.startsWith(':') && c.endsWith(':') ? 'c' : c.endsWith(':') ? 'r' : c.startsWith(':') ? 'l' : ''));
+  const cols = align.length, fit = cells => Array.from({ length: cols }, (_, k) => cells[k] || '');
+  const body = rows.map(r => fit(tableCells(r)));
+  const cls = align.map((a, k) => {
+    if (a) return a === 'l' ? null : a;
+    const filled = body.map(r => r[k]).filter(Boolean);
+    return filled.length && filled.every(v => NUMERIC_CELL.test(v.replace(/\*\*/g, ''))) ? 'r' : null;
+  });
+  const row = (tag, cells) => el('tr', {}, cells.map((v, k) => el(tag, { class: cls[k] }, inlineMd(v))));
+  return el('div', { class: 'md-table' }, el('table', {}, el('thead', {}, row('th', fit(tableCells(header)))), el('tbody', {}, body.map(r => row('td', r)))));
+}
 function markdown(text) {
   const root = el('div', { class: 'md' });
   const lines = String(text || '').replace(/\r/g, '').split('\n');
@@ -778,6 +813,11 @@ function markdown(text) {
     }
     if ((m = /^(#{1,6})\s+(.*?)\s*#*$/.exec(line))) { flush(); root.append(el(`h${Math.min(m[1].length + 2, 6)}`, {}, inlineMd(m[2]))); i++; continue; }
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); root.append(el('hr')); i++; continue; }
+    if (line.includes('|') && TABLE_SEP.test(lines[i + 1] || '') && tableCells(line).length === tableCells(lines[i + 1]).length) {
+      flush(); const header = line, sep = lines[i + 1], rows = []; i += 2;
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) rows.push(lines[i++]);
+      root.append(mdTable(header, sep, rows)); continue;
+    }
     if ((m = /^\s*(?:[-*+]|(\d+)[.)])\s+(.*)$/.exec(line))) {
       flushPara();
       const tag = m[1] ? 'ol' : 'ul';
