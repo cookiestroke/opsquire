@@ -12,7 +12,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from . import handover, locks
+from . import handover, locks, repos
 from .docs import final_mode, run_stats
 from .lint import asks_first, last_lint
 from .model import (
@@ -438,6 +438,14 @@ def run_view(r: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def repo_slugs() -> dict[str, str]:
+    """{name: owner/repo} for the home's repos, so the console can link `name#123`; {} when repos.json is unreadable."""
+    try:
+        return {name: r.github for name, r in repos.registry().items()}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
 def ask_view(a: dict[str, Any]) -> dict[str, Any]:
     return {
         "ask_id": a.get("ask_id"),
@@ -640,4 +648,5 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
         "scripts": scripts,
         "locks": held,
         "running": [str(r.get("run_id")) for r in runs if r.get("status") == "running"],
+        "repos": repo_slugs(),
     }

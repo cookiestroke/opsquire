@@ -1,9 +1,12 @@
 """`opsquire doctor`: is this machine's opsquire working as it should, read from files alone so it answers from any
-shell, an agent's sandbox included: the console, the agents' stop hook, the contract, the author, unread results."""
+shell, an agent's sandbox included: the console, the agents' stop hook, the contract, the libraries the home's
+scripts need, the author, unread results."""
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
+import re
 from typing import Any
 
 from . import contract, reads
@@ -62,8 +65,36 @@ def hook_check() -> tuple[bool, str]:
     return False, f"stop hook: missing in {', '.join(missing)} (`opsquire integrate` installs it)"
 
 
+REQUIREMENTS = "requirements.txt"
+
+
+def libraries_check() -> tuple[bool, str]:
+    """Scripts run on opsquire's own Python, so the libraries they import must be installed next to it. The home
+    lists them in requirements.txt, and installing opsquire with `--with-requirements` keeps them."""
+    path = home_dir() / REQUIREMENTS
+    if not path.is_file():
+        return True, f"libraries: none declared ({path} lists what the home's scripts import)"
+    names = [
+        m.group(0)
+        for line in path.read_text().splitlines()
+        if (m := re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", line.strip()))
+    ]
+    missing = []
+    for name in names:
+        try:
+            importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            missing.append(name)
+    if missing:
+        return False, (
+            f"libraries: {', '.join(missing)} from {path} not installed; scripts that import them fail. Reinstall "
+            f"opsquire the way you installed it, adding --with-requirements {path}"
+        )
+    return True, f"libraries: all {len(names)} in {path.name} installed"
+
+
 def report(author: str) -> tuple[bool, list[str]]:
-    checks = [console_check(), hook_check()]
+    checks = [console_check(), hook_check(), libraries_check()]
     state = contract.state(home_dir())
     checks.append((state == "current", f"contract: AGENTS.md {state}"))
     if author_key(author):

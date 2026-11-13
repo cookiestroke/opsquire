@@ -19,7 +19,7 @@
   --r-card: 8px; --r-btn: 999px; --k-on: #ffffff; --k-on-dry: #1d1600;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #15181c; --panel: #1d2126; --panel2: #23282e; --line: #343a42; --line2: #2b3138;
     --fg: #e3e7eb; --muted: #a3acb8; --faint: #76808c;
@@ -30,6 +30,17 @@
     --k-read: #7fb0ff; --k-read-bg: #17284a; --k-dry: #f5d04a; --k-dry-bg: #3a3110; --k-dry-edge: #d9b52c;
     --k-apply: #ff9a5c; --k-apply-bg: #45230f; --k-ask: #b9a2ff; --k-ask-bg: #2c2148; --k-on: #11141a; --k-on-dry: #11141a; --k-verify: #5fd48a; --k-verify-bg: #12301f; --k-fail: #ff7b7b; --k-fail-bg: #48191a;
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #15181c; --panel: #1d2126; --panel2: #23282e; --line: #343a42; --line2: #2b3138;
+  --fg: #e3e7eb; --muted: #a3acb8; --faint: #76808c;
+  --accent: #6ea6e8; --accent-bg: #1f2f45; --accent-fg: #a9cbf2;
+  --good: #6ccc8a; --good-bg: #1a3324; --bad: #f08a8a; --bad-bg: #44201f;
+  --warn: #f0c060; --warn-bg: #3d2f12; --grey: #aab3bf; --grey-bg: #2b3139;
+  --code-bg: #12151a; --shadow: 0 8px 28px rgba(0, 0, 0, .55);
+  --k-read: #7fb0ff; --k-read-bg: #17284a; --k-dry: #f5d04a; --k-dry-bg: #3a3110; --k-dry-edge: #d9b52c;
+  --k-apply: #ff9a5c; --k-apply-bg: #45230f; --k-ask: #b9a2ff; --k-ask-bg: #2c2148; --k-on: #11141a; --k-on-dry: #11141a; --k-verify: #5fd48a; --k-verify-bg: #12301f; --k-fail: #ff7b7b; --k-fail-bg: #48191a;
 }
 * { box-sizing: border-box; }
 html { font-size: 15px; }
@@ -431,6 +442,7 @@ html:not(.dev) main#main { padding-top: 16px; }
   <span class="brand" id="brand">Opsquire</span>
   <div class="seg" role="tablist" id="seg"></div>
   <input id="search" type="search" placeholder="Search id, purpose, area, target  ( / )" aria-label="Search">
+  <button id="themetoggle" type="button" title="Colour theme: follow the system, light or dark">Auto</button>
   <button id="devtoggle" type="button" aria-pressed="false" title="Show ids, commands, runs and jobs in full">Developer</button>
   <span id="conn" title="Connection to the local server">connecting</span>
 </header>
@@ -699,17 +711,33 @@ function todayStats(data, today) {
   return out;
 }
 /* minimal markdown: headings, paragraphs, lists, fenced code, rules, inline code, links, bold. Only text nodes, never HTML. */
+const extLink = (href, label) => el('a', { href, target: '_blank', rel: 'noopener' }, label);
+/* Plain text with its links made clickable: bare URLs, owner/repo#123, and name#123 for a repo in the home's repos.json. */
+function linkify(text) {
+  const out = [], slugs = (S.data && S.data.repos) || {};
+  const re = /(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"])|\b([\w.-]+\/[\w.-]+|[\w.-]+)#(\d+)\b/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    const slug = m[2] && (m[2].includes('/') ? m[2] : slugs[m[2]]);
+    if (!m[1] && !slug) continue;
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(m[1] ? extLink(m[1], m[1]) : extLink(`https://github.com/${slug}/issues/${m[3]}`, m[0]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
 function inlineMd(text) {
   const out = []; const re = /(`[^`]+`)|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*/g;
   let last = 0, m;
   while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m.index > last) out.push(...linkify(text.slice(last, m.index)));
     if (m[1]) out.push(el('code', {}, m[1].slice(1, -1)));
-    else if (m[2]) out.push(el('a', { href: m[3], target: '_blank', rel: 'noopener' }, m[2]));
-    else out.push(el('strong', {}, m[4]));
+    else if (m[2]) out.push(extLink(m[3], m[2]));
+    else out.push(el('strong', {}, linkify(m[4])));
     last = re.lastIndex;
   }
-  if (last < text.length) out.push(text.slice(last));
+  if (last < text.length) out.push(...linkify(text.slice(last)));
   return out;
 }
 function markdown(text) {
@@ -822,6 +850,13 @@ const lastJudgeFor = taskId => { const js = judgeJobsFor(taskId); return js.leng
 const isDeciding = taskId => S.judging.has(taskId) || !!jobs().find(j => j.task_id === taskId && j.mode === 'judge' && j.status !== 'done');
 const selectedTask = () => (S.pane && S.pane.kind === 'task' ? S.pane.id : null);
 const DEV_KEY = 'opsquire.dev';
+const THEME_KEY = 'opsquire.theme', THEMES = ['auto', 'light', 'dark'];
+function readTheme() { try { const t = localStorage.getItem(THEME_KEY); return THEMES.includes(t) ? t : 'auto'; } catch (e) { return 'auto'; } }
+function setTheme(t) {
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private window */ }
+  if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  const b = $('#themetoggle'); if (b) b.textContent = t[0].toUpperCase() + t.slice(1);
+}
 function readDev() { try { return localStorage.getItem(DEV_KEY) === '1'; } catch (e) { return false; } }
 function setDev(on) {
   S.dev = !!on;
@@ -2133,6 +2168,8 @@ function connect() {
 }
 function boot() {
   S.dev = readDev();
+  setTheme(readTheme());
+  $('#themetoggle').addEventListener('click', () => setTheme(THEMES[(THEMES.indexOf(readTheme()) + 1) % THEMES.length]));
   S.hist.sort = saved('histSort') || 'recent';
   document.documentElement.classList.toggle('dev', S.dev);
   const devBtn = $('#devtoggle');

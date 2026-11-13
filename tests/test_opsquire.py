@@ -2367,6 +2367,12 @@ class OpsTest(unittest.TestCase):
         self.env["FAKE_GH_LOG"] = str(self.tmp / "gh.log")
         return repo
 
+    def test_state_gives_the_console_each_repos_github_slug_for_links(self) -> None:
+        self.code_repo()
+        code = "import json; from opsquire.state import repo_slugs; print(json.dumps(repo_slugs()))"
+        r = subprocess.run([sys.executable, "-c", code], env=self.env, capture_output=True, text=True, check=False)
+        self.assertEqual(json.loads(r.stdout), {"umm": "acme/umm"}, r.stderr)
+
     def gh_state(self) -> dict[str, Any]:
         state: dict[str, Any] = json.loads((self.tmp / "gh.json").read_text())
         return state
@@ -3806,6 +3812,15 @@ class OpsTest(unittest.TestCase):
         commands = [h["command"] for g in settings["hooks"]["Stop"] for h in g["hooks"]]
         self.assertEqual(len(commands), 1)
         self.assertTrue(commands[0].endswith("unread --hook"))
+
+    def test_doctor_names_libraries_the_homes_scripts_need_that_are_not_installed(self) -> None:
+        self.assertIn("ok   libraries: none declared", self.cli("doctor").stdout)
+        (self.home / "requirements.txt").write_text("# for the scripts\nmypy>=1\nno-such-lib-for-opsquire==2\n")
+        out = self.cli("doctor").stdout
+        self.assertIn("FIX  libraries: no-such-lib-for-opsquire from", out)
+        self.assertIn("--with-requirements", out)
+        (self.home / "requirements.txt").write_text("mypy\n")
+        self.assertIn("ok   libraries: all 1 in requirements.txt installed", self.cli("doctor").stdout)
 
     def test_doctor_sees_a_running_console_through_its_health_file(self) -> None:
         self.env["OPSQUIRE_AUTHOR"] = "claude-code 1234abcd"

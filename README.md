@@ -29,7 +29,9 @@ With pipx instead, on a system whose Python is already 3.13 or newer:
 `uv tool install` with `--force`.
 
 `ruff` and `mypy` are the lint gate every Python task must pass before it runs (`shellcheck` for shell tasks), so a
-home without them can run nothing. `opsquire init` is safe to run again: it never overwrites what exists, and it
+home without them can run nothing. Scripts run on opsquire's own Python, so the libraries they import must be
+installed next to it: list them in the home's `requirements.txt` and add `--with-requirements <home>/requirements.txt`
+to every `uv tool install` (a reinstall without it drops them; `opsquire doctor` names any that are missing). `opsquire init` is safe to run again: it never overwrites what exists, and it
 reports every step, including any tool that is missing. It writes
 `LOCAL.md` in the home from a template: edit it, it is where this home's rules live (who the operator is, what
 counts as a task here, areas, credentials, tools). Credentials go in `~/.creds` (or `$OPSQUIRE_CREDS`) as JSON;
@@ -39,7 +41,7 @@ every record. Agents never read the file.
 From a checkout, for development:
 
 ```
-uv tool install --python 3.13 --editable . --with ruff --with mypy
+uv tool install --python 3.13 --editable . --with ruff --with mypy --with-requirements <home>/requirements.txt
 ```
 
 ## Daily use

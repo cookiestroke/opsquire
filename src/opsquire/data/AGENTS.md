@@ -213,7 +213,7 @@ like any task: `opsquire run <plan>` (every step in its dry/read mode), then `op
 | `id`, `kind`, `area`, `created`, `author` | identity; `id` equals the folder name |
 | `purpose` | the why; one or two sentences |
 | `entry` | `main.py` or `main.sh` |
-| `interpreter` | optional python for `main.py` (e.g. a project venv that has the needed packages); default is the python opsquire runs on, never whatever `python3` is first on PATH. Recorded in `run.json` |
+| `interpreter` | optional python for `main.py` (e.g. a project venv that has the needed packages); default is the python opsquire runs on, never whatever `python3` is first on PATH; a library a script imports there must be listed in the home's `requirements.txt` (add it when you add the import). Recorded in `run.json` |
 | `changes_prod` | `false` = read-only (mode `read`); `true` = modes `dry` (default) and `apply` |
 | `targets` | hosts/services/systems touched; used for locks and per-target status |
 | `lock`, `lock_reason` | `exclusive` (default for changes), `shared` (default for read-only), or `none`. `none` needs a reason; so does `shared` on a changing task |
