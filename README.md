@@ -77,6 +77,12 @@ opsquire ask --model quick ...      a tier the agent's retinue entry defines (qu
 opsquire repo checkout|pr ...      (for agents) change a registered repo through a GitHub-signed PR
 ```
 
+What ask agents may use beyond their retinue's allowed tools is set in the console's Settings (the home's
+`tools.json`): each server the agent has is off until you switch it on, and each tool, shell command or pattern is
+Allow, Confirm or Off. Confirm puts Allow and Deny in the ask's chat (or asks on the terminal) and waits; with nobody
+to answer it is denied. Servers added in Settings reach ask agents only. A home's `retinue.json` is laid over the
+bundled one, so it names only what it changes.
+
 Ctrl-C is always safe: the run is recorded as `interrupted`, scratch work is undone, locks are
 released, and nothing else is left behind.
 

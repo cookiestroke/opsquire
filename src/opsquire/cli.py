@@ -637,6 +637,14 @@ def sweep_after_command() -> None:
         )
 
 
+def cmd_approve_server(a: argparse.Namespace) -> int:
+    from . import approve
+    from .ask import pick_agent
+
+    approve.serve(a.ask, pick_agent(a.agent or None)[1].get("tools") or {})
+    return 0
+
+
 def cmd_ask(a: argparse.Namespace) -> int:
     task_id = resolve_task(a.task).id if a.task else None
     if not a.request and not a.resume:
@@ -1138,6 +1146,13 @@ def parser() -> argparse.ArgumentParser:
     )
     ak.add_argument("--strict-budget", action="store_true", help="make --budget a hard cap instead of a reminder")
     ak.set_defaults(fn=cmd_ask)
+
+    ap = sub.add_parser(
+        "approve-server", help="(started by ask agents) the MCP server that asks you before a tool runs"
+    )
+    ap.add_argument("--ask", required=True, help="the ask's approvals key")
+    ap.add_argument("--agent", default="", help="the agent from retinue.json whose tool names to read")
+    ap.set_defaults(fn=cmd_approve_server)
 
     wt = sub.add_parser("wait", help="wait for the next finished run of a task, then print it (for agents)")
     wt.add_argument("task")

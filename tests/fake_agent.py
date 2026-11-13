@@ -77,6 +77,37 @@ if piece:
     tid = Path(task).name
     result(f"Built {tid}.\nRUN: opsquire run {tid}", cost=float(os.environ.get("FAKE_COST", "0.01")))
 
+
+def approvals(tools: list[dict[str, object]]) -> list[str]:
+    """Like an agent CLI with a permission-prompt tool: start the approval server from --mcp-config, ask about each
+    tool, and return its decisions."""
+    config = json.loads(Path(argv[argv.index("--mcp-config") + 1]).read_text())["mcpServers"]["opsquire"]
+    proc = subprocess.Popen(
+        [config["command"], *config["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+    )
+    assert proc.stdin and proc.stdout
+
+    def call(msg_id: int, method: str, params: dict[str, object]) -> dict[str, object]:
+        assert proc.stdin and proc.stdout
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params}) + "\n")
+        proc.stdin.flush()
+        reply: dict[str, object] = json.loads(proc.stdout.readline())
+        return reply
+
+    call(0, "initialize", {"protocolVersion": "2025-06-18"})
+    out = []
+    for i, t in enumerate(tools, 1):
+        r = call(i, "tools/call", {"name": "approve", "arguments": {"tool_name": t["name"], "input": t["input"]}})
+        out.append(json.loads(r["result"]["content"][0]["text"])["behavior"])  # type: ignore[index]
+    proc.stdin.close()
+    proc.wait()
+    return out
+
+
+if os.environ.get("FAKE_TOOLS") and "--permission-prompt-tool" in argv:
+    decided = approvals(json.loads(os.environ["FAKE_TOOLS"]))
+    result(f"Tool decisions: {' '.join(decided)}")
+
 grill = int(os.environ.get("FAKE_GRILL", "0"))
 if grill and "Do not ask questions" not in system:
     state = Path(os.environ["FAKE_STATE"])

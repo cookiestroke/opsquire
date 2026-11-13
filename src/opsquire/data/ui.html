@@ -43,6 +43,7 @@
   --k-apply: #ff9a5c; --k-apply-bg: #45230f; --k-ask: #b9a2ff; --k-ask-bg: #2c2148; --k-on: #11141a; --k-on-dry: #11141a; --k-verify: #5fd48a; --k-verify-bg: #12301f; --k-fail: #ff7b7b; --k-fail-bg: #48191a;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { font-size: 15px; }
 html.dev { font-size: 13.5px; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px); }
@@ -366,7 +367,22 @@ html.dev .tile .num { font-size: 1.5rem; }
 .msg.end { align-self: center; font-size: .82em; color: var(--muted); padding: 0 10px; border-radius: 999px; border: 1px solid var(--line2); }
 .msg.end.good { color: var(--good); }
 .msg.end.warn { color: var(--warn); }
-.msg .quick { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.msg .quick { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.msg.approve .bubble { border-color: var(--warn); }
+.msg.approve .what { margin: 6px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+.settings .block.pad { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.settings .rule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+.settings .rule code { overflow-wrap: anywhere; }
+.settings .rule.seen code { color: var(--muted); }
+.settings .rule.add input, .addserver input { flex: 1 1 200px; min-width: 0; padding: 4px 8px; font: inherit; }
+.settings .addserver { flex-direction: row !important; flex-wrap: wrap; align-items: center; }
+.settings .addserver .faint { flex-basis: 100%; }
+.settings .server.disabled { opacity: .7; }
+.settings .switch { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+.choice button.on.c-allow { background: var(--good-bg); color: var(--good); }
+.choice button.on.c-confirm { background: var(--warn-bg); color: var(--warn); }
+.choice button.on.c-off { background: var(--bad-bg); color: var(--bad); }
+.choice button.on.c-inherit { background: var(--panel2); color: var(--fg); }
 .msg .quick button { white-space: normal; text-align: left; max-width: 100%; overflow-wrap: anywhere; }
 .runs-cards { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .runcard { display: block; padding: 4px 10px; border-radius: var(--r-btn); border-left: 4px solid var(--k); background: var(--kb); color: var(--k); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; overflow-wrap: anywhere; }
@@ -458,7 +474,7 @@ html:not(.dev) main#main { padding-top: 16px; }
 <script>
 'use strict';
 /* ---- pure helpers (no DOM) ---- */
-const VIEWS = [['inbox', 'Inbox'], ['history', 'History']];
+const VIEWS = [['inbox', 'Inbox'], ['history', 'History'], ['settings', 'Settings']];
 const TONE = {
   ok: 'good', done: 'good', failed: 'bad', blocked: 'bad', partial: 'warn', running: 'live', open: 'live',
   ready: 'neutral', draft: 'grey', abandoned: 'grey', superseded: 'grey', archived: 'grey', skipped: 'grey',
@@ -914,7 +930,7 @@ function render() {
   const main = $('#main');
   const active = document.activeElement;
   const keep = active && active.id && (main.contains(active) || $('#pane').contains(active)) ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
-  const views = { inbox: renderInbox, history: renderHistory };
+  const views = { inbox: renderInbox, history: renderHistory, settings: renderSettings };
   main.replaceChildren(...[renderStale(), renderLive(), (views[S.view] || renderInbox)()].filter(Boolean));
   renderPane();
   if (keep) {
@@ -1565,6 +1581,80 @@ function keptByHistory(t) {
   return (!h.machine || (t.targets || []).includes(h.machine)) && (!h.script || t.id === h.script || (t.uses || []).includes(h.script));
 }
 function historyFilter(change) { Object.assign(S.hist, change, { allRuns: false }); S.view = 'history'; setHash('history'); render(); window.scrollTo(0, 0); }
+/* ---- settings: what ask agents may use ---- */
+const CHOICES = [['allow', 'Allow', 'runs without asking'], ['confirm', 'Confirm', 'asks you in the chat first'], ['off', 'Off', 'the agent may not use it']];
+function choiceSeg(value, pick, inherit) {
+  return el('span', { class: 'tiers choice', role: 'radiogroup' }, [...(inherit ? [['', 'Default', `follows the default (${inherit})`]] : []), ...CHOICES].map(([v, label, why]) =>
+    el('button', { type: 'button', role: 'radio', 'aria-checked': String(v === value), class: v === value ? `on c-${v || 'inherit'}` : '', title: why, onclick: () => { if (v !== value) pick(v); } }, label)));
+}
+async function loadTools(refresh) {
+  S.toolsBusy = refresh ? 'checking' : 'loading';
+  render();
+  try { S.tools = await api('/api/tools' + (refresh ? '?refresh=1' : '')); S.toolsError = null; } catch (e) { S.toolsError = e.message; }
+  S.toolsBusy = null;
+  render();
+}
+async function changeTools(change) {
+  try { S.tools = { ...S.tools, ...(await post('/api/tools', change)) }; } catch (e) { toast(`settings: ${e.message}`); }
+  render();
+}
+function ruleRows(scope, rules, seen, inherit, placeholder) {
+  const rows = Object.entries(rules).sort((a, b) => a[0].localeCompare(b[0])).map(([pattern, value]) =>
+    el('div', { class: 'rule' }, el('code', {}, pattern), el('span', { class: 'grow' }), choiceSeg(value, v => changeTools({ kind: 'rule', scope, pattern, value: v || null }), inherit)));
+  const loose = (seen || []).filter(t => !Object.keys(rules).some(p => globMatch(p, t)));
+  for (const t of loose) rows.push(el('div', { class: 'rule seen' }, el('code', {}, t), el('span', { class: 'faint small' }, 'used, no rule'), el('span', { class: 'grow' }),
+    choiceSeg('', v => v && changeTools({ kind: 'rule', scope, pattern: t, value: v }), inherit)));
+  const input = el('input', { type: 'text', placeholder, 'aria-label': 'pattern' });
+  rows.push(el('form', { class: 'rule add', onsubmit: e => { e.preventDefault(); const pattern = input.value.trim(); if (pattern) changeTools({ kind: 'rule', scope, pattern, value: 'allow' }); } },
+    input, btn('Add rule', null, 'sm', { type: 'submit', title: 'adds it as Allow; change it after' })));
+  return rows;
+}
+function globMatch(pattern, text) {
+  const re = new RegExp('^' + pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+  return re.test(text);
+}
+function renderSettings() {
+  if (!S.tools && !S.toolsBusy && !S.toolsError) loadTools(false);
+  const t = S.tools, parts = [];
+  parts.push(sec('Tools for ask agents', null, el('span', {}, btn(S.toolsBusy === 'checking' ? 'checking…' : 'Check servers', () => loadTools(true), 'sm', { disabled: !!S.toolsBusy, title: "ask the agent's CLI which servers it has (takes a few seconds)" }))));
+  if (S.toolsError) parts.push(el('div', { class: 'err' }, `Cannot read the tool settings: ${S.toolsError}`));
+  if (!t) { parts.push(el('div', { class: 'quiet' }, S.toolsBusy ? 'Loading…' : '')); return el('div', { class: 'settings' }, parts); }
+  if (!t.supported) parts.push(el('div', { class: 'stale' }, el('b', {}, 'The default agent cannot ask you before a tool runs.'), el('span', {}, 'Its retinue entry has no tools.approval_argv, so these settings do not reach it.')));
+  parts.push(el('div', { class: 'block pad' },
+    el('div', { class: 'rule' }, el('span', {}, 'Anything without a rule'), el('span', { class: 'grow' }), choiceSeg(t.default, v => changeTools({ kind: 'default', value: v }))),
+    el('div', { class: 'faint small' }, 'Allow runs without asking. Confirm shows Allow and Deny in the ask\'s chat and waits; with nobody to answer it is denied. Off keeps it from the agent. The longest matching pattern wins.')));
+  parts.push(sec('Servers', t.servers.length ? String(t.servers.length) : null, t.listed_at ? el('span', { class: 'faint small' }, 'checked ', when(t.listed_at)) : null));
+  if (!t.servers.length) parts.push(el('div', { class: 'quiet' }, t.can_list ? 'No servers yet: Check servers asks the agent which it has.' : 'No servers yet.'));
+  for (const sv of t.servers) {
+    const on = sv.enabled !== false;
+    parts.push(el('div', { class: `block pad server ${on ? '' : 'disabled'}` },
+      el('div', { class: 'rule' },
+        el('label', { class: 'switch', title: on ? 'switch off: the agent will not see this server' : 'switch on' }, el('input', { type: 'checkbox', checked: on, onchange: e => changeTools({ kind: 'server', id: sv.id, enabled: e.target.checked }) }), el('strong', {}, sv.name)),
+        sv.status ? el('span', { class: 'chip' }, sv.status) : null, sv.source === 'added' ? el('span', { class: 'chip' }, 'added here') : null,
+        el('span', { class: 'grow' }),
+        on ? choiceSeg(sv.default || '', v => changeTools({ kind: 'server', id: sv.id, default: v }), t.default) : null,
+        sv.source === 'added' ? btn('Remove', () => changeTools({ kind: 'remove', name: sv.name }), 'sm', { title: 'take it away from ask agents' }) : null),
+      on ? ruleRows(sv.id, sv.tools || {}, sv.seen, sv.default || t.default, 'tool name or pattern, e.g. read_*') : null));
+  }
+  parts.push(sec('Shell commands'));
+  parts.push(el('div', { class: 'block pad' }, ruleRows('shell', t.shell || {}, [], t.default, 'command pattern, e.g. gh pr view *'),
+    el('div', { class: 'faint small' }, 'Only for commands the agent is not already allowed to run.')));
+  if ((t.agent_tools_seen || []).length || Object.keys(t.agent_tools || {}).length) {
+    parts.push(sec("The agent's own tools"));
+    parts.push(el('div', { class: 'block pad' }, ruleRows('agent_tools', t.agent_tools || {}, t.agent_tools_seen, t.default, 'tool name, e.g. WebFetch')));
+  }
+  parts.push(sec('Add a server'));
+  const name = el('input', { type: 'text', placeholder: 'name', 'aria-label': 'server name' });
+  const where = el('input', { type: 'text', placeholder: 'https://… or a command, e.g. npx -y some-mcp-server', 'aria-label': 'server URL or command' });
+  parts.push(el('form', { class: 'block pad addserver', onsubmit: e => {
+    e.preventDefault();
+    const w = where.value.trim(), words = w.split(/\s+/);
+    const change = /^https?:\/\//.test(w) ? { kind: 'add', name: name.value, url: w } : { kind: 'add', name: name.value, command: words[0] || '', args: words.slice(1) };
+    changeTools(change);
+  } }, name, where, btn('Add', null, 'sm primary', { type: 'submit' }),
+    el('div', { class: 'faint small' }, 'For ask agents only: it is passed to each ask, never written into the agent\'s own configuration. Its tools follow the rules above.')));
+  return el('div', { class: 'settings' }, parts);
+}
 function renderHistory() {
   const h = S.hist, machines = targetIndex(S.data), scripts = Object.values(S.data.scripts || {}).sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const pick = (label, value, options, onchange) => el('label', { class: 'histpick' }, el('span', { class: 'muted small' }, label),
@@ -1918,7 +2008,7 @@ function buildJobPane(d) {
   d.doneNode = document.createTextNode(''); d.tailNode = document.createTextNode('');
   d.pre = el('pre', {}, d.doneNode, d.tailNode);
   d.pill = el('span', {}, el('span', { class: 'pill grey' }, 'connecting'));
-  d.foot = el('div', { class: 'line', style: 'margin:0;width:100%' });
+  d.foot = d.ctl = el('div', { class: 'line', style: 'margin:0;width:100%' });
   if ((j && j.mode === 'ask') || d.mode === 'ask') {
     d.ask = true; d.ask_id = (j && j.ask_id) || d.ask_id || null; d.chatItems = []; d.chatOffset = 0;
     d.chat = el('div', { class: 'chat' });
@@ -1927,8 +2017,8 @@ function buildJobPane(d) {
     const sendFollow = async t => { const text = t.value.trim(); if (!text || !d.ask_id) return;
       try { const r = await post('/api/ask', { request: text, resume: d.ask_id }); t.value = ''; saved('follow.' + d.ask_id, ''); refresh(); openJob(r.job_id, false, 'ask'); } catch (err) { toast(`ask failed: ${err.message}`); } };
     const followText = writeBox('follow.' + ((j && j.ask_id) || d.id), { name: 'q', placeholder: 'follow up in this conversation (Enter sends, Shift+Enter for a new line)' }, sendFollow);
-    const follow = el('form', { class: 'follow', onsubmit: e => { e.preventDefault(); sendFollow(followText); } }, followText, btn('Send', null, 'sm', { type: 'submit' }));
-    d.foot = el('div', { style: 'margin:0;width:100%;display:flex;flex-direction:column;gap:6px' }, d.foot, follow);
+    d.follow = el('form', { class: 'follow', hidden: true, onsubmit: e => { e.preventDefault(); sendFollow(followText); } }, followText, btn('Send', null, 'sm', { type: 'submit' }));
+    d.foot = el('div', { style: 'margin:0;width:100%;display:flex;flex-direction:column;gap:6px' }, d.ctl, d.follow);
     paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title: ((j && j.args) || '') }, truncate((j && j.args) || '', 80)), ' ', d.pill, el('span', { class: 'grow' }), d.seg], d.body, 'ask', d.foot);
     askView(d, S.askView || 'chat');
   } else {
@@ -1944,13 +2034,16 @@ function feedJob(d, chunk) {
   d.tailNode.data = crFold(d.buf);
 }
 function jobFoot(d) {
-  const parts = promptControls(d.id, d.status, d.prompt, 'pane');
+  const inChat = d.ask && S.askView !== 'log';
+  const parts = promptControls(d.id, d.status, inChat ? '' : d.prompt, 'pane');
   if (d.status === 'done') {
     parts.push(el('span', { class: 'muted small' }, 'finished', d.exit === null || d.exit === undefined ? '' : `, exit ${d.exit}`));
     if (d.run_id) parts.push(btn('open run record', () => openLog(d.run_id, { kind: 'job', id: d.id }), 'sm'));
   }
-  fill(d.foot, parts);
-  $('#pf').hidden = !parts.length;
+  fill(d.ctl, parts);
+  d.ctl.hidden = !parts.length;
+  if (d.follow) d.follow.hidden = d.status !== 'done';
+  $('#pf').hidden = !parts.length && (!d.follow || d.follow.hidden);
 }
 async function pollJob(d) {
   if (S.pane !== d) return;
@@ -2035,6 +2128,11 @@ function chatItem(d, it) {
   if (it.kind === 'you') return el('div', { class: 'msg you' }, el('div', { class: 'bubble' }, it.text));
   if (it.kind === 'step') return el('div', { class: 'msg step' }, `${it.piece ? it.piece + ' · ' : ''}${it.text}`);
   if (it.kind === 'end') return el('div', { class: `msg end ${it.text === 'ok' ? 'good' : 'warn'}` }, it.text === 'ok' ? 'done' : it.waiting ? `waiting: ${it.waiting}` : it.text);
+  if (it.kind === 'approve') return el('div', { class: 'msg agent approve' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' },
+    el('div', {}, 'Wants to use ', el('strong', {}, it.text)),
+    it.detail ? el('div', { class: 'what' }, it.detail) : null,
+    it.pending ? el('div', { class: 'quick' }, btn('Allow', () => replyAsk(d, 'y'), 'sm primary', { title: 'let it run this once' }), btn('Deny', () => replyAsk(d, 'n'), 'sm', { title: 'refuse; the agent is told you said no' }),
+      el('span', { class: 'faint small' }, 'Always allow it under Settings.')) : null));
   const body = [el('div', { class: 'md' }, markdown(it.text || ''))];
   if (it.kind === 'question') {
     body.push(el('div', { class: 'quick' }, btn(`✓ ${it.recommend || 'recommended'}`, () => replyAsk(d, ''), 'sm primary', { title: 'accept the recommended answer' })));
@@ -2074,13 +2172,15 @@ function renderChat(d) {
         `${open ? '▾' : '▸'} ${plural(run.length, 'step')}`, open ? null : el('span', { class: 'faint' }, ` · ${truncate(run[run.length - 1].text, 70)}`)),
       open ? el('div', { class: 'steplist' }, run.map(it => el('div', {}, `${it.piece ? it.piece + ' · ' : ''}${it.text}`))) : null));
   };
-  for (const it of d.chatItems) { if (it.kind === 'step') { steps.push(it); continue; } flush(); kids.push(chatItem(d, it)); }
+  const lastApprove = d.chatItems.map(it => it.kind).lastIndexOf('approve');
+  const pendingApprove = d.status === 'waiting' && lastApprove >= 0 && !d.chatItems.slice(lastApprove + 1).some(it => it.kind === 'you');
+  d.chatItems.forEach((it, i) => { if (it.kind === 'step') { steps.push(it); return; } flush(); kids.push(chatItem(d, i === lastApprove ? { ...it, pending: pendingApprove } : it)); });
   flush();
   const agents = [...kids].filter(n => n.classList.contains('agent'));
   const typing = talking && (!agents.length || d.chatItems[d.chatItems.length - 1].kind !== 'agent');
   agents.forEach((n, i) => n.querySelector('.avatar').replaceChildren(squire(talking && !typing && i === agents.length - 1)));
   if (typing) kids.push(el('div', { class: 'msg agent typing' }, el('div', { class: 'avatar' }, squire(true)), el('div', { class: 'bubble faint' }, 'thinking…')));
-  if (d.status === 'waiting' && d.prompt) kids.push(el('div', { class: 'msg answerbox' }, el('form', { onsubmit: e => { e.preventDefault(); replyAsk(d, e.target.reply.value); } },
+  if (d.status === 'waiting' && d.prompt && !pendingApprove) kids.push(el('div', { class: 'msg answerbox' }, el('form', { onsubmit: e => { e.preventDefault(); replyAsk(d, e.target.reply.value); } },
     writeBox('reply.' + d.id, { name: 'reply', id: 'askreply', placeholder: 'your answer (empty = the recommended one)' }, t => replyAsk(d, t.value)), btn('Send', null, 'sm primary', { type: 'submit' }))));
   fill(d.chat, kids);
   const reply = focused && document.getElementById('askreply');
@@ -2097,6 +2197,7 @@ function askView(d, view) {
   S.askView = view;
   d.body.className = `askbody show-${view}`;
   d.seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === view)));
+  if (d.foot) jobFoot(d);
 }
 function openAsk(askId) {
   stopPane();

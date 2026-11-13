@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__
+from . import __version__, tools
 from .close import close_task
 from .jobs import Jobs
 from .model import (
@@ -117,6 +117,24 @@ def code_status(loaded: dict[str, str]) -> dict[str, Any]:
         "installed": installed,
         "page": current.get(PAGE),
     }
+
+
+def tools_spec() -> dict[str, Any]:
+    from .ask import pick_agent
+
+    spec: dict[str, Any] = pick_agent(None)[1].get("tools") or {}
+    return spec
+
+
+LISTED: dict[str, Any] = {"servers": [], "at": ""}
+
+
+def tools_view(refresh: bool) -> dict[str, Any]:
+    """Settings: the default agent's servers (listed by its CLI on refresh, which can take seconds) with the rules."""
+    spec = tools_spec()
+    if refresh:
+        LISTED.update(servers=tools.listed_servers(spec), at=iso(now()))
+    return {**tools.view(spec, LISTED["servers"]), "listed_at": LISTED["at"]}
 
 
 def ask_chat(ask_id: str, offset: int) -> dict[str, Any]:
@@ -226,6 +244,8 @@ class Handler(BaseHTTPRequestHandler):
                     "code": code_status(server.code),
                 }
                 self.send_json({**answer, **extra})
+            elif url.path == "/api/tools":
+                self.send_json(tools_view(q.get("refresh") == "1"))
             elif url.path == "/api/askchat":
                 self.send_json(ask_chat(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/job":
@@ -276,6 +296,9 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("agent", "")),
                 )
                 self.send_json({"job_id": job.job_id})
+            elif url.path == "/api/tools":
+                tools.update(body, tools_spec())
+                self.send_json(tools_view(False))
             elif url.path == "/api/answer":
                 self.jobs.answer(str(body.get("job", "")), str(body.get("text", "")))
                 self.send_json({"ok": True})

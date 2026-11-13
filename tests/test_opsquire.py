@@ -380,6 +380,99 @@ class OpsTest(unittest.TestCase):
         path.write_text(json.dumps(cfg))
         self.env["OPSQUIRE_RETINUE"] = str(path)
 
+    TOOLS_SPEC: dict[str, Any] = {
+        "approval_argv": ["--permission-prompt-tool", "mcp__opsquire__approve", "--mcp-config", "{mcp_config}"],
+        "deny_argv": ["--disallowedTools", "{server_tools}"],
+        "server_tools": "mcp__{server}",
+        "name_re": "^mcp__(?P<server>.+?)__(?P<tool>.+)$",
+        "shell": {"tool": "Bash", "input": "command"},
+    }
+    SLACK_READ = {"name": "mcp__chat__read_thread", "input": {"channel_id": "C1"}}
+    SLACK_SEND = {"name": "mcp__chat__send_message", "input": {"channel_id": "C1", "text": "hello"}}
+
+    def tool_rules(self) -> None:
+        self.agents_file(tools=self.TOOLS_SPEC)
+        rules = {"servers": {"chat": {"enabled": True, "tools": {"read_*": "allow"}}, "mail": {"enabled": False}}}
+        (self.home / "tools.json").write_text(json.dumps(rules))
+
+    def test_ask_tools_follow_the_homes_rules_and_confirm_needs_an_operator(self) -> None:
+        self.tool_rules()
+        mail, fresh = {"name": "mcp__mail__send", "input": {}}, {"name": "mcp__fresh__anything", "input": {}}
+        self.env["FAKE_TOOLS"] = json.dumps([self.SLACK_READ, self.SLACK_SEND, mail, fresh])
+        self.env["FAKE_LOG"] = str(self.tmp / "fake.log")
+        r = subprocess.run(
+            [*CLI, "ask", "post", "hello"],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            start_new_session=True,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Tool decisions: allow deny deny deny", r.stdout, "a server nobody switched on stays off")
+        argv = json.loads((self.tmp / "fake.log").read_text().splitlines()[-1])["argv"]
+        self.assertEqual(argv[argv.index("--disallowedTools") + 1], "mcp__mail")
+        self.assertEqual(list((self.home / "var/asks").glob("*.approvals")), [], "an ask leaves no approvals behind")
+        seen = json.loads((self.home / "var/tools-seen.json").read_text())
+        self.assertEqual(
+            sorted(seen),
+            ["mcp__chat__read_thread", "mcp__chat__send_message", "mcp__fresh__anything", "mcp__mail__send"],
+        )
+
+    def test_the_operator_allows_a_confirmed_tool_on_the_terminal(self) -> None:
+        self.tool_rules()
+        self.env["FAKE_TOOLS"] = json.dumps([self.SLACK_SEND, self.SLACK_SEND])
+        r = self.cli("ask", "post", "hello", answers=[("[Enter = deny] >", "y"), ("[Enter = deny] >", "")])
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("Allow chat: send_message? channel_id=C1; text=hello", r.stdout.replace("\r\n", " "))
+        self.assertIn("Tool decisions: allow deny", r.stdout)
+        chat = next((self.home / "var/asks").glob("*.chat.jsonl")).read_text().splitlines()
+        kinds = [(c["kind"], c["text"]) for c in map(json.loads, chat)]
+        self.assertIn(("approve", "chat: send_message"), kinds)
+        self.assertEqual([t for k, t in kinds if k == "you"][1:], ["allow", "deny"])
+
+    def test_console_settings_change_the_homes_tool_rules(self) -> None:
+        import http.client
+
+        self.tool_rules()
+        (self.home / "var").mkdir(exist_ok=True)
+        (self.home / "var/tools-seen.json").write_text(json.dumps({"mcp__chat__send_message": "x", "WebFetch": "x"}))
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def call(method: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
+                conn.request(
+                    method, "/api/tools", json.dumps(body) if body else None, {"Content-Type": "application/json"}
+                )
+                resp = conn.getresponse()
+                return resp.status, json.loads(resp.read())
+
+            status, view = call("GET")
+            self.assertEqual(status, 200, view)
+            self.assertTrue(view["supported"])
+            chat = next(s for s in view["servers"] if s["id"] == "chat")
+            self.assertEqual((chat["tools"], chat["seen"]), ({"read_*": "allow"}, ["send_message"]))
+            self.assertFalse(next(s for s in view["servers"] if s["id"] == "mail")["enabled"])
+            self.assertEqual(view["agent_tools_seen"], ["WebFetch"])
+            call("POST", {"kind": "rule", "scope": "chat", "pattern": "send_*", "value": "confirm"})
+            call("POST", {"kind": "rule", "scope": "shell", "pattern": "gh pr view *", "value": "allow"})
+            status, view = call("POST", {"kind": "add", "name": "notes", "url": "https://notes.example/mcp"})
+            self.assertEqual(status, 200, view)
+            self.assertEqual(call("POST", {"kind": "add", "name": "bad", "url": "ftp://x"})[0], 400)
+            rules = json.loads((self.home / "tools.json").read_text())
+            self.assertEqual(rules["servers"]["chat"]["tools"], {"read_*": "allow", "send_*": "confirm"})
+            self.assertEqual(rules["shell"], {"gh pr view *": "allow"})
+            self.assertEqual(rules["added"], {"notes": {"url": "https://notes.example/mcp"}})
+            self.assertIn("notes", [s["name"] for s in view["servers"] if s["source"] == "added"])
+            call("POST", {"kind": "remove", "name": "notes"})
+            self.assertNotIn("notes", json.loads((self.home / "tools.json").read_text()).get("added", {}))
+        finally:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(20)
+
     def test_ask_records_actions_and_resumes_by_task(self) -> None:
         self.agents_file()
         r = self.cli("ask", "restart", "web1", "bots")

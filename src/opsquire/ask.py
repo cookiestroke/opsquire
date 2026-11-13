@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import re
@@ -12,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from . import handover, homegit, pinned, repos
+from . import approve, handover, homegit, pinned, repos
 from .model import (
     DATA_DIR,
     OpsquireError,
@@ -134,14 +135,25 @@ class AskResult:
     pieces: list[dict[str, Any]] = field(default_factory=list)
 
 
+def layered(base: Any, over: Any) -> Any:
+    """`over` laid on `base`: objects merge key by key, anything else (lists included) is replaced."""
+    if isinstance(base, dict) and isinstance(over, dict):
+        return {**base, **{k: layered(base.get(k), v) for k, v in over.items()}}
+    return over
+
+
 def agents_config() -> dict[str, Any]:
+    """The bundled retinue with the home's retinue.json laid over it, so a home names only what it changes and keeps
+    every later default; OPSQUIRE_RETINUE replaces both."""
     override = os.environ.get("OPSQUIRE_RETINUE")
     local = home_dir() / "retinue.json"
-    path = Path(override) if override else local if local.is_file() else DATA_DIR / "retinue.json"
-    try:
-        cfg: dict[str, Any] = read_json(path)
-    except (OSError, ValueError) as e:
-        raise OpsquireError(f"cannot read agent config {path}: {e}") from None
+    paths = [Path(override)] if override else [DATA_DIR / "retinue.json", *([local] if local.is_file() else [])]
+    cfg: dict[str, Any] = {}
+    for path in paths:
+        try:
+            cfg = layered(cfg, read_json(path))
+        except (OSError, ValueError) as e:
+            raise OpsquireError(f"cannot read agent config {path}: {e}") from None
     return cfg
 
 
@@ -371,6 +383,7 @@ class Conversation:
             raise OpsquireError(f"agent {self.name!r} has unknown output format {self.agent.get('output')!r}")
         values = {"prompt": message, "system": self.system, "home": self.home, "main_home": str(main_home())}
         argv = build_argv(self.agent, values, self.session, budget.cap(), self.model)
+        argv += approve.argv(self.agent.get("tools") or {}, self.name)
         resuming = f" (resuming {self.session})" if self.session else ""
         say(f"opsquire ask via {self.name}{' ' + self.label if self.label else ''}{resuming} ...")
         res = AskResult()
@@ -528,6 +541,24 @@ def mentioned_tasks(text: str, extra: str | None = None) -> list[str]:
     return sorted(set(TASK_ID_IN_TEXT.findall(text)) | ({extra} if extra else set()))
 
 
+def with_approvals[**P](fn: Callable[P, AskResult]) -> Callable[P, AskResult]:
+    """An ask, with its operator answering the agents' tool approvals for as long as it runs."""
+
+    def requested(r: dict[str, Any]) -> None:
+        Chat.add("approve", str(r.get("label", "")), detail=str(r.get("detail", "")), tool=str(r.get("tool", "")))
+
+    def answered(r: dict[str, Any], allow: bool) -> None:
+        Chat.add("you", "allow" if allow else "deny", answered=str(r.get("label", "")))
+
+    @functools.wraps(fn)
+    def run(*args: P.args, **kwargs: P.kwargs) -> AskResult:
+        with approve.Watcher(f"{compact(now())}-{os.getpid()}", requested, answered):
+            return fn(*args, **kwargs)
+
+    return run
+
+
+@with_approvals
 def ask(
     prompt: str,
     agent_name: str | None,

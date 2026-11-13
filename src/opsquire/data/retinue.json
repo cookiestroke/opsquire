@@ -22,6 +22,16 @@
       "piece_tier": "quick",
       "billing": {"key_env": "ANTHROPIC_API_KEY", "plan": "your Claude plan", "key": "your Anthropic API key"},
       "output": "claude-stream-json",
+      "tools": {
+        "about": "How opsquire's tool settings reach this agent: unlisted tools go to opsquire's approval server; servers switched off are hidden.",
+        "approval_argv": ["--permission-prompt-tool", "mcp__opsquire__approve", "--mcp-config", "{mcp_config}"],
+        "deny_argv": ["--disallowedTools", "{server_tools}"],
+        "server_tools": "mcp__{server}",
+        "name_re": "^mcp__(?P<server>.+?)__(?P<tool>.+)$",
+        "server_id": {"sub": "[^A-Za-z0-9_-]", "with": "_"},
+        "shell": {"tool": "Bash", "input": "command"},
+        "list": {"argv": ["claude", "mcp", "list"], "line_re": "^(?P<name>.+?): (?P<target>\\S.*?) - (?P<status>.+)$"}
+      },
       "allowed_tools": [
         "Read", "Glob", "Grep",
         "Edit(/{home}/tasks/**)", "Edit(/{home}/general/**)", "Edit(/{main_home}/.repos/**)",
