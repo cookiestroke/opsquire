@@ -16,7 +16,7 @@
   --top: 44px;
   --k-read: #1d5fd6; --k-read-bg: #dbe8fd; --k-dry: #8a6a00; --k-dry-bg: #fdf3c4; --k-dry-edge: #e0b400;
   --k-apply: #c2410c; --k-apply-bg: #ffe8d6; --k-ask: #6d3fd8; --k-ask-bg: #ede4ff; --k-verify: #15803d; --k-verify-bg: #dcf5e4; --k-fail: #c81e1e; --k-fail-bg: #fde2e2;
-  --r-card: 8px; --r-btn: 6px;
+  --r-card: 8px; --r-btn: 999px; --k-on: #ffffff; --k-on-dry: #1d1600;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -28,7 +28,7 @@
     --warn: #f0c060; --warn-bg: #3d2f12; --grey: #aab3bf; --grey-bg: #2b3139;
     --code-bg: #12151a; --shadow: 0 8px 28px rgba(0, 0, 0, .55);
     --k-read: #7fb0ff; --k-read-bg: #17284a; --k-dry: #f5d04a; --k-dry-bg: #3a3110; --k-dry-edge: #d9b52c;
-    --k-apply: #ff9a5c; --k-apply-bg: #45230f; --k-ask: #b9a2ff; --k-ask-bg: #2c2148; --k-verify: #5fd48a; --k-verify-bg: #12301f; --k-fail: #ff7b7b; --k-fail-bg: #48191a;
+    --k-apply: #ff9a5c; --k-apply-bg: #45230f; --k-ask: #b9a2ff; --k-ask-bg: #2c2148; --k-on: #11141a; --k-on-dry: #11141a; --k-verify: #5fd48a; --k-verify-bg: #12301f; --k-fail: #ff7b7b; --k-fail-bg: #48191a;
   }
 }
 * { box-sizing: border-box; }
@@ -100,9 +100,12 @@ h3.sec .n { font-weight: 500; letter-spacing: 0; text-transform: none; color: va
 .k-apply { --k: var(--k-apply); --kb: var(--k-apply-bg); } .k-verify { --k: var(--k-verify); --kb: var(--k-verify-bg); }
 .kind[class*="k-"] { color: var(--k); background: var(--kb); }
 .kind.k-dry { border-color: var(--k-dry-edge); }
-button.runbtn[class*="k-"] { color: var(--k); background: var(--kb); border-color: var(--k); font-weight: 600; }
-button.runbtn[class*="k-"]:hover { filter: brightness(1.06); }
-button.runbtn.k-apply.armed { background: var(--k-apply); color: #fff; }
+button.runbtn[class*="k-"], .askgo { color: var(--k-on); background: var(--k); border: 1px solid var(--k); font-weight: 600; border-radius: 999px; padding: 5px 16px; }
+button.runbtn.k-dry { color: var(--k-on-dry); }
+button.runbtn[class*="k-"]:hover, .askgo:hover { filter: brightness(1.08); border-color: var(--k); }
+button.runbtn.k-apply.armed { box-shadow: 0 0 0 3px color-mix(in srgb, var(--k-apply) 35%, transparent); }
+button.sm { border-radius: 999px; padding: 2px 11px; background: transparent; }
+button.sm.primary { background: var(--accent); }
 .pill.bad { background: var(--k-fail-bg); color: var(--k-fail); }
 .mode { display: inline-block; min-width: 44px; text-align: center; padding: 0 6px; border-radius: 4px; font-size: .82em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--grey-bg); color: var(--grey); white-space: nowrap; }
 .mode.apply { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
@@ -298,7 +301,7 @@ html.dev .tile .num { font-size: 1.5rem; }
 .card-notes > span { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: .82em; background: var(--panel2); border: 1px solid var(--line2); color: var(--muted); }
 .card-notes > .warnnote { background: var(--warn-bg); border-color: transparent; color: var(--warn); }
 .card-act { flex: none; }
-.card-act button { padding: 5px 14px; }
+.card-act button { min-width: 7.5em; }
 .card.sub { border-left-width: 2px; padding-top: 6px; padding-bottom: 6px; }
 .stagebar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: .82em; }
 .stagebar .stage { padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
@@ -319,8 +322,7 @@ html.dev .tile .num { font-size: 1.5rem; }
 .tiers { display: inline-flex; padding: 2px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line2); }
 .tiers button { border: 0; background: transparent; border-radius: 999px; padding: 3px 12px; font-size: .88em; color: var(--muted); }
 .tiers button.on { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.18); font-weight: 600; }
-.askgo { border: 0; border-radius: 999px; padding: 5px 16px; background: var(--k-ask); color: #fff; font-weight: 600; }
-.askgo:hover { filter: brightness(1.08); }
+.askgo { --k: var(--k-ask); }
 .askbox textarea, .follow textarea, .msg.answerbox textarea { flex: 1 1 auto; min-width: 0; padding: 7px 10px; resize: none; line-height: 1.4; font: inherit; overflow-y: auto; }
 .askhead { flex: none; display: inline-flex; }
 .squire { image-rendering: pixelated; flex: none; }
