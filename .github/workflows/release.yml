@@ -38,7 +38,9 @@ jobs:
 
       - name: Next version
         id: version
-        run: echo "version=$(python scripts/release.py next "${{ inputs.bump }}")" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(python scripts/release.py next "${{ inputs.bump }}")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Bump pyproject.toml with a GitHub-signed commit
         id: bump
@@ -47,7 +49,8 @@ jobs:
         run: |
           python scripts/release.py set-version "$VERSION"
           git add pyproject.toml
-          echo "oid=$(python scripts/signed_commit.py --branch main -m "release: v$VERSION")" >> "$GITHUB_OUTPUT"
+          oid=$(python scripts/signed_commit.py --branch main -m "release: v$VERSION")
+          echo "oid=$oid" >> "$GITHUB_OUTPUT"
 
       - name: Tag the release commit
         env:
