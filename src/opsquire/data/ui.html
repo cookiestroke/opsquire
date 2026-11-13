@@ -2177,6 +2177,14 @@ function modelName(m) {
   for (const a of retinue()) for (const t of Object.values(a.tiers || {})) if (t.id) names[t.id] = t.label || t.id;
   return String(m).replace(/[A-Za-z0-9][A-Za-z0-9._-]+/g, x => names[x] || x);
 }
+/* the tokens the agent reported for the ask: what it re-read from its cache, what was new to it, what it wrote */
+const tokens = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
+function usageText(u) {
+  if (!u) return '';
+  const parts = [u.cache_read ? `${tokens(u.cache_read)} cached` : '', (u.input || u.cache_write) ? `${tokens((u.input || 0) + (u.cache_write || 0))} new` : '',
+    u.output ? `${tokens(u.output)} out` : '', u.calls ? plural(u.calls, 'call') : ''].filter(Boolean);
+  return parts.join(' · ');
+}
 function spentText(it) {
   const b = agentOf(it.agent).billing || {};
   if (!it.cost_usd) return '';
@@ -2290,8 +2298,8 @@ function chatItem(d, it) {
   }
   const runs = (it.actions || []).filter(a => a.kind === 'RUN');
   if (runs.length) body.push(el('div', { class: 'runs-cards' }, runs.map(a => runCard(d, a, it.at))));
-  if (it.cost_usd || it.model) body.push(el('div', { class: 'faint small', title: 'What the agent reported for the tokens this ask used, at API list prices. Whether that is money depends on how the agent is billed, which its retinue entry says.' },
-    [it.agent && retinue().length > 1 ? `${it.agent} · ` : '', it.model ? `${modelName(it.model)} · ` : '', spentText(it)].join('').replace(/ · $/, '')));
+  if (it.cost_usd || it.model || it.usage) body.push(el('div', { class: 'faint small', title: 'What the agent reported for the tokens this ask used, at API list prices. Whether that is money depends on how the agent is billed, which its retinue entry says.' },
+    [it.agent && retinue().length > 1 ? it.agent : '', it.model ? modelName(it.model) : '', spentText(it), usageText(it.usage)].filter(Boolean).join(' · ')));
   return el('div', { class: 'msg agent' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' }, body));
 }
 /* An ask and its follow-ups are one conversation (the first ask's id); newest conversation first. */

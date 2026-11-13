@@ -21,8 +21,12 @@ if os.environ.get("FAKE_LOG"):
         log.write(json.dumps({"piece": piece, "prompt": prompt, "argv": argv, "cwd": os.getcwd()}) + "\n")
 
 
+USAGE = json.loads(os.environ.get("FAKE_USAGE") or "{}")
+
+
 def result(text: str, cost: float = 0.01) -> None:
-    print(json.dumps({"type": "result", "result": text, "session_id": session, "total_cost_usd": cost}), flush=True)
+    ev = {"type": "result", "result": text, "session_id": session, "total_cost_usd": cost, **USAGE}
+    print(json.dumps(ev), flush=True)
     sys.exit(0)
 
 
@@ -142,4 +146,6 @@ text = (
     f"RUN: opsquire run {reused}\n"
     f"RUN: opsquire run {reused} --apply" + pr_line
 )
-print(json.dumps({"type": "result", "result": text, "session_id": session, "total_cost_usd": 0.01}), flush=True)
+print(
+    json.dumps({"type": "result", "result": text, "session_id": session, "total_cost_usd": 0.01, **USAGE}), flush=True
+)

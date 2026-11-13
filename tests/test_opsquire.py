@@ -2828,6 +2828,19 @@ class OpsTest(unittest.TestCase):
                 shutil.rmtree(self.home / "general/web1_child")
                 shutil.rmtree(self.home / "var/runs" / tid)
 
+    def test_an_ask_records_the_tokens_its_agent_reported(self) -> None:
+        self.agents_file()
+        tokens = {"input_tokens": 12, "cache_read_input_tokens": 180000, "cache_creation_input_tokens": 6000}
+        self.env["FAKE_USAGE"] = json.dumps({"usage": tokens | {"output_tokens": 3000}, "num_turns": 24})
+        r = self.cli("ask", "--no-grill", "--no-split", "restart web1 bots")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        want = {"input": 12, "cache_read": 180000, "cache_write": 6000, "output": 3000, "calls": 24}
+        self.assertEqual(json.loads(next((self.home / "var/asks").glob("*.json")).read_text())["usage"], want)
+        chat = [
+            json.loads(line) for line in next((self.home / "var/asks").glob("*.chat.jsonl")).read_text().splitlines()
+        ]
+        self.assertEqual(next(c for c in chat if c["kind"] == "agent")["usage"], want)
+
     def test_threads_writing_one_file_never_share_a_temporary_file(self) -> None:
         from opsquire.model import write_json
 

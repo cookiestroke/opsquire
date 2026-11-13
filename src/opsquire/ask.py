@@ -133,6 +133,7 @@ class AskResult:
     recommend: str = ""
     split: list[str] = field(default_factory=list)
     pieces: list[dict[str, Any]] = field(default_factory=list)
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 def layered(base: Any, over: Any) -> Any:
@@ -250,6 +251,24 @@ def _lines(stream: IO[str]) -> Iterator[str]:
     yield from iter(stream.readline, "")
 
 
+USAGE_FIELDS = {
+    "input": "input_tokens",
+    "cache_read": "cache_read_input_tokens",
+    "cache_write": "cache_creation_input_tokens",
+    "output": "output_tokens",
+}
+
+
+def stream_usage(ev: dict[str, Any]) -> dict[str, int]:
+    """The tokens a claude-stream-json result reports, in opsquire's names, and how many calls the agent made."""
+    found = ev.get("usage")
+    raw: dict[str, Any] = found if isinstance(found, dict) else {}
+    out = {name: int(raw[key]) for name, key in USAGE_FIELDS.items() if isinstance(raw.get(key), int)}
+    if out and isinstance(ev.get("num_turns"), int):
+        out["calls"] = int(ev["num_turns"])
+    return out
+
+
 def parse_claude_stream(stream: IO[str], progress: Callable[[str], None], res: AskResult) -> None:
     for line in _lines(stream):
         try:
@@ -268,6 +287,7 @@ def parse_claude_stream(stream: IO[str], progress: Callable[[str], None], res: A
             res.text = str(ev.get("result") or "")
             res.session = ev.get("session_id") or res.session
             res.cost_usd = ev.get("total_cost_usd")
+            res.usage = stream_usage(ev)
             if ev.get("is_error"):
                 res.exit_code = 1
 
@@ -372,6 +392,7 @@ class Conversation:
     label: str = ""
     cost: float = 0.0
     model: str = ""
+    usage: dict[str, int] = field(default_factory=dict)
 
     def progress(self, msg: str) -> None:
         say(f"  · {self.label + ' ' if self.label else ''}{msg}")
@@ -411,6 +432,8 @@ class Conversation:
         self.session = res.session or self.session
         res.session = self.session
         self.cost += res.cost_usd or 0
+        for name, n in res.usage.items():
+            self.usage[name] = self.usage.get(name, 0) + n
         budget.add(res.cost_usd)
         res.actions = ACTION_RE.findall(res.text)
         return res
@@ -611,7 +634,7 @@ def ask(
         turn = AskResult(waiting=f"{e}; continue with --resume and a new --budget")
     res.text, res.exit_code, res.actions = turn.text, turn.exit_code, turn.actions
     res.waiting, res.interrupted, res.split = turn.waiting, turn.interrupted, turn.split
-    res.session, res.cost_usd = conv.session, conv.cost
+    res.session, res.cost_usd, res.usage = conv.session, conv.cost, dict(conv.usage)
     if res.split:
         from .parallel import fan_out
 
@@ -628,6 +651,7 @@ def ask(
         repos.drop(copies)
         handover.record_run_lines(res.actions, prompt, f"ask {res.ask_id}")
     spent = {"cost_usd": res.cost_usd, "billing": billing(agent), "model": conv.model, "agent": name}
+    spent |= {"usage": res.usage} if res.usage else {}
     Chat.add("agent", res.text.strip(), actions=[{"kind": k, "text": t} for k, t in res.actions], **spent)
     Chat.add("end", status, waiting=res.waiting or "")
     save_record(
