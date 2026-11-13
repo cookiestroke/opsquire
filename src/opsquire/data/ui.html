@@ -1262,6 +1262,10 @@ function renderInbox() {
       el('span', { class: 'grow' }),
       agentPick, tierSeg,
       el('button', { type: 'submit', class: 'askgo', title: 'send to your squire' }, 'Ask ', el('span', { 'aria-hidden': 'true' }, '↑')))));
+  for (const [agent, resets] of Object.entries(heldAgents(d.asks || []))) {
+    parts.push(el('div', { class: 'stale', role: 'status' }, el('b', {}, `${retinue().length > 1 ? agent + ': the' : 'The'} agent's usage limit is reached.`),
+      el('span', {}, resets ? `Chats waiting on it continue by themselves at ${clock(resets)}.` : 'Its reset time could not be read: continue a chat yourself once it has reset.')));
+  }
   const convs = conversations(d.asks || []), unread = unreadChats();
   const recentAsks = convs.filter((c, i) => i < (S.allAsks ? 30 : 4) || unread.has(c.id));
   if (recentAsks.length) {
@@ -1269,7 +1273,7 @@ function renderInbox() {
     parts.push(el('div', { class: 'block' }, recentAsks.map(c => {
       const a = c.last, live = liveAskJob(c.id);
       const runs = !live && a.status === 'ok' ? runsState(a.actions, a.ended) : 'none';
-      const state = live ? (live.status === 'waiting' ? ['warn', 'waiting for you'] : ['live', 'working']) : runs === 'unrun' ? ['warn', 'run waiting'] : runs === 'going' ? ['live', 'run going'] : a.status === 'ok' ? ['good', 'answered'] : a.status === 'waiting' ? ['warn', 'waiting for you'] : ['bad', a.status || '?'];
+      const state = live ? (live.status === 'waiting' ? ['warn', 'waiting for you'] : ['live', 'working']) : runs === 'unrun' ? ['warn', 'run waiting'] : runs === 'going' ? ['live', 'run going'] : a.status === 'ok' ? ['good', 'answered'] : a.status === 'waiting' ? ['warn', 'waiting for you'] : a.status === 'limited' ? ['warn', a.resets_at ? `limit until ${clock(a.resets_at)}` : 'limit reached'] : ['bad', a.status || '?'];
       const news = unread.has(c.id);
       return el('div', { class: `lrow ${news ? 'unread' : ''}`, role: 'button', tabindex: '0', title: c.first.prompt || '', onclick: () => live ? openJob(live.job_id, false, 'ask') : openAsk(c.id), onkeydown: e => { if (e.key === 'Enter') e.currentTarget.click(); } },
         news ? el('span', { class: 'unreaddot', title: 'a reply you have not opened yet', 'aria-label': 'unread' }) : null,
@@ -2284,6 +2288,8 @@ function chatItem(d, it) {
     if (runs === 'unrun') return el('div', { class: 'msg end warn' }, 'waiting for your run');
     if (runs === 'going') return el('div', { class: 'msg end warn' }, 'your run is going');
     if (runs === 'ran') return el('div', { class: 'msg end good' }, 'your run finished');
+    if (it.text === 'limited') return el('div', { class: 'msg end warn' }, it.resets_at ? `stopped at the usage limit; continues by itself at ${clock(it.resets_at)}` : 'stopped at the usage limit; its reset time could not be read',
+      it.last && !it.resets_at ? btn('Continue', () => continueChat(d), 'sm', { title: 'once the limit has reset: carry on where it stopped' }) : null);
     return el('div', { class: `msg end ${it.text === 'ok' ? 'good' : 'warn'}` }, it.text === 'ok' ? 'done' : it.waiting ? `waiting: ${it.waiting}` : it.text);
   }
   if (it.kind === 'approve') return el('div', { class: 'msg agent approve' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' },
@@ -2301,6 +2307,16 @@ function chatItem(d, it) {
   if (it.cost_usd || it.model || it.usage) body.push(el('div', { class: 'faint small', title: 'What the agent reported for the tokens this ask used, at API list prices. Whether that is money depends on how the agent is billed, which its retinue entry says.' },
     [it.agent && retinue().length > 1 ? it.agent : '', it.model ? modelName(it.model) : '', spentText(it), usageText(it.usage)].filter(Boolean).join(' · ')));
   return el('div', { class: 'msg agent' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' }, body));
+}
+const clock = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+/* agents whose latest ask stopped at the usage limit and whose reset (with the console's two-minute margin) has not
+   come, as followup.held_agents decides on the server */
+function heldAgents(asks) {
+  const latest = {};
+  for (const a of [...asks].sort((x, y) => String(x.started || '').localeCompare(String(y.started || '')))) latest[a.agent] = a;
+  const out = {};
+  for (const [agent, a] of Object.entries(latest)) if (a.status === 'limited' && (!a.resets_at || Date.now() < Date.parse(a.resets_at) + 120000)) out[agent] = a.resets_at || null;
+  return out;
 }
 /* An ask and its follow-ups are one conversation (the first ask's id); newest conversation first. */
 function conversations(asks) {
@@ -2453,6 +2469,9 @@ function renderChat(d) {
   d.runsKey = runsKey(d);
   const reply = focused && document.getElementById('askreply');
   if (reply) { reply.focus({ preventScroll: true }); reply.setSelectionRange(focused[0], focused[1]); }
+}
+async function continueChat(d) {
+  try { const r = await post('/api/ask', { request: 'Continue where you stopped.', resume: d.ask_id || d.id }); refresh(); openJob(r.job_id, false, 'ask'); } catch (err) { toast(`continue failed: ${err.message}`); }
 }
 function replyAsk(d, text) { saved('reply.' + d.id, ''); answer(d.id, text); }
 async function pollAskChat(d) {

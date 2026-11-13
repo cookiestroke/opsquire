@@ -634,7 +634,9 @@ def ask(
     budget: Budget | None = None,
     reply_given: bool = False,
     model: str = "",
+    fresh: bool = False,
 ) -> AskResult:
+    """`fresh` with `resume_ask`: a new agent session in that ask's conversation instead of resuming its session."""
     budget = budget or Budget(configured_budget(), strict=False)
     session = None
     copies = None
@@ -645,9 +647,11 @@ def ask(
             from .parallel import resume_parallel
 
             return resume_parallel(rec, prompt if reply_given else None, max_agents, budget)
-        if not rec.get("session"):
-            raise OpsquireError(f"ask {rec['ask_id']} has no agent session to resume")
-        session, agent_name = str(rec["session"]), str(rec.get("agent"))
+        agent_name = str(rec.get("agent") or "") or agent_name
+        if not fresh:
+            if not rec.get("session"):
+                raise OpsquireError(f"ask {rec['ask_id']} has no agent session to resume")
+            session = str(rec["session"])
     name, agent = pick_agent(agent_name)
     started = now()
     res = AskResult(ask_id=f"{compact(started)}_{name}")

@@ -96,7 +96,7 @@ class Jobs:
         self.problems.pop(job.task_id, None)
         return job
 
-    def start_ask(self, request: str, resume: str = "", model: str = "", agent: str = "") -> Job:
+    def start_ask(self, request: str, resume: str = "", model: str = "", agent: str = "", fresh: bool = False) -> Job:
         """An `opsquire ask` from the page: a new request, or a follow-up in an earlier ask's conversation."""
         request = request.strip()
         if not request and not resume:
@@ -107,6 +107,7 @@ class Jobs:
             "opsquire",
             "ask",
             *(["--resume", resume] if resume else []),
+            *(["--fresh"] if fresh and resume else []),
             *([request] if request else []),
         ]
         with self.lock:
@@ -129,10 +130,17 @@ class Jobs:
             live = [j for j in self.jobs.values() if j.status != "done"]
         busy_conversations = {conv.get(str(j.ask_id), str(j.ask_id)) for j in live if j.mode == "ask" and j.ask_id}
         busy_tasks = {j.task_id for j in live if j.task_id}
+        at = now()
+        held = followup.held_agents(asks, at)
+        wakes = [
+            (ask_id, followup.report(runs), False)
+            for ask_id, runs in followup.due(asks, runs_for, busy_conversations, busy_tasks, at, held)
+        ]
+        wakes += followup.continuations(asks, runs_for, busy_conversations, held, at)
         started = []
-        for ask_id, runs in followup.due(asks, runs_for, busy_conversations, busy_tasks, now()):
+        for ask_id, message, fresh in wakes:
             try:
-                started.append(self.start_ask(followup.report(runs), ask_id))
+                started.append(self.start_ask(message, ask_id, fresh=fresh))
             except OpsquireError:
                 break
         return started

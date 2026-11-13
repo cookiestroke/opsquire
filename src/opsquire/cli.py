@@ -679,6 +679,8 @@ def cmd_approve_server(a: argparse.Namespace) -> int:
 
 def cmd_ask(a: argparse.Namespace) -> int:
     task_id = resolve_task(a.task).id if a.task else None
+    if a.fresh and not (a.resume and a.request):
+        raise OpsquireError("--fresh starts a new agent session in the conversation of --resume, with your request")
     if not a.request and not a.resume:
         raise OpsquireError('say what you want, e.g. opsquire ask "restart the bots on host x"')
     if a.max_agents is not None and a.max_agents < 1:
@@ -695,6 +697,7 @@ def cmd_ask(a: argparse.Namespace) -> int:
         budget=Budget(a.budget if a.budget is not None else configured_budget(), a.strict_budget),
         reply_given=bool(a.request),
         model=a.model or "",
+        fresh=a.fresh,
     )
     if res.pieces:
         print(res.text.strip())
@@ -1182,6 +1185,9 @@ def parser() -> argparse.ArgumentParser:
     ak.add_argument("--resume", metavar="ASK_ID", help="continue an earlier (e.g. interrupted) ask")
     ak.add_argument("--agent", help="agent from retinue.json (default from retinue.json)")
     ak.add_argument("--new", action="store_true", help="start a fresh conversation even with --task")
+    ak.add_argument(
+        "--fresh", action="store_true", help="with --resume: a new agent session in that conversation, not its old one"
+    )
     ak.add_argument("--no-grill", action="store_true", help="no interview: the agent takes defaults and records them")
     ak.add_argument("--no-split", action="store_true", help="one agent only, even when the request has parts")
     ak.add_argument("--max-agents", type=int, metavar="N", help="at most N agents working at once (default: no limit)")

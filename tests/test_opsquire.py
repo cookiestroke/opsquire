@@ -2879,6 +2879,105 @@ class OpsTest(unittest.TestCase):
             (chat[-1]["kind"], chat[-1]["text"], chat[-1]["resets_at"]), ("end", "limited", rec["resets_at"])
         )
 
+    def test_a_usage_limit_holds_follow_ups_and_continues_each_chat_once_after_the_reset(self) -> None:
+        from opsquire import followup
+
+        def ask(ask_id: str, start: str, **extra: Any) -> dict[str, Any]:
+            rec = {"ask_id": ask_id, "agent": "claude", "status": "ok", "started": f"2026-11-13T{start}:00.000Z"}
+            return rec | {"ended": f"2026-11-13T{start}:30.000Z", "session": f"s-{ask_id}"} | extra
+
+        def run(rid: str, task: str, ended: str) -> dict[str, Any]:
+            return {
+                "run_id": rid,
+                "task_id": task,
+                "mode": "read",
+                "status": "ok",
+                "ended": f"2026-11-13T{ended}:00.000Z",
+            }
+
+        first = ask("a1", "18:00", prompt="read t1", actions=[{"kind": "RUN", "text": "opsquire run t1"}])
+        stopped = ask("a2", "18:46", copies="a1", status="limited", resets_at="2026-11-13T19:00:00.000Z")
+        stopped["prompt"] = "The operator ran what you handed over: t1"
+        other = ask("b1", "18:10", actions=[{"kind": "RUN", "text": "opsquire run t2"}])
+        runs = {"t1": [run("r1", "t1", "18:48")], "t2": [run("r2", "t2", "18:30")]}
+        asks = [first, stopped, other]
+
+        def at(clock: str) -> dt.datetime:
+            return dt.datetime.fromisoformat(f"2026-11-13T{clock}+00:00")
+
+        def wakes(clock: str, items: list[dict[str, Any]] = asks) -> tuple[list[Any], list[Any]]:
+            held = followup.held_agents(items, at(clock))
+            due = followup.due(items, lambda t: runs.get(t, []), set(), set(), at(clock), held)
+            return due, followup.continuations(items, lambda t: runs.get(t, []), set(), held, at(clock))
+
+        self.assertEqual(followup.held_agents(asks, at("18:50:00")), {"claude": "2026-11-13T19:00:00.000Z"})
+        self.assertEqual(wakes("18:50:00"), ([], []), "the agent is held: b1's finished run waits too")
+        self.assertEqual(wakes("19:01:59"), ([], []), "two minutes' margin after the reset")
+        due, cont = wakes("19:02:00")
+        self.assertEqual(due, [("b1", runs["t2"])])
+        self.assertEqual([(a, fresh) for a, _, fresh in cont], [("a1", False)], "resumes the session before the limit")
+        message = cont[0][1]
+        self.assertTrue(message.startswith(followup.LIMIT_NOTE), message)
+        self.assertIn("The operator ran what you handed over: t1", message)
+        self.assertIn("`opsquire run t1` ended ok (run r1)", message, "the runs that ended meanwhile, in the same turn")
+        again = ask("a3", "19:03", copies="a1")
+        self.assertEqual(wakes("19:10:00", [*asks, again])[1], [], "continued once: a new ask follows the limited one")
+        alone = {**stopped, "copies": None, "ask_id": "c1"}
+        self.assertEqual([(a, f) for a, _, f in wakes("19:02:00", [alone])[1]], [("c1", True)], "its first turn: fresh")
+        unknown = {**stopped, "resets_at": None}
+        self.assertEqual(followup.held_agents([first, unknown], at("23:00:00")), {"claude": None})
+        self.assertEqual(wakes("23:00:00", [first, unknown]), ([], []), "an unread reset is the operator's to continue")
+        repeat = {**stopped, "prompt": message, "started": "2026-11-13T19:03:00.000Z", "ask_id": "a4"}
+        repeat |= {"ended": "2026-11-13T19:03:30.000Z", "resets_at": "2026-11-14T00:00:00.000Z"}
+        cont = followup.continuations(
+            [first, stopped, repeat], lambda t: [], set(), {}, dt.datetime(2026, 11, 14, 0, 5, tzinfo=dt.UTC)
+        )
+        self.assertEqual(
+            cont[0][1].count(followup.LIMIT_NOTE), 1, "a turn that hits the limit again is not wrapped twice"
+        )
+
+    def test_the_console_continues_a_chat_stopped_at_the_limit_once_it_resets(self) -> None:
+        self.agents_file()
+        log = self.tmp / "agent.jsonl"
+        self.env["FAKE_LOG"] = str(log)
+        asks = self.home / "var/asks"
+        asks.mkdir(parents=True)
+
+        def stamp(minutes: float) -> str:
+            t = dt.datetime.now(dt.UTC) + dt.timedelta(minutes=minutes)
+            return t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        first: dict[str, Any] = {"ask_id": "a1", "agent": "fake", "status": "ok", "started": stamp(-60)}
+        first["ended"] = stamp(-59)
+        first |= {"session": "sess-a1", "prompt": "check web1", "actions": []}
+        stopped = {"ask_id": "a2", "copies": "a1", "agent": "fake", "status": "limited", "session": "sess-a1"}
+        stopped |= {"started": stamp(-20), "ended": stamp(-19), "resets_at": stamp(-10), "prompt": "and web2?"}
+        for rec in (first, stopped):
+            (asks / f"{rec['ask_id']}.json").write_text(json.dumps(rec))
+        proc, call = self.console()
+        try:
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                mine = sorted(
+                    (a for a in call("/api/state")["asks"] if a["conversation"] == "a1"), key=lambda a: a["started"]
+                )
+                if len(mine) == 3 and mine[-1]["status"] == "ok":
+                    break
+                time.sleep(0.3)
+            else:
+                self.fail(f"the chat was not continued: {mine}")
+            time.sleep(3)
+            self.assertEqual(len([a for a in call("/api/state")["asks"] if a["conversation"] == "a1"]), 3, "only once")
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual(len(calls), 1)
+        self.assertIn("--resume", calls[0]["argv"])
+        self.assertEqual(calls[0]["argv"][calls[0]["argv"].index("--resume") + 1], "sess-a1")
+        self.assertIn("usage limit before you could answer", calls[0]["prompt"])
+        self.assertIn("and web2?", calls[0]["prompt"])
+
     def test_threads_writing_one_file_never_share_a_temporary_file(self) -> None:
         from opsquire.model import write_json
 
