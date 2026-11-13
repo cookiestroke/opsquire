@@ -12,7 +12,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from . import handover, locks, repos
+from . import chatread, handover, locks, repos
 from .docs import final_mode, run_stats
 from .lint import asks_first, last_lint
 from .model import (
@@ -659,6 +659,7 @@ def state(at: dt.datetime | None = None, with_offboarded: bool = False) -> dict[
         "offboarded": len([t for t in gone if t.kind != "general"]),
         "runs": {str(r.get("run_id")): run_view(r) for r in runs},
         "asks": [ask_view(a) for a in asks],
+        "unread_chats": chatread.unread(asks, chatread.load()),
         "scripts": scripts,
         "locks": held,
         "running": [str(r.get("run_id")) for r in runs if r.get("status") == "running"],

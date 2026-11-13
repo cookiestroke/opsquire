@@ -2827,6 +2827,37 @@ class OpsTest(unittest.TestCase):
                 shutil.rmtree(self.home / "general/web1_child")
                 shutil.rmtree(self.home / "var/runs" / tid)
 
+    def test_a_chat_with_a_reply_is_unread_for_the_whole_home_until_opened(self) -> None:
+        asks = self.home / "var/asks"
+        asks.mkdir(parents=True)
+
+        def ended(ask_id: str, **extra: Any) -> None:
+            at = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            record = {"ask_id": ask_id, "status": "ok", "started": at, "ended": at, "prompt": ask_id, **extra}
+            (asks / f"{ask_id}.json").write_text(json.dumps(record))
+
+        ended("before", copies="before")
+        time.sleep(0.01)
+        proc, call = self.console()
+        try:
+            self.assertEqual(call("/api/state")["unread_chats"], [], "chats that ended before the console are read")
+            time.sleep(0.01)
+            ended("first")
+            self.assertEqual(call("/api/state")["unread_chats"], ["first"])
+            self.assertEqual(call("/api/chatread", {"conversation": "first"}), {"ok": True})
+            self.assertEqual(call("/api/state")["unread_chats"], [])
+            time.sleep(0.01)
+            ended("follow", copies="first")
+            self.assertEqual(call("/api/state")["unread_chats"], ["first"], "a follow-up's reply is news again")
+            self.assertIn("no conversation", call("/api/chatread", {"conversation": "follow"})["error"])
+            self.assertIn("bad conversation id", call("/api/chatread", {"conversation": "../x"})["error"])
+        finally:
+            proc.send_signal(signal.SIGINT)
+            self.assertEqual(proc.wait(timeout=15), 0)
+        read = json.loads((self.home / "var/chats-read.json").read_text())
+        self.assertEqual(sorted(read["read"]), ["first"])
+        self.assertLess(read["since"], read["read"]["first"])
+
     def test_console_keeps_a_prompt_that_output_landed_behind(self) -> None:
         from opsquire.jobs import Job, Jobs
 

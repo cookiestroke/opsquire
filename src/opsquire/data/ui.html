@@ -64,6 +64,7 @@ header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; b
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
 .seg .n { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 5px; border-radius: 8px; font-size: .8em; background: var(--warn); color: #fff; line-height: 1.5; }
+.seg .n.chats { background: var(--accent); color: var(--panel); }
 #search { flex: 1 1 180px; min-width: 120px; max-width: 420px; }
 #conn { color: var(--muted); font-size: .9em; white-space: nowrap; }
 #conn::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--grey); margin-right: 5px; }
@@ -409,6 +410,8 @@ html.dev .tile .num { font-size: 1.5rem; }
 .lrow:hover { background: var(--panel2); }
 .lrow.sel { background: var(--accent-bg); }
 .lrow.busy { background: var(--accent-bg); }
+.lrow.unread .lline:first-child { font-weight: 600; }
+.unreaddot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .lrow .tick { align-self: flex-start; margin-top: 1px; }
 .lmain { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ltitle { display: flex; gap: 8px; align-items: center; min-width: 0; }
@@ -897,7 +900,7 @@ async function api(path, opts) {
 }
 function post(path, body) { return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
 /* ---- state ---- */
-const S = { version: null, shownPrompts: new Set(), data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, map: { hours: 24, end: null }, hist: { mode: 'list', machine: '', script: '', sort: 'recent' },
+const S = { version: null, shownPrompts: new Set(), marking: new Set(), data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, map: { hours: 24, end: null }, hist: { mode: 'list', machine: '', script: '', sort: 'recent' },
   dev: false, details: new Set(), judging: new Map(), judgeText: new Map(), decideAll: null };
 const task = id => (S.data && S.data.tasks && S.data.tasks[id]) || null;
 const run = id => (S.data && S.data.runs && S.data.runs[id]) || null;
@@ -980,6 +983,7 @@ function render() {
   const views = { inbox: renderInbox, history: renderHistory, settings: renderSettings };
   main.replaceChildren(...[renderStale(), renderLive(), (views[S.view] || renderInbox)()].filter(Boolean));
   renderPane();
+  markShownChatRead();
   if (keep) {
     const n = document.getElementById(keep.id);
     if (n) { n.focus({ preventScroll: true }); if (typeof keep.start === 'number' && n.setSelectionRange) { try { n.setSelectionRange(keep.start, keep.end); } catch (e) { /* not a text field */ } } }
@@ -1014,10 +1018,27 @@ function renderStale() {
     s.jobs ? el('span', { class: 'small' }, `Stopping the console interrupts ${plural(s.jobs, 'job')} running from it: let ${s.jobs === 1 ? 'it' : 'them'} finish first.`) : null);
 }
 function renderSeg() {
-  const n = inbox().length;
+  const n = inbox().length, chats = unreadChats().size;
   $('#seg').replaceChildren(...VIEWS.map(([id, label]) => el('button', { role: 'tab', 'aria-pressed': String(S.view === id), onclick: () => switchView(id) }, label,
-    id === 'inbox' && n ? el('span', { class: 'n', title: `${n} waiting on you` }, String(n)) : null)));
+    id === 'inbox' && n ? el('span', { class: 'n', title: `${n} waiting on you` }, String(n)) : null,
+    id === 'inbox' && chats ? el('span', { class: 'n chats', title: `${plural(chats, 'chat')} with news since you last opened ${chats === 1 ? 'it' : 'them'}` }, String(chats)) : null)));
   $('#brand').title = `home ${S.data.home || ''}`;
+  document.title = chats ? `(${chats}) Opsquire` : 'Opsquire';
+}
+/* chats with a reply you have not opened yet, kept for the whole home (var/chats-read.json), so every tab agrees, and
+   chats whose agent is waiting on your answer somewhere other than the pane */
+const unreadInHome = () => new Set((S.data && S.data.unread_chats) || []);
+function unreadChats() {
+  const out = unreadInHome(), shown = paneConversation(S.pane);
+  for (const j of jobs()) if (j.mode === 'ask' && j.status === 'waiting' && j.ask_id && conversationOf(j.ask_id) !== shown) out.add(conversationOf(j.ask_id));
+  return out;
+}
+/* the chat on screen counts as read: it posts once per conversation until the state says it is read */
+function markShownChatRead() {
+  const conv = paneConversation(S.pane);
+  if (!conv || document.hidden || !unreadInHome().has(conv) || S.marking.has(conv)) return;
+  S.marking.add(conv);
+  post('/api/chatread', { conversation: conv }).then(() => refresh(), err => toast(`cannot mark the chat read: ${err.message}`)).finally(() => S.marking.delete(conv));
 }
 function renderLive() {
   const d = S.data, items = [];
@@ -1232,15 +1253,17 @@ function renderInbox() {
       el('span', { class: 'grow' }),
       agentPick, tierSeg,
       el('button', { type: 'submit', class: 'askgo', title: 'send to your squire' }, 'Ask ', el('span', { 'aria-hidden': 'true' }, '↑')))));
-  const convs = conversations(d.asks || []);
-  const recentAsks = convs.slice(0, S.allAsks ? 30 : 4);
+  const convs = conversations(d.asks || []), unread = unreadChats();
+  const recentAsks = convs.filter((c, i) => i < (S.allAsks ? 30 : 4) || unread.has(c.id));
   if (recentAsks.length) {
     parts.push(sec('Recent asks', null, convs.length > 4 ? btn(S.allAsks ? 'fewer' : `all ${convs.length}`, () => { S.allAsks = !S.allAsks; render(); }, 'sm') : null));
     parts.push(el('div', { class: 'block' }, recentAsks.map(c => {
       const a = c.last, live = liveAskJob(c.id);
       const runs = !live && a.status === 'ok' ? runsState(a.actions, a.ended) : 'none';
       const state = live ? (live.status === 'waiting' ? ['warn', 'waiting for you'] : ['live', 'working']) : runs === 'unrun' ? ['warn', 'run waiting'] : runs === 'going' ? ['live', 'run going'] : a.status === 'ok' ? ['good', 'answered'] : a.status === 'waiting' ? ['warn', 'waiting for you'] : ['bad', a.status || '?'];
-      return el('div', { class: 'lrow', role: 'button', tabindex: '0', title: c.first.prompt || '', onclick: () => live ? openJob(live.job_id, false, 'ask') : openAsk(c.id), onkeydown: e => { if (e.key === 'Enter') e.currentTarget.click(); } },
+      const news = unread.has(c.id);
+      return el('div', { class: `lrow ${news ? 'unread' : ''}`, role: 'button', tabindex: '0', title: c.first.prompt || '', onclick: () => live ? openJob(live.job_id, false, 'ask') : openAsk(c.id), onkeydown: e => { if (e.key === 'Enter') e.currentTarget.click(); } },
+        news ? el('span', { class: 'unreaddot', title: 'a reply you have not opened yet', 'aria-label': 'unread' }) : null,
         el('span', { class: 'askhead' }, squire(!!live && live.status !== 'waiting')),
         el('div', { class: 'lmain' }, el('div', { class: 'lline', style: 'color:var(--fg)' }, c.first.prompt || '(follow-up)'),
           c.asks.length > 1 ? el('div', { class: 'lline faint small' }, `${c.asks.length} turns · last: ${truncate(askLabel(a.prompt), 60)}`) : null),
@@ -2459,7 +2482,7 @@ function boot() {
   window.addEventListener('resize', () => { if (S.view === 'history' && S.hist.mode === 'timeline' && S.data) { clearTimeout(rTimer); rTimer = setTimeout(render, 150); } });
   setInterval(() => { if (S.data && !document.hidden) render(); }, 60000);
   setInterval(() => { if (!document.hidden) refresh(); }, 30000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); if (S.data) markShownChatRead(); } });
   connect();
   load();
 }

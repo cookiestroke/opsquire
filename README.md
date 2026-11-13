@@ -67,7 +67,9 @@ opsquire restore <task>            bring one back; `opsquire init --offboard-day
 opsquire milestones --since 2h     what others would want to know: tasks closed, applies that failed, thread results
 opsquire doctor                    console up and current, stop hook, contract, author: what needs fixing
 opsquire ui --open                 the console: the inbox of runs waiting on you, threads, runs, locks, and an
-                                   Ask box: your request goes to an agent as a chat you can follow and answer
+                                   Ask box: your request goes to an agent as a chat you can follow and answer;
+                                   a chat with a reply you have not opened counts on the Inbox tab and the page
+                                   title until you open it (read state is the home's, var/chats-read.json)
 opsquire integrate                 install the opsquire skill for Claude agents; make the home a local git repo
 opsquire ask --no-split "<...>"    one agent only (asks split into parallel pieces by default)
 opsquire ask --max-agents 2 ...    at most 2 agents at once; --budget 20 [--strict-budget] for the spend

@@ -1,9 +1,10 @@
 """`opsquire ui`: the operator's console on localhost. One page (data/ui.html) reads the state (threads, tasks, runs,
 asks, scripts, locks) from /api/state and follows changes over /api/stream (server-sent events: one watcher thread
 looks at every file of the home's tasks, general scripts, runs, locks, asks and thread results), tails a run's
-output.log and shows a task's design.md or script. Its writes are closing a task (the same code as `opsquire close`)
-and runs started from the page (jobs.py). A running server keeps the Python it started with, so it also compares that
-code with what is on disk and installed now, and the page tells the operator to restart it when they differ."""
+output.log and shows a task's design.md or script. Its writes are closing a task (the same code as `opsquire close`),
+runs started from the page (jobs.py) and which chats the operator has read (chatread.py). A running server keeps the
+Python it started with, so it also compares that code with what is on disk and installed now, and the page tells the
+operator to restart it when they differ."""
 
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, tools
+from . import __version__, chatread, tools
 from .close import close_task
 from .jobs import Jobs
 from .model import (
@@ -64,7 +65,7 @@ def fingerprint() -> str:
     a new folder, which changes its task's runs folder; a finished run's record never changes again, so only each
     task's latest one is read."""
     home, var = home_dir(), var_dir()
-    paths: list[str] = []
+    paths: list[str] = [str(chatread.path())]
     for root in (home / "tasks", home / "general", home / "threads", var / "asks", var / "locks"):
         for folder, dirs, files in os.walk(root):
             dirs[:] = [d for d in dirs if d not in IGNORED_PARTS]
@@ -308,6 +309,11 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/interrupt":
                 self.jobs.interrupt(str(body.get("job", "")))
                 self.send_json({"ok": True})
+            elif url.path == "/api/chatread":
+                from .state import load_asks
+
+                chatread.mark(str(body.get("conversation", "")), load_asks())
+                self.send_json({"ok": True})
             elif url.path == "/api/close":
                 run = body.get("run")
                 closed = close_task(
@@ -362,6 +368,7 @@ class UIServer(ThreadingHTTPServer):
         self.stopping = threading.Event()
         self.jobs = Jobs()
         self.code = code_hashes()
+        chatread.start()
         self.generation = 0
         self.followed = -1
         self.seen: tuple[str, dict[str, Any]] | None = None
