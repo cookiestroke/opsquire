@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 import unittest
 import urllib.request
@@ -2826,6 +2827,27 @@ class OpsTest(unittest.TestCase):
                 shutil.rmtree(next(self.home.glob(f"tasks/*/{tid}")))
                 shutil.rmtree(self.home / "general/web1_child")
                 shutil.rmtree(self.home / "var/runs" / tid)
+
+    def test_threads_writing_one_file_never_share_a_temporary_file(self) -> None:
+        from opsquire.model import write_json
+
+        target, errors, start = self.tmp / "claude.mcp.json", [], threading.Barrier(8)
+
+        def piece() -> None:
+            start.wait()
+            for _ in range(100):
+                try:
+                    write_json(target, {"mcpServers": {}})
+                except OSError as e:
+                    errors.append(repr(e))
+
+        threads = [threading.Thread(target=piece) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [], "the pieces of a split ask write one approvals config at once")
+        self.assertEqual([p.name for p in self.tmp.iterdir() if p.name.endswith(".tmp")], [])
 
     def test_a_chat_with_a_reply_is_unread_for_the_whole_home_until_opened(self) -> None:
         asks = self.home / "var/asks"

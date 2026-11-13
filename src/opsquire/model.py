@@ -192,7 +192,8 @@ def read_json(path: Path) -> Any:
 
 
 def write_text(path: Path, text: str) -> None:
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    """Atomic: a temporary file of this thread's own, then a rename, so threads writing one file never share it."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         tmp.write_text(text)
         tmp.replace(path)
