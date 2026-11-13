@@ -385,7 +385,11 @@ html.dev .tile .num { font-size: 1.5rem; }
 .choice button.on.c-inherit { background: var(--panel2); color: var(--fg); }
 .msg .quick button { white-space: normal; text-align: left; max-width: 100%; overflow-wrap: anywhere; }
 .runs-cards { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
-.runcard { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-radius: var(--r-btn); border-left: 4px solid var(--k); background: var(--kb); }
+.runcard { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 6px; border-left: 4px solid var(--k); background: var(--kb); }
+.msg.report { padding-left: 48px; }
+.msg.report .bubble { background: var(--panel2); border: 1px solid var(--line2); color: var(--fg); max-width: min(92%, 720px); font-size: .9em; }
+.msg.report .reportrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.msg.report .runerr { color: var(--bad); overflow-wrap: anywhere; min-width: 0; flex: 1 1 200px; }
 .runcard .cmdline { color: var(--k); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; overflow-wrap: anywhere; }
 .runcard .runstate { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--fg); }
 .runcard .runerr { color: var(--bad); overflow-wrap: anywhere; min-width: 0; flex: 1 1 200px; }
@@ -1199,7 +1203,7 @@ function renderInbox() {
       return el('div', { class: 'lrow', role: 'button', tabindex: '0', title: c.first.prompt || '', onclick: () => live ? openJob(live.job_id, false, 'ask') : openAsk(c.id), onkeydown: e => { if (e.key === 'Enter') e.currentTarget.click(); } },
         el('span', { class: 'askhead' }, squire(!!live && live.status !== 'waiting')),
         el('div', { class: 'lmain' }, el('div', { class: 'lline', style: 'color:var(--fg)' }, c.first.prompt || '(follow-up)'),
-          c.asks.length > 1 ? el('div', { class: 'lline faint small' }, `${c.asks.length} turns · last: ${truncate(a.prompt || '', 60)}`) : null),
+          c.asks.length > 1 ? el('div', { class: 'lline faint small' }, `${c.asks.length} turns · last: ${truncate(askLabel(a.prompt), 60)}`) : null),
         el('div', { class: 'lright' }, el('span', { class: `pill ${state[0]}` }, state[1]), a.model ? el('span', { class: 'chip' }, (a.agent && retinue().length > 1 ? a.agent + ' · ' : '') + modelName(a.model)) : null, when(a.ended || a.started)));
     })));
   }
@@ -2024,7 +2028,8 @@ function buildJobPane(d) {
     const followText = writeBox('follow.' + ((j && j.ask_id) || d.id), { name: 'q', placeholder: 'follow up in this conversation (Enter sends, Shift+Enter for a new line)' }, sendFollow);
     d.follow = el('form', { class: 'follow', hidden: true, onsubmit: e => { e.preventDefault(); sendFollow(followText); } }, followText, btn('Send', null, 'sm', { type: 'submit' }));
     d.foot = el('div', { style: 'margin:0;width:100%;display:flex;flex-direction:column;gap:6px' }, d.ctl, d.follow);
-    paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title: ((j && j.args) || '') }, truncate((j && j.args) || '', 80)), ' ', d.pill, el('span', { class: 'grow' }), d.seg], d.body, 'ask', d.foot);
+    const opened = j && j.ask_id && (S.data.asks || []).find(a => a.ask_id === conversationOf(j.ask_id)), title = askLabel((opened && opened.prompt) || (j && j.args) || '');
+    paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title }, truncate(title, 80)), ' ', d.pill, el('span', { class: 'grow' }), d.seg], d.body, 'ask', d.foot);
     askView(d, S.askView || 'chat');
   } else {
     paneShell([el('span', { class: 'muted small' }, 'job '), j ? [taskLink(j.task_id || '?'), ' ', modeTag(j.mode), ' ', argsTag(j.args), ' '] : [el('span', { class: 'id' }, d.id), ' '], d.pill],
@@ -2047,7 +2052,11 @@ function jobFoot(d) {
   }
   fill(d.ctl, parts);
   d.ctl.hidden = !parts.length;
-  if (d.follow) d.follow.hidden = d.status !== 'done';
+  if (d.follow) {
+    d.follow.hidden = d.status !== 'done';
+    const t = d.follow.querySelector('textarea');
+    if (t && !d.follow.hidden) requestAnimationFrame(() => grow(t));
+  }
   $('#pf').hidden = !parts.length && (!d.follow || d.follow.hidden);
 }
 async function pollJob(d) {
@@ -2131,6 +2140,9 @@ function squire(talking) {
 }
 /* ---- an ask as a chat: you on the right, the squire on the left, its work as small lines between ---- */
 function chatItem(d, it) {
+  if (it.kind === 'you' && String(it.text || '').startsWith(FOLLOWUP_HEAD)) return el('div', { class: 'msg report' }, el('div', { class: 'bubble' },
+    el('div', { class: 'faint small' }, 'Your runs finished; the console sent them to the squire'),
+    it.text.split('\n').filter(l => l.startsWith('- ')).map(l => reportRow(d, l))));
   if (it.kind === 'you') return el('div', { class: 'msg you' }, el('div', { class: 'bubble' }, it.text));
   if (it.kind === 'step') return el('div', { class: 'msg step' }, `${it.piece ? it.piece + ' · ' : ''}${it.text}`);
   if (it.kind === 'end') {
@@ -2145,7 +2157,8 @@ function chatItem(d, it) {
     it.detail ? el('div', { class: 'what' }, it.detail) : null,
     it.pending ? el('div', { class: 'quick' }, btn('Allow', () => replyAsk(d, 'y'), 'sm primary', { title: 'let it run this once' }), btn('Deny', () => replyAsk(d, 'n'), 'sm', { title: 'refuse; the agent is told you said no' }),
       el('span', { class: 'faint small' }, 'Always allow it under Settings.')) : null));
-  const body = [el('div', { class: 'md' }, markdown(it.text || ''))];
+  const shown = (it.actions || []).some(a => a.kind === 'RUN') ? String(it.text || '').split('\n').filter(l => !/^RUN:\s*opsquire run /.test(l.trim())).join('\n') : it.text || '';
+  const body = [el('div', { class: 'md' }, markdown(shown))];
   if (it.kind === 'question') {
     body.push(el('div', { class: 'quick' }, btn(`✓ ${it.recommend || 'recommended'}`, () => replyAsk(d, ''), 'sm primary', { title: 'accept the recommended answer' })));
   }
@@ -2252,7 +2265,18 @@ function runCard(d, a, since) {
   if (!live && !settled) state.push(btn(run ? 'run again' : 'Run', () => startRun(line.task, line.mode, line.args, back), `sm ${run ? '' : 'primary'}`, { title: `run it here: ${a.text}` }));
   return el('div', { class: `runcard k-${kind}` }, head, el('div', { class: 'runstate' }, state));
 }
+const FOLLOWUP_HEAD = 'The operator ran what you handed over';
+const askLabel = text => (String(text || '').startsWith(FOLLOWUP_HEAD) ? 'your runs finished (sent by the console)' : String(text || ''));
+/* one run of the console's report: `- \`opsquire run ...\` ended <status> (run <id>)[: <error>]` */
+function reportRow(d, line) {
+  const m = /^- `opsquire run \S+[^`]*` ended (\S+) \(run (\S+)\)(?:: (.*))?$/.exec(line);
+  if (!m) return el('div', { class: 'md' }, markdown(line));
+  const [, status, runId, error] = m, mode = runId.split('_').pop();
+  return el('div', { class: 'reportrow' }, el('span', { class: 'small' }, mode), el('span', { class: `pill ${tone(status)}` }, status),
+    btn('record', () => openLog(runId, chatBack(d)), 'sm', { title: runId }), error ? el('span', { class: 'small runerr', title: error }, truncate(error, 160)) : null);
+}
 function renderChat(d) {
+  const stick = !d.rendered || d.chat.scrollTop + d.chat.clientHeight >= d.chat.scrollHeight - 24;
   const focused = document.activeElement && document.activeElement.id === 'askreply' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const talking = d.status && d.status !== 'done' && d.status !== 'waiting';
   const kids = [];
@@ -2283,6 +2307,8 @@ function renderChat(d) {
   if (d.status === 'waiting' && d.prompt && !pendingApprove) kids.push(el('div', { class: 'msg answerbox' }, el('form', { onsubmit: e => { e.preventDefault(); replyAsk(d, e.target.reply.value); } },
     writeBox('reply.' + d.id, { name: 'reply', id: 'askreply', placeholder: 'your answer (empty = the recommended one)' }, t => replyAsk(d, t.value)), btn('Send', null, 'sm primary', { type: 'submit' }))));
   fill(d.chat, kids);
+  if (stick) d.chat.scrollTop = d.chat.scrollHeight;
+  d.rendered = true;
   d.runsKey = runsKey(d);
   const reply = focused && document.getElementById('askreply');
   if (reply) { reply.focus({ preventScroll: true }); reply.setSelectionRange(focused[0], focused[1]); }
@@ -2314,7 +2340,7 @@ async function buildAskPane(d) {
     try { const r = await post('/api/ask', { request: text, resume: d.id }); t.value = ''; saved('follow.' + d.id, ''); refresh(); openJob(r.job_id, false, 'ask'); } catch (err) { toast(`ask failed: ${err.message}`); } };
   const followText = writeBox('follow.' + d.id, { name: 'q', placeholder: 'follow up in this conversation (Enter sends, Shift+Enter for a new line)' }, sendFollow);
   const foot = el('form', { class: 'follow', onsubmit: e => { e.preventDefault(); sendFollow(followText); } }, followText, btn('Send', null, 'sm', { type: 'submit' }));
-  paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title: rec.prompt || '' }, truncate(rec.prompt || d.id, 80)), ' ', when(rec.started)], el('div', { class: 'askbody show-chat' }, d.chat), 'ask', el('div', { style: 'width:100%' }, foot));
+  paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title: askLabel(rec.prompt) }, truncate(askLabel(rec.prompt) || d.id, 80)), ' ', when(rec.started)], el('div', { class: 'askbody show-chat' }, d.chat), 'ask', el('div', { style: 'width:100%' }, foot));
   const poll = async () => {
     if (S.pane !== d) return;
     try { if (await pollAskChat(d)) renderChat(d); } catch (e) { fill(d.chat, el('div', { class: 'muted' }, `cannot read this conversation: ${e.message}`)); return; }
