@@ -53,6 +53,7 @@ opsquire run <plan>                several tasks in order, one command (dry firs
 opsquire run <task>                dry run (or read-only run)
 opsquire run <task> --apply        the real thing; asks before each change; refused until a dry run of the
                                    same scripts and arguments finished ok (--skip-dry "why" overrides, on record)
+opsquire inbox                     what waits on you: each task's next run with its command, and unread chats
 opsquire last                      what just happened
 opsquire runs --status failed      what went wrong, across everything
 opsquire log <task>                full output of the latest run

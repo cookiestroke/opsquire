@@ -466,6 +466,38 @@ def cmd_ls(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inbox(a: argparse.Namespace) -> int:
+    """What waits on the operator, as the console's Inbox shows it: the next run of each task (a plan's steps
+    under it), and the chats with a reply not opened yet."""
+    built = state()
+    asks = {str(x.get("conversation")): x for x in built["asks"]}
+    chats = [
+        {
+            "conversation": c,
+            "prompt": (asks.get(c) or {}).get("prompt") or "",
+            "ended": (asks.get(c) or {}).get("ended"),
+        }
+        for c in built["unread_chats"]
+    ]
+    if a.json:
+        emit({"inbox": built["inbox"], "unread_chats": chats}, True)
+        return 0
+    rows = [["NEXT", "WAITING", "TASK", "RUN"]]
+    for item in built["inbox"]:
+        for n, it in enumerate([item, *(item.get("steps") or [])]):
+            waited = f"{it['waiting_days']:.1f}d" if it.get("waiting_days") is not None else "-"
+            rows.append([it["next"], waited, ("  " if n else "") + str(it["task_id"]), str(it["command"])])
+    emit(None, False, rows if len(rows) > 1 else [])
+    for it in built["inbox"]:
+        if it.get("stale"):
+            print(f"  {it['task_id']}: {it['stale']}")
+    if chats:
+        print(f"\nunread chats ({len(chats)}), open them in the console:")
+        for c in chats:
+            print(f"  {c['conversation']}  {str(c['prompt']).splitlines()[0][:80] if c['prompt'] else ''}")
+    return 0
+
+
 def cmd_show(a: argparse.Namespace) -> int:
     task = resolve_task(a.task, offboarded=True)
     data = summarize(task) | {"meta": task.raw, "run_history": runs_for(task.id)}
@@ -749,7 +781,8 @@ def cmd_home(a: argparse.Namespace) -> int:
         print(f"home set to {target} (in {config_path()})")
         return 0
     source = "OPSQUIRE_HOME" if os.environ.get("OPSQUIRE_HOME") else str(config_path())
-    print(f"{home_dir()}  (from {source if source == 'OPSQUIRE_HOME' or config_path().is_file() else 'default'})")
+    print(home_dir())
+    print(f"(from {source if source == 'OPSQUIRE_HOME' or config_path().is_file() else 'default'})", file=sys.stderr)
     return 0
 
 
@@ -1083,6 +1116,10 @@ def parser() -> argparse.ArgumentParser:
     cl.add_argument("--run", help="the run that landed it (id or unique part)")
     cl.add_argument("--json", action="store_true")
     cl.set_defaults(fn=cmd_close)
+
+    ib = sub.add_parser("inbox", help="what waits on you: the next run of each task, and unread chats")
+    ib.add_argument("--json", action="store_true")
+    ib.set_defaults(fn=cmd_inbox)
 
     ls = sub.add_parser("ls", help="list tasks with derived status")
     ls.add_argument("--area")

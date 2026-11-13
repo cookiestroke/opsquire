@@ -2874,6 +2874,32 @@ class OpsTest(unittest.TestCase):
         )
         self.assertNotIn("follow up:", r.stderr)
 
+    def test_inbox_lists_each_tasks_next_run_and_the_unread_chats(self) -> None:
+        tid = self.new("restart", "print(1)\n", *self.CHANGING).name
+        self.assertEqual(self.cli("lint", tid).returncode, 0)
+        asks = self.home / "var/asks"
+        asks.mkdir(parents=True)
+        (self.home / "var/chats-read.json").write_text(json.dumps({"since": "2026-01-01T00:00:00.000Z", "read": {}}))
+        record = {"ask_id": "a1", "status": "ok", "started": "2026-11-13T10:00:00.000Z", "prompt": "restart web1\nnow"}
+        (asks / "a1.json").write_text(json.dumps(record | {"ended": "2026-11-13T10:01:00.000Z"}))
+        r = self.cli("inbox")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        row = next(line for line in r.stdout.splitlines() if tid in line)
+        self.assertTrue(row.startswith("dry"), row)
+        self.assertIn(f"opsquire run {tid}", row)
+        self.assertIn("unread chats (1), open them in the console:\n  a1  restart web1", r.stdout)
+        shown = json.loads(self.cli("inbox", "--json").stdout)
+        self.assertEqual([(i["task_id"], i["next"]) for i in shown["inbox"]], [(tid, "dry")])
+        self.assertEqual(
+            shown["unread_chats"],
+            [{"conversation": "a1", "prompt": record["prompt"], "ended": record["started"][:11] + "10:01:00.000Z"}],
+        )
+
+    def test_home_prints_only_the_path_on_stdout(self) -> None:
+        r = self.cli("home")
+        self.assertEqual(r.stdout, f"{self.home.resolve()}\n")
+        self.assertIn("(from OPSQUIRE_HOME)", r.stderr)
+
     def test_a_chat_with_a_reply_is_unread_for_the_whole_home_until_opened(self) -> None:
         asks = self.home / "var/asks"
         asks.mkdir(parents=True)

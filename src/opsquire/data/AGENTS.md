@@ -59,6 +59,8 @@ opsquire find <words...>             ranked search over ids, areas, targets, pur
 opsquire ls [--area x] [--status draft|ready|done|partial|superseded|abandoned|archived
                                  |lint-ok|lint-failing|unchecked]   (the last three are general scripts)
 opsquire show <task>                 meta + every run
+opsquire inbox [--json]              what waits on the operator, as the console's Inbox shows it: each task's next
+                                     run with its command (a plan's steps under it), and chats with an unopened reply
 opsquire offboard <task...> | --due [--days N] [--dry]    move settled tasks out of tasks/ (see Offboarding)
 opsquire restore <task...>           bring offboarded tasks back, with the general scripts and steps they need
 opsquire runs [<task>] [--status failed] [--area x] [--since 2026-10-30]
