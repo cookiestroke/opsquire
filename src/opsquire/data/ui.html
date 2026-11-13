@@ -305,6 +305,24 @@ html.dev .tile .num { font-size: 1.5rem; }
 .ibgroup .card { border-top: 0; }
 .stagebar .stage.done { color: var(--k-verify); border-color: transparent; background: var(--k-verify-bg); }
 .stagebar .stage.next { color: var(--k); border-color: var(--k); font-weight: 600; }
+.job.live[class*="k-"], .tr.live[class*="k-"] { color: var(--k); background: color-mix(in srgb, var(--kb) 55%, transparent); border-left: 4px solid var(--k); }
+.job.live[class*="k-"]:hover, .tr.live[class*="k-"]:hover { background: var(--kb); }
+.job.live[class*="k-"] .muted, .tr.live[class*="k-"] .muted, .job.live[class*="k-"] a, .tr.live[class*="k-"] a { color: inherit; }
+.job.live[class*="k-"] .muted, .tr.live[class*="k-"] .muted { opacity: .8; }
+.lrow { display: flex; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--line2); cursor: pointer; }
+.lrow:first-child { border-top: 0; }
+.lrow:hover { background: var(--panel2); }
+.lrow.sel { background: var(--accent-bg); }
+.lrow.busy { background: var(--accent-bg); }
+.lrow .tick { align-self: flex-start; margin-top: 1px; }
+.lmain { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ltitle { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.ltitle .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lline { color: var(--muted); font-size: .9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lline.good { color: var(--good); }
+.lline.warn { color: var(--warn); }
+.lright { flex: none; display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: .9em; }
+.chip.warnchip { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
 .sr { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line2); }
 .sr:first-child { border-top: 0; }
 .sr:hover { background: var(--panel2); }
@@ -1066,7 +1084,7 @@ function renderInbox() {
 }
 function renderRunRow(r, live) {
   const t = task(r.task_id), asks = r.waiting && r.waiting.question;
-  return el('div', { class: 'tr', role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`,
+  return el('div', { class: `tr ${live ? `live k-${r.mode}` : ''}`, role: 'button', tabindex: '0', title: `open the log of ${r.run_id}`,
     onclick: e => { if (e.target.closest('a, button')) return; openLog(r.run_id, null); }, onkeydown: e => { if (e.key === 'Enter') openLog(r.run_id, null); } },
     S.dev ? modeTag(r.mode) : null, pill(asks ? 'waiting' : r.status), taskLink(r.task_id || '?'), !S.dev ? areaTag(t) : null, el('span', { class: 'purpose muted' }, asks ? `Asks in the terminal it runs in: ${asks}` : (t || {}).purpose || ''),
     live ? [el('span', { class: 'muted small' }, 'since '), when(r.started), btn('Watch', () => openLog(r.run_id, null), 'sm')] : [chipsRow(usageChips(r)), when(r.started)]);
@@ -1113,26 +1131,33 @@ function stageBar(it, t) {
     steps.flatMap((name, i) => [i ? el('span', { class: 'arrow', 'aria-hidden': 'true' }, '\u2192') : null,
       el('span', { class: `stage ${i < at ? 'done' : i === Math.max(at, 0) ? 'next' : ''}` }, i < at ? `\u2713 ${name}` : name)]));
 }
+/* a list row: a status mark, the task's name and area, one muted line under it, the time on the right; clicking it
+   opens the task, where its runs are */
+function listRow(t, key, line, right, extra) {
+  return el('div', { class: `lrow ${selectedTask() === t.id ? 'sel' : ''} ${isDeciding(t.id) ? 'busy' : ''}`, 'data-key': key, role: 'button', tabindex: '0', title: t.purpose || '',
+    onclick: e => { if (e.target.closest('a, button')) return; selectTask(t.id); }, onkeydown: e => { if (e.key === 'Enter' && e.target === e.currentTarget) selectTask(t.id); } },
+    tick(t),
+    el('div', { class: 'lmain' },
+      el('div', { class: 'ltitle' }, el('span', { class: 'name' }, S.dev ? t.id : shortName(t.id)), areaTag(t)),
+      line ? el('div', { class: `lline ${line.cls || ''}`, title: line.text }, line.text) : null,
+      extra || null),
+    el('div', { class: 'lright' }, right));
+}
 function renderDecideRow(t) {
   const s = t.suggestions || [], last = lastRunOf(t, S.data.runs), judge = lastJudgeFor(t.id), it = inboxItem(t.id);
   const queued = it && it.next === 'verify';
-  const why = t.settled ? null : s.length ? truncate(s.map(x => x.text).join('; '), 140) : last && last.status !== 'ok' ? `last run ${last.status}${last.last_error ? ': ' + truncate(last.last_error, 100) : ''}` : '';
-  return el('div', { class: `sr ${isDeciding(t.id) ? 'busy' : ''}`, 'data-key': 'd:' + t.id },
-    tick(t), taskLink(t.id), areaTag(t), el('span', { class: 'purpose', title: t.purpose || '' }, t.purpose || ''),
-    queued ? el('a', { class: 'next', href: '#inbox', title: 'run the check from the inbox', onclick: e => { e.preventDefault(); scrollToKey('i:' + t.id); } }, 'check queued in your inbox') : t.settled ? null : decideButton(t.id),
-    t.settled && t.outcome ? el('span', { class: 'verdict good' }, `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`) : null,
-    !t.settled && why ? el('span', { class: 'verdict' }, why) : null,
-    judge || t.judged ? judgeLine(t.id) : null);
+  const why = t.settled ? null : s.length ? s.map(x => x.text).join('; ') : last && last.status !== 'ok' ? `last run ${last.status}${last.last_error ? ': ' + last.last_error : ''}` : t.purpose || '';
+  const line = t.settled && t.outcome ? { text: `${t.outcome.state || 'closed'}: ${t.outcome.note || ''}`, cls: 'good' } : why ? { text: why, cls: s.length || (last && last.status !== 'ok') ? 'warn' : '' } : null;
+  const act = queued ? el('a', { class: 'small', href: '#inbox', title: 'run the check from the inbox', onclick: e => { e.preventDefault(); scrollToKey('i:' + t.id); } }, 'check queued in your inbox') : t.settled ? null : decideButton(t.id);
+  return listRow(t, 'd:' + t.id, line, act, judge || t.judged ? judgeLine(t.id) : null);
 }
 function renderDoneRow(t) {
-  return el('div', { class: 'sr', 'data-key': 'done:' + t.id },
-    tick(t), taskLink(t.id), areaTag(t), el('span', { class: 'purpose', title: t.purpose || '' }, t.outcome ? `${t.outcome.state || 'done'}: ${t.outcome.note || ''}` : t.purpose || ''),
-    chipsRow(agentChips(t.agents)), t.outcome ? when(t.outcome.closed) : null,
-    runModes(t).length && !activeJobFor(t.id) ? btn('Run', () => selectTask(t.id), 'sm', { title: 'open the task to run it' }) : null);
+  const line = t.outcome ? { text: `${t.outcome.state || 'done'}: ${t.outcome.note || ''}` } : { text: t.purpose || '' };
+  return listRow(t, 'done:' + t.id, line, [chipsRow(agentChips(t.agents)), t.outcome ? when(t.outcome.closed) : null]);
 }
 function renderJob(j) {
   const open = () => openJob(j.job_id);
-  return el('div', { class: 'job', role: 'button', tabindex: '0', 'data-key': 'j:' + j.job_id,
+  return el('div', { class: `job ${j.status !== 'done' ? `live k-${j.mode}` : ''}`, role: 'button', tabindex: '0', 'data-key': 'j:' + j.job_id,
     onclick: e => { if (e.target.closest('a, button, input')) return; open(); }, onkeydown: e => { if (e.key === 'Enter' && e.target.tagName !== 'INPUT') open(); } },
     el('span', { class: `pill ${jobTone(j)}` }, jobLabel(j)), taskLink(j.task_id || '?'), modeTag(j.mode), argsTag(j.args),
     el('span', { class: 'muted' }, 'started ', when(j.started)), j.ended ? el('span', { class: 'muted' }, 'ended ', when(j.ended)) : null,
@@ -1187,15 +1212,12 @@ function renderThreadBody(th, taskIds, ids) {
   return parts;
 }
 function renderTaskLine(t) {
-  const sel = selectedTask() === t.id, words = statusWords(t, inboxItem(t.id), needsDecision(t, new Set(inboxAll().map(i => i.task_id)), S.data.runs));
+  const words = statusWords(t, inboxItem(t.id), needsDecision(t, new Set(inboxAll().map(i => i.task_id)), S.data.runs));
   const why = () => { S.pane = { kind: 'task', id: t.id }; S.details.delete(t.id); setHash('task/' + encodeURIComponent(t.id)); render(); };
-  return el('div', { class: `tl ${sel ? 'sel' : ''}`, 'data-key': 'k:' + t.id, role: 'button', tabindex: '0', title: t.purpose || '',
-    onclick: e => { if (e.target.closest('a, button')) return; selectTask(t.id); }, onkeydown: e => { if (e.key === 'Enter') selectTask(t.id); } },
-    tick(t), el('span', { class: 'name' }, shortName(t.id)), el('span', { class: 'purpose' }, t.purpose || ''),
-    el('span', { class: `small ${words.tone === 'good' ? 'muted' : words.tone === 'warn' ? 'sugg' : 'muted'}` }, words.text),
+  return listRow(t, 'k:' + t.id, { text: t.purpose || '' }, [
+    el('span', { class: `chip ${words.tone === 'warn' ? 'warnchip' : ''}` }, words.text),
     isDeciding(t.id) ? el('span', { class: 'spin' }) : null,
-    el('a', { class: 'why', href: '#task/' + encodeURIComponent(t.id), title: 'what happened and why', onclick: e => { e.preventDefault(); why(); } }, 'Why'),
-    runModes(t).length && !activeJobFor(t.id) ? btn('Run', () => selectTask(t.id), 'sm', { title: 'open the task to run it' }) : null);
+    el('a', { class: 'why small', href: '#task/' + encodeURIComponent(t.id), title: 'what happened and why', onclick: e => { e.preventDefault(); why(); } }, 'Why')]);
 }
 function renderAsk(a) {
   const rounds = (a.rounds || []).length;
