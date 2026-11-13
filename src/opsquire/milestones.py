@@ -130,7 +130,7 @@ def milestones(
                 continue
             path = home_dir() / "threads" / f"{th['id']}.md"
             try:
-                stamp = iso(dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc))
+                stamp = iso(dt.datetime.fromtimestamp(path.stat().st_mtime, dt.UTC))
             except OSError:
                 continue
             entry(

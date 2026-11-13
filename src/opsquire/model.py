@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 SCHEMA = 1
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -171,19 +171,19 @@ def creds_path() -> Path:
 
 
 def now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def iso(t: dt.datetime) -> str:
-    return t.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+    return t.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
 
 
 def compact(t: dt.datetime) -> str:
-    return t.astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%S") + f"{t.microsecond // 1000:03d}Z"
+    return t.astimezone(dt.UTC).strftime("%Y%m%dT%H%M%S") + f"{t.microsecond // 1000:03d}Z"
 
 
 def parse_iso(s: str) -> dt.datetime:
-    return dt.datetime.strptime(s, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=dt.timezone.utc)
+    return dt.datetime.strptime(s, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=dt.UTC)
 
 
 def read_json(path: Path) -> Any:
@@ -548,11 +548,10 @@ class Task:
 ANNOTATIONS = ("outcome", "judged", "handover", "hold")
 
 
-T = TypeVar("T")
 FILE_CACHE: dict[tuple[str, str], tuple[tuple[int, int], Any]] = {}
 
 
-def by_file(kind: str, path: Path, build: Callable[[], T]) -> T:
+def by_file[T](kind: str, path: Path, build: Callable[[], T]) -> T:
     """What build() derives from one file, computed again only when the file's mtime or size changed: the console
     rebuilds its state from the same thousands of unchanged files on every refresh."""
     st = os.stat(path)

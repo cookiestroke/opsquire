@@ -1943,7 +1943,7 @@ class OpsTest(unittest.TestCase):
         from opsquire.milestones import since_arg
         from opsquire.model import OpsquireError
 
-        at = dt.datetime(2026, 11, 5, 18, 30, tzinfo=dt.timezone.utc)
+        at = dt.datetime(2026, 11, 5, 18, 30, tzinfo=dt.UTC)
         self.assertEqual(since_arg(None, at), "2026-11-05T00:00")
         self.assertEqual(since_arg("2h", at), "2026-11-05T16:30:00.000Z")
         self.assertEqual(since_arg("30m", at), "2026-11-05T18:00:00.000Z")
@@ -2153,6 +2153,13 @@ class OpsTest(unittest.TestCase):
         where = "import site; print(site.getsitepackages()[0])"
         site = Path(subprocess.run([python, "-c", where], capture_output=True, text=True, check=True).stdout.strip())
         shutil.copytree(ROOT / "src/opsquire", site / "opsquire", ignore=shutil.ignore_patterns("__pycache__"))
+        mypy_home = subprocess.run(
+            [sys.executable, "-c", "import mypy, os; print(os.path.dirname(os.path.dirname(mypy.__file__)))"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        (site / "_lint_tools.pth").write_text(mypy_home + "\n")
         (venv / "bin/mypy").write_text(f"#!{python}\nfrom mypy.__main__ import console_entry\nconsole_entry()\n")
         (venv / "bin/mypy").chmod(0o755)
         ruff = shutil.which("ruff", path=f"{Path(sys.executable).parent}:{Path.home() / '.local/bin'}")
@@ -3109,7 +3116,7 @@ class OpsTest(unittest.TestCase):
     def backdate(self, folder: Path, days: float) -> None:
         """Make a task look last touched `days` ago: its creation stamp and the time meta.json was written."""
         meta = json.loads((folder / "meta.json").read_text())
-        then = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+        then = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
         meta["created"] = then.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         (folder / "meta.json").write_text(json.dumps(meta))
         os.utime(folder / "meta.json", (then.timestamp(), then.timestamp()))
@@ -3959,28 +3966,39 @@ class OpsTest(unittest.TestCase):
             proc.wait(20)
 
     def test_an_ask_runs_on_the_chosen_model_and_says_how_it_was_billed(self) -> None:
-        self.agents_file(model_argv=["--model", "{model}"])
+        tiers = {t: {"id": f"model-{t}", "label": t.title()} for t in ("quick", "default", "deep")}
+        self.agents_file(model_argv=["--model", "{model}"], models=tiers, billing={"key_env": "FAKE_PROVIDER_KEY"})
         log = self.tmp / "fake.log"
         self.env["FAKE_LOG"] = str(log)
-        self.env.pop("ANTHROPIC_API_KEY", None)
+        self.env.pop("FAKE_PROVIDER_KEY", None)
         self.assertEqual(self.cli("ask", "--model", "quick", "restart", "web1").returncode, 0)
         self.assertEqual(self.cli("ask", "restart", "web1", "again").returncode, 0)
-        self.env["ANTHROPIC_API_KEY"] = "test-key-not-real"
-        self.assertEqual(self.cli("ask", "--model", "claude-haiku-5-5", "one", "more").returncode, 0)
+        self.env["FAKE_PROVIDER_KEY"] = "test-key-not-real"
+        self.assertEqual(self.cli("ask", "--model", "some-model-id", "one", "more").returncode, 0)
         argvs = [json.loads(line)["argv"] for line in log.read_text().splitlines()]
         models = [a[a.index("--model") + 1] for a in argvs]
-        self.assertEqual(models, ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"])
+        self.assertEqual(models, ["model-quick", "model-default", "some-model-id"])
         recs = sorted(
             (json.loads(p.read_text()) for p in (self.home / "var/asks").glob("*_fake.json")),
             key=lambda r: r["started"],
         )
         self.assertEqual(
             [(r["model"], r["billing"]) for r in recs],
-            [("claude-sonnet-5-5", "plan"), ("claude-opus-5-5", "plan"), ("claude-haiku-5-5", "api-key")],
+            [("model-quick", "plan"), ("model-default", "plan"), ("some-model-id", "api-key")],
         )
         chat = (self.home / "var/asks" / f"{recs[0]['ask_id']}.chat.jsonl").read_text().splitlines()
         reply = next(json.loads(c) for c in chat if json.loads(c)["kind"] == "agent")
-        self.assertEqual((reply["model"], reply["billing"]), ("claude-sonnet-5-5", "plan"))
+        self.assertEqual((reply["model"], reply["billing"], reply["agent"]), ("model-quick", "plan", "fake"))
+
+    def test_an_agent_without_tiers_or_billing_runs_on_its_own_default(self) -> None:
+        self.agents_file()
+        log = self.tmp / "fake.log"
+        self.env["FAKE_LOG"] = str(log)
+        self.assertEqual(self.cli("ask", "--model", "deep", "restart", "web1").returncode, 0)
+        argv = json.loads(log.read_text().splitlines()[-1])["argv"]
+        self.assertNotIn("--model", argv)
+        rec = json.loads(next((self.home / "var/asks").glob("*_fake.json")).read_text())
+        self.assertEqual((rec["model"], rec["billing"], rec["agent"]), ("", "", "fake"))
 
 
 class ReleaseScripts(unittest.TestCase):

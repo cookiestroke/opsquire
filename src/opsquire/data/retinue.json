@@ -14,6 +14,13 @@
       "resume_argv": ["--resume", "{session}"],
       "budget_argv": ["--max-budget-usd", "{budget}"],
       "model_argv": ["--model", "{model}"],
+      "models": {
+        "quick": {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5"},
+        "default": {"id": "claude-opus-5-5", "label": "Opus 5.5"},
+        "deep": {"id": "claude-fable-5-2", "label": "Fable 5.2"}
+      },
+      "piece_tier": "quick",
+      "billing": {"key_env": "ANTHROPIC_API_KEY", "plan": "your Claude plan", "key": "your Anthropic API key"},
       "output": "claude-stream-json",
       "allowed_tools": [
         "Read", "Glob", "Grep",

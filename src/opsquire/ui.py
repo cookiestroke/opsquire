@@ -264,7 +264,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"job_id": job.job_id})
             elif url.path == "/api/ask":
                 job = self.jobs.start_ask(
-                    str(body.get("request", "")), str(body.get("resume", "")), str(body.get("model", ""))
+                    str(body.get("request", "")),
+                    str(body.get("resume", "")),
+                    str(body.get("model", "")),
+                    str(body.get("agent", "")),
                 )
                 self.send_json({"job_id": job.job_id})
             elif url.path == "/api/answer":

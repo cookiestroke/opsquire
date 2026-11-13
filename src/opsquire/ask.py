@@ -156,20 +156,55 @@ def pick_agent(name: str | None) -> tuple[str, dict[str, Any]]:
     return name, agent
 
 
-MODELS = {"quick": "claude-sonnet-5-5", "default": "claude-opus-5-5", "deep": "claude-fable-5-2"}
-PIECE_MODEL = "quick"
+TIERS = ("quick", "default", "deep")
+
+
+def tier_of(agent: dict[str, Any], tier: str) -> dict[str, str]:
+    """A tier as the agent's retinue entry defines it: {"id": ..., "label": ...}; {} when it defines none."""
+    entry = (agent.get("models") or {}).get(tier)
+    return (
+        {"id": str(entry.get("id", "")), "label": str(entry.get("label") or entry.get("id", ""))}
+        if isinstance(entry, dict)
+        else {}
+    )
 
 
 def model_for(choice: str, agent: dict[str, Any]) -> str:
-    """The model an ask runs on: a tier (quick, default, deep) or a model id; "" for an agent that cannot be told."""
+    """The model an ask runs on: one of the agent's tiers (default when none is chosen) or a model id it takes as
+    is; "" for an agent that cannot be told a model, which then runs on its own default."""
     if not agent.get("model_argv"):
         return ""
-    return MODELS.get(choice or "default", choice)
+    if choice and choice not in TIERS:
+        return choice
+    return tier_of(agent, choice or "default").get("id", "")
 
 
-def billing() -> str:
-    """How Claude Code bills this ask: an API key in the environment wins over the operator's plan."""
-    return "api-key" if os.environ.get("ANTHROPIC_API_KEY") else "plan"
+def piece_model(agent: dict[str, Any]) -> str:
+    """The model split pieces run on: the tier the agent names for them (`piece_tier`), else its default."""
+    return model_for(str(agent.get("piece_tier") or "default"), agent)
+
+
+def billing(agent: dict[str, Any]) -> str:
+    """How the agent's usage is billed: `api-key` when the environment variable its retinue entry names
+    (`billing.key_env`) is set, `plan` when it names one and it is not, "" when the entry says nothing."""
+    key_env = str((agent.get("billing") or {}).get("key_env") or "")
+    if not key_env:
+        return ""
+    return "api-key" if os.environ.get(key_env) else "plan"
+
+
+def retinue_view() -> list[dict[str, Any]]:
+    """The enabled agents as the console shows them: name, its tiers' labels, how it bills, the default."""
+    cfg = agents_config()
+    out = []
+    for name, agent in (cfg.get("agents") or {}).items():
+        if not isinstance(agent, dict) or not agent.get("enabled"):
+            continue
+        tiers = {t: tier_of(agent, t) for t in TIERS if tier_of(agent, t) and agent.get("model_argv")}
+        out.append(
+            {"name": name, "default": name == cfg.get("default"), "tiers": tiers, "billing": agent.get("billing") or {}}
+        )
+    return out
 
 
 def build_argv(
@@ -561,7 +596,7 @@ def ask(
     if status == "ok":
         repos.drop(copies)
         handover.record_run_lines(res.actions, prompt, f"ask {res.ask_id}")
-    spent = {"cost_usd": res.cost_usd, "billing": billing(), "model": conv.model}
+    spent = {"cost_usd": res.cost_usd, "billing": billing(agent), "model": conv.model, "agent": name}
     Chat.add("agent", res.text.strip(), actions=[{"kind": k, "text": t} for k, t in res.actions], **spent)
     Chat.add("end", status, waiting=res.waiting or "")
     save_record(

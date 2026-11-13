@@ -67,7 +67,7 @@ def last_activity(task: Task, runs: list[dict[str, Any]]) -> str:
     stamps += [str(r.get("ended") or r.get("started") or "") for r in runs]
     with contextlib.suppress(OSError):
         written = (task.folder / "meta.json").stat().st_mtime
-        stamps.append(iso(dt.datetime.fromtimestamp(written, dt.timezone.utc)))
+        stamps.append(iso(dt.datetime.fromtimestamp(written, dt.UTC)))
     return max(stamps)
 
 

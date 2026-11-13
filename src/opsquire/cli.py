@@ -294,12 +294,12 @@ def parse_until(text: str) -> dt.datetime:
         when = local.replace(hour=hh, minute=mm, second=0, microsecond=0)
         if when <= local:
             when += dt.timedelta(days=1)
-        return when.astimezone(dt.timezone.utc)
+        return when.astimezone(dt.UTC)
     except ValueError:
         pass
     try:
         when = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-        return (when if when.tzinfo else when.astimezone()).astimezone(dt.timezone.utc)
+        return (when if when.tzinfo else when.astimezone()).astimezone(dt.UTC)
     except ValueError:
         raise OpsquireError(f"--until {text!r}: use HH:MM (local time) or an ISO time") from None
 
@@ -1134,7 +1134,7 @@ def parser() -> argparse.ArgumentParser:
     ak.add_argument(
         "--model",
         metavar="TIER|ID",
-        help="quick (Sonnet 5.5), default (Opus 5.5) or deep (Fable 5.2), or a model id; split pieces run on quick",
+        help="a tier from the agent's retinue entry (quick, default, deep) or a model id; pieces use its piece_tier",
     )
     ak.add_argument("--strict-budget", action="store_true", help="make --budget a hard cap instead of a reminder")
     ak.set_defaults(fn=cmd_ask)

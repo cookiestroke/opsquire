@@ -210,6 +210,11 @@ svg.flow, svg.map { display: block; overflow: visible; }
 .inv { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 18px; align-items: start; }
 @media (min-width: 1300px) { .inv { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 .inv .head .purpose { flex-basis: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }
+.agentpick { border-radius: 999px; padding: 3px 10px; font-size: .88em; }
+.histbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 2px 0 14px; }
+.histpick { display: inline-flex; gap: 6px; align-items: center; }
+.histpick select { max-width: 260px; border-radius: 999px; padding: 3px 10px; }
+.histabout { padding: 10px 14px; margin-bottom: 14px; }
 .mapctl { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-bottom: 8px; }
 button.link { background: transparent; border-color: transparent; color: var(--accent); }
 .map.tree .trow-bg { fill: var(--panel2); }
@@ -337,13 +342,16 @@ html.dev .tile .num { font-size: 1.5rem; }
 .askbody.show-chat .asklog { display: none; }
 .askbody.show-log .chat { display: none; }
 .askbody.show-both .chat, .askbody.show-both .asklog { flex: 1 1 50%; }
-.msg { display: flex; gap: 8px; align-items: flex-end; max-width: 100%; }
+.msg { display: flex; gap: 8px; align-items: flex-start; max-width: 100%; }
 .msg .bubble { padding: 8px 12px; border-radius: 14px; max-width: min(78%, 640px); overflow-wrap: anywhere; }
 .msg.you { justify-content: flex-end; }
-.msg.you .bubble { background: var(--accent); color: var(--panel); border-bottom-right-radius: 4px; white-space: pre-wrap; }
+.msg.you .bubble { align-self: flex-end; background: var(--accent); color: var(--panel); border-bottom-right-radius: 4px; white-space: pre-wrap; }
 .msg.agent .bubble { background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .msg.agent .avatar { flex: none; width: 40px; height: 40px; }
-.msg.step { color: var(--faint); font-size: .82em; padding-left: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg.steps { padding-left: 48px; flex-direction: column; gap: 2px; font-size: .82em; }
+.stepfold { background: transparent; border: 0; padding: 0; color: var(--muted); text-align: left; white-space: normal; }
+.stepfold:hover { color: var(--fg); }
+.steplist { color: var(--faint); display: flex; flex-direction: column; gap: 1px; padding-left: 14px; overflow-wrap: anywhere; }
 .msg.end { align-self: center; font-size: .82em; color: var(--muted); padding: 0 10px; border-radius: 999px; border: 1px solid var(--line2); }
 .msg.end.good { color: var(--good); }
 .msg.end.warn { color: var(--warn); }
@@ -437,7 +445,7 @@ html:not(.dev) main#main { padding-top: 16px; }
 <script>
 'use strict';
 /* ---- pure helpers (no DOM) ---- */
-const VIEWS = [['inbox', 'Inbox'], ['threads', 'Threads'], ['map', 'Map'], ['inventory', 'Targets & scripts']];
+const VIEWS = [['inbox', 'Inbox'], ['history', 'History']];
 const TONE = {
   ok: 'good', done: 'good', failed: 'bad', blocked: 'bad', partial: 'warn', running: 'live', open: 'live',
   ready: 'neutral', draft: 'grey', abandoned: 'grey', superseded: 'grey', archived: 'grey', skipped: 'grey',
@@ -797,7 +805,7 @@ async function api(path, opts) {
 }
 function post(path, body) { return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
 /* ---- state ---- */
-const S = { version: null, shownPrompts: new Set(), data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, map: { hours: 24, end: null },
+const S = { version: null, shownPrompts: new Set(), data: null, view: 'inbox', q: '', open: new Set(), hash: null, scrollTo: null, pane: null, closeForm: null, error: null, confirm: null, confirmTimer: null, map: { hours: 24, end: null }, hist: { mode: 'list', machine: '', script: '', sort: 'recent' },
   dev: false, details: new Set(), judging: new Map(), judgeText: new Map(), decideAll: null };
 const task = id => (S.data && S.data.tasks && S.data.tasks[id]) || null;
 const run = id => (S.data && S.data.runs && S.data.runs[id]) || null;
@@ -829,16 +837,18 @@ function applyHash() {
   const { kind, id } = parseHash(h);
   const focus = (view, key) => { S.view = view; S.open.add(key); S.scrollTo = key; };
   if (VIEWS.some(v => v[0] === kind)) S.view = kind;
-  else if (kind === 'targets' || kind === 'scripts') { S.view = 'inventory'; S.scrollTo = 'inv:' + kind; }
-  else if (kind === 'thread') focus('threads', 't:' + id);
-  else if (kind === 'target') focus('inventory', 'g:' + id);
-  else if (kind === 'script') focus('inventory', 's:' + id);
+  else if (['threads', 'inventory', 'targets', 'scripts'].includes(kind)) S.view = 'history';
+  else if (kind === 'map') { S.view = 'history'; S.hist.mode = 'timeline'; }
+  else if (kind === 'thread') focus('history', 't:' + id);
+  else if (kind === 'target') { S.view = 'history'; S.hist.machine = id; }
+  else if (kind === 'script') { S.view = 'history'; S.hist.script = id; }
   else if (kind === 'task') {
     const t = task(id);
-    if (first && t) { if (t.thread) focus('threads', 't:' + t.thread); }
+    if (first && t) { if (t.thread) focus('history', 't:' + t.thread); }
     S.pane = { kind: 'task', id };
   } else if (kind === 'run') openLog(id, undefined, true);
   else if (kind === 'job') openJob(id, true);
+  else if (kind === 'ask') { S.pane = { kind: 'ask', id, built: false }; }
   render();
 }
 function toggle(key, hash) {
@@ -851,7 +861,7 @@ function goToTask(id) {
   const t = task(id); if (!t) { toast(`no task ${id}`); return; }
   if (t.thread) S.open.add('t:' + t.thread);
   S.pane = { kind: 'task', id };
-  focusKey('threads', 'k:' + id, 'task/' + encodeURIComponent(id));
+  focusKey('history', 'k:' + id, 'task/' + encodeURIComponent(id));
 }
 function selectTask(id) {
   if (!task(id)) { toast(`no task ${id}`); return; }
@@ -868,7 +878,7 @@ function render() {
   const main = $('#main');
   const active = document.activeElement;
   const keep = active && active.id && (main.contains(active) || $('#pane').contains(active)) ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
-  const views = { inbox: renderInbox, threads: renderThreads, map: renderMap, inventory: renderInventory };
+  const views = { inbox: renderInbox, history: renderHistory };
   main.replaceChildren(...[renderStale(), renderLive(), (views[S.view] || renderInbox)()].filter(Boolean));
   renderPane();
   if (keep) {
@@ -934,8 +944,8 @@ function collapsible(key, headParts, bodyFn, hash, cls) {
 }
 function empty(text) { return el('div', { class: 'empty' }, text); }
 function noMatch() { return empty(`Nothing matches "${S.q}".`); }
-function targetLink(name) { return el('a', { class: 'tag', href: '#target/' + encodeURIComponent(name), onclick: e => { e.preventDefault(); focusKey('inventory', 'g:' + name, 'target/' + encodeURIComponent(name)); } }, name); }
-function scriptLink(id) { return el('a', { class: 'tag mono', href: '#script/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); focusKey('inventory', 's:' + id, 'script/' + encodeURIComponent(id)); } }, id); }
+function targetLink(name) { return el('a', { class: 'tag', href: '#target/' + encodeURIComponent(name), onclick: e => { e.preventDefault(); historyFilter({ machine: name }); } }, name); }
+function scriptLink(id) { return el('a', { class: 'tag mono', href: '#script/' + encodeURIComponent(id), onclick: e => { e.preventDefault(); historyFilter({ script: id }); } }, id); }
 function taskLink(id) {
   const simple = !S.dev && /^\d{8}-\d{4}_/.test(String(id || ''));
   return el('a', { class: simple ? 'name' : 'id', href: '#task/' + encodeURIComponent(id), title: simple ? id : null, onclick: e => { e.preventDefault(); selectTask(id); } }, simple ? shortName(id) : id);
@@ -1097,29 +1107,44 @@ function renderInbox() {
     tile('sec:done', doneToday.length, 'Done today', 'good')));
   const st = todayStats(d, today);
   parts.push(el('div', { class: 'statsline' }, el('span', {}, 'Today: '),
-    el('span', { title: 'What the agents\' tokens would cost at API list prices. On a Claude plan this counts against the plan\'s usage limits, not money; an ask run with ANTHROPIC_API_KEY set is billed to that key.' },
+    el('span', { title: 'What the agents\' tokens would cost at API list prices. On a subscription plan this counts against the plan\'s usage limits, not money; asks billed to an API key are shown separately.' },
       'agent usage ', el('b', {}, `≈ ${money(st.spend) || '$0.00'}`), ' at API prices', st.billed ? [', ', el('b', {}, money(st.billed)), ' billed to an API key'] : null),
     el('span', {}, 'your runs ', el('b', {}, st.runs ? duration(st.operator_s) : 'none')),
     st.runs ? el('span', {}, 'runs ', el('b', {}, `${st.ok} ok`), st.failed ? [' / ', el('b', { class: 'err' }, `${st.failed} failed`)] : null) : null));
   if (asking) parts.push(el('div', { class: 'asking', role: 'status' }, el('b', {}, asking === 1 ? 'A run is waiting for your answer.' : `${asking} runs are waiting for your answer.`), ' It does nothing until you answer it under Running now.', btn('Show', () => scrollToKey('sec:running'), 'sm')));
   const sendAsk = async t => {
     const q = t.value.trim(); if (!q) return;
-    const model = saved('askModel') || 'default';
-    try { const r = await post('/api/ask', { request: q, model }); t.value = ''; saved('askDraft', ''); grow(t); refresh(); openJob(r.job_id); } catch (err) { toast(`ask failed: ${err.message}`); }
+    const ag = agentOf(saved('askAgent')), model = (ag.tiers || {})[saved('askModel')] ? saved('askModel') : 'default';
+    try { const r = await post('/api/ask', { request: q, model, agent: ag.name }); t.value = ''; saved('askDraft', ''); grow(t); refresh(); openJob(r.job_id, false, 'ask'); } catch (err) { toast(`ask failed: ${err.message}`); }
   };
   const askText = writeBox('askDraft', { id: 'askq', name: 'q', placeholder: 'Ask your squire: "restart the bots on bvka", "why did bvht stop quoting"…' }, sendAsk);
-  const tiers = [['quick', 'Quick', 'Sonnet 5.5: lookups and small changes'], ['default', 'Default', 'Opus 5.5: building and fixing production tasks'], ['deep', 'Deep', 'Fable 5.2: the hardest problems; uses the most of your plan']];
-  const pick = saved('askModel') || 'default';
-  const tierSeg = el('span', { class: 'tiers', role: 'radiogroup', 'aria-label': 'model' }, tiers.map(([v, l, why]) =>
-    el('button', { type: 'button', role: 'radio', 'aria-checked': String(v === pick), class: v === pick ? 'on' : '', title: why, onclick: () => { saved('askModel', v); render(); } }, l)));
+  const agent = agentOf(saved('askAgent')), tierInfo = agent.tiers || {};
+  const tierWhy = { quick: 'lookups and small changes', default: 'building and fixing production tasks', deep: 'the hardest problems; uses the most' };
+  const pick = tierInfo[saved('askModel')] ? saved('askModel') : 'default';
+  const tierSeg = Object.keys(tierInfo).length ? el('span', { class: 'tiers', role: 'radiogroup', 'aria-label': 'model' }, ['quick', 'default', 'deep'].filter(v => tierInfo[v]).map(v =>
+    el('button', { type: 'button', role: 'radio', 'aria-checked': String(v === pick), class: v === pick ? 'on' : '', title: `${tierInfo[v].label}: ${tierWhy[v]}`, onclick: () => { saved('askModel', v); render(); } }, v[0].toUpperCase() + v.slice(1)))) : null;
+  const agentPick = retinue().length > 1 ? el('select', { class: 'agentpick', 'aria-label': 'agent', title: 'which agent answers (from retinue.json)', onchange: e => { saved('askAgent', e.target.value); render(); } },
+    retinue().map(a => el('option', { value: a.name, selected: a.name === agent.name }, a.name))) : null;
   parts.push(el('form', { class: 'askbox', onsubmit: e => { e.preventDefault(); sendAsk(askText); } },
     askText,
     el('div', { class: 'asktools' },
       el('span', { class: 'askhead' }, squire(false)),
       el('span', { class: 'faint small' }, 'Enter to send · Shift+Enter for a new line'),
       el('span', { class: 'grow' }),
-      tierSeg,
+      agentPick, tierSeg,
       el('button', { type: 'submit', class: 'askgo', title: 'send to your squire' }, 'Ask ', el('span', { 'aria-hidden': 'true' }, '↑')))));
+  const recentAsks = [...(d.asks || [])].sort((a, b) => String(b.started || '').localeCompare(String(a.started || ''))).slice(0, S.allAsks ? 30 : 4);
+  if (recentAsks.length) {
+    parts.push(sec('Recent asks', null, (d.asks || []).length > 4 ? btn(S.allAsks ? 'fewer' : `all ${d.asks.length}`, () => { S.allAsks = !S.allAsks; render(); }, 'sm') : null));
+    parts.push(el('div', { class: 'block' }, recentAsks.map(a => {
+      const live = jobs().find(j => j.mode === 'ask' && j.ask_id === a.ask_id && j.status !== 'done');
+      const state = live ? (live.status === 'waiting' ? ['warn', 'waiting for you'] : ['live', 'working']) : a.status === 'ok' ? ['good', 'answered'] : a.status === 'waiting' ? ['warn', 'waiting for you'] : ['bad', a.status || '?'];
+      return el('div', { class: 'lrow', role: 'button', tabindex: '0', title: a.prompt || '', onclick: () => live ? openJob(live.job_id, false, 'ask') : openAsk(a.ask_id), onkeydown: e => { if (e.key === 'Enter') e.currentTarget.click(); } },
+        el('span', { class: 'askhead' }, squire(!!live && live.status !== 'waiting')),
+        el('div', { class: 'lmain' }, el('div', { class: 'lline', style: 'color:var(--fg)' }, a.prompt || '(follow-up)')),
+        el('div', { class: 'lright' }, el('span', { class: `pill ${state[0]}` }, state[1]), a.model ? el('span', { class: 'chip' }, (a.agent && retinue().length > 1 ? a.agent + ' · ' : '') + modelName(a.model)) : null, when(a.ended || a.started)));
+    })));
+  }
   parts.push(sec('Waiting on you', items.length ? plural(items.length, 'item') : null));
   parts[parts.length - 1].dataset.key = 'sec:inbox';
   parts.push(el('div', { class: 'block' }, items.length ? items.map(it => renderInboxItem(it)) : el('div', { class: 'quiet' }, inbox().length ? `Nothing matches "${S.q}".` : 'Nothing waiting on you.')));
@@ -1231,14 +1256,27 @@ function renderJob(j) {
     el('span', { class: 'answers' }, j.status === 'waiting' ? promptControls(j.job_id, j.status, j.prompt, 'list').slice(1) : j.status !== 'done' ? promptControls(j.job_id, j.status, '', 'list') : null));
 }
 /* threads */
+const HIST_SORTS = [['recent', 'Recent'], ['attention', 'Needs attention'], ['busiest', 'Most runs'], ['oldest', 'Oldest'], ['name', 'A-Z']];
+function threadRuns(th) { return (th.tasks || []).reduce((n, id) => n + ((task(id) || {}).runs || []).length, 0); }
+function sortThreads(threads, how) {
+  const by = {
+    recent: (a, b) => String(b.updated || '').localeCompare(String(a.updated || '')),
+    oldest: (a, b) => String(a.started || '').localeCompare(String(b.started || '')),
+    busiest: (a, b) => threadRuns(b) - threadRuns(a),
+    attention: (a, b) => (a.state === 'done') - (b.state === 'done') || (b.suggestions || 0) - (a.suggestions || 0) || String(b.updated || '').localeCompare(String(a.updated || '')),
+    name: (a, b) => String(a.title || a.id).localeCompare(String(b.title || b.id)),
+  }[how] || null;
+  return by ? [...threads].sort(by) : sortByUpdated(threads);
+}
 function renderThreads() {
-  const threads = sortByUpdated(S.data.threads || []);
+  const threads = sortThreads(S.data.threads || [], S.hist.sort);
   if (!threads.length) return empty('No threads yet: they appear once an agent creates a task.');
   const q = S.q, shown = [];
   for (const th of threads) {
     const whole = threadMatches(th, q);
-    const ids = whole ? th.tasks || [] : (th.tasks || []).filter(id => task(id) && taskMatches(task(id), q, th.title));
-    if (whole || ids.length) shown.push(renderThread(th, ids));
+    const filtered = S.hist.machine || S.hist.script;
+    const ids = (whole && !filtered ? th.tasks || [] : (th.tasks || []).filter(id => task(id) && (whole || taskMatches(task(id), q, th.title)))).filter(id => !filtered || keptByHistory(task(id)));
+    if (ids.length || (whole && !filtered)) shown.push(renderThread(th, ids));
   }
   return shown.length ? el('div', {}, shown) : noMatch();
 }
@@ -1414,7 +1452,7 @@ function mapTicks(start, end, plotW) {
 function renderMap() {
   const q = S.q, now = Date.now(), W = S.map;
   const end = Math.min(W.end || now, now), start = end - W.hours * 3600e3;
-  const all = Object.values(S.data.tasks || {}).filter(t => t.kind !== 'general' && (!q || taskMatches(t, q)));
+  const all = Object.values(S.data.tasks || {}).filter(t => t.kind !== 'general' && (!q || taskMatches(t, q)) && keptByHistory(t));
   const spans = new Map(); let outside = 0;
   for (const t of all) {
     const sp = taskSpan(t); if (!sp) continue;
@@ -1482,6 +1520,29 @@ function threadTitle(key, t) {
   return th ? th.title : `${shortName(t.id)} (${t.area || areaOf(t.id)})`;
 }
 /* targets */
+/* history: every story, newest first, as a list or a timeline, narrowed to one machine or one script */
+function keptByHistory(t) {
+  if (!t) return false;
+  const h = S.hist;
+  return (!h.machine || (t.targets || []).includes(h.machine)) && (!h.script || t.id === h.script || (t.uses || []).includes(h.script));
+}
+function historyFilter(change) { Object.assign(S.hist, change, { allRuns: false }); S.view = 'history'; setHash('history'); render(); window.scrollTo(0, 0); }
+function renderHistory() {
+  const h = S.hist, machines = targetIndex(S.data), scripts = Object.values(S.data.scripts || {}).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const pick = (label, value, options, onchange) => el('label', { class: 'histpick' }, el('span', { class: 'muted small' }, label),
+    el('select', { onchange: e => onchange(e.target.value) }, el('option', { value: '' }, 'all'), options.map(([v, l]) => el('option', { value: v, selected: v === value }, l))));
+  const bar = el('div', { class: 'histbar' },
+    el('span', { class: 'tiers' }, [['list', 'Stories'], ['timeline', 'Timeline']].map(([v, l]) => el('button', { type: 'button', class: h.mode === v ? 'on' : '', 'aria-pressed': String(h.mode === v), onclick: () => { h.mode = v; render(); } }, l))),
+    el('label', { class: 'histpick' }, el('span', { class: 'muted small' }, 'sort'),
+      el('select', { onchange: e => { h.sort = e.target.value; saved('histSort', h.sort); render(); } }, HIST_SORTS.map(([v, l]) => el('option', { value: v, selected: v === h.sort }, l)))),
+    pick('machine', h.machine, machines.map(g => [g.name, `${g.name} (${g.entries.length} runs)`]), v => historyFilter({ machine: v })),
+    pick('script', h.script, scripts.map(x => [x.id, scriptName(x.id)]), v => historyFilter({ script: v })),
+    h.machine || h.script ? btn('clear', () => historyFilter({ machine: '', script: '' }), 'sm') : null);
+  const about = [];
+  if (h.machine) { const g = machines.find(x => x.name === h.machine); if (g) about.push(el('div', { class: 'block histabout' }, el('div', { class: 'title mono' }, g.name), renderTargetBody(g, S.hist.allRuns ? 0 : 6))); }
+  if (h.script) { const x = (S.data.scripts || {})[h.script]; if (x) about.push(el('div', { class: 'block histabout' }, el('div', { class: 'title' }, scriptName(x.id), ' ', x.lint ? pill(x.lint) : null), el('div', { class: 'muted small' }, x.purpose || ''), renderScriptBody(x, task(x.id)))); }
+  return el('div', {}, bar, about, h.mode === 'timeline' ? renderMap() : renderThreads());
+}
 /* targets and scripts on one page: where things ran, and what ran there */
 function renderInventory() {
   const t = sec('Targets', plural(targetIndex(S.data).length, 'target')), sc = sec('Scripts', plural(Object.keys(S.data.scripts || {}).length, 'general script'));
@@ -1503,17 +1564,18 @@ function renderTargets() {
     el('span', { class: 'grow' }), g.last ? when(g.last.time) : el('span', { class: 'muted' }, 'never run'),
   ], () => renderTargetBody(g), 'target/' + encodeURIComponent(g.name))));
 }
-function renderTargetBody(g) {
+function renderTargetBody(g, limit) {
   const parts = [];
   const silent = g.declared.filter(id => !g.entries.some(e => e.run.task_id === id));
   if (silent.length) parts.push(el('div', { class: 'line small' }, el('span', { class: 'muted' }, 'declared but never run here'), silent.map(taskLink)));
   if (!g.entries.length) { parts.push(el('div', { class: 'muted' }, 'No run has touched this target.')); return parts; }
-  const rows = g.entries.map(e => el('tr', { class: 'click', title: `open the log of ${e.run.run_id}`, onclick: ev => { if (ev.target.closest('a')) return; openLog(e.run.run_id, null); } },
+  const rows = g.entries.slice(0, limit || g.entries.length).map(e => el('tr', { class: 'click', title: `open the log of ${e.run.run_id}`, onclick: ev => { if (ev.target.closest('a')) return; openLog(e.run.run_id, null); } },
     el('td', {}, when(e.time)), el('td', {}, taskLink(e.run.task_id || '?')), el('td', {}, modeTag(e.run.mode)),
     el('td', {}, pill(e.run.status)), el('td', {}, pill(e.tstatus)),
     el('td', { class: 'small' }, e.run.last_error ? el('span', { class: 'err' }, e.run.last_error) : (e.run.results || [])[0] || '')));
   parts.push(el('div', { class: 'scroll' }, el('table', { class: 'tbl' },
     el('thead', {}, el('tr', {}, ['when', 'task', 'mode', 'run', 'target', 'note'].map(h => el('th', {}, h)))), el('tbody', {}, rows))));
+  if (limit && g.entries.length > limit) parts.push(btn(`show all ${g.entries.length} runs`, () => { S.hist.allRuns = true; render(); }, 'sm'));
   return parts;
 }
 /* scripts */
@@ -1560,7 +1622,7 @@ function fileButtons(t) {
 function stopPane() { if (S.pane && S.pane.timer) clearTimeout(S.pane.timer); }
 function closePane() {
   stopPane(); S.pane = null;
-  if (S.hash && /^(run|job|task)\//.test(S.hash)) setHash(S.view);
+  if (S.hash && /^(run|job|task|ask)\//.test(S.hash)) setHash(S.view);
   render();
 }
 function paneShell(titleParts, body, cls, foot, back) {
@@ -1585,6 +1647,7 @@ function renderPane() {
     paneShell(S.dev ? [el('span', { class: 'id' }, t.id), pill(t.status || 'draft')] : [el('span', { class: 'muted small' }, 'Task '), areaTag(t)], renderTaskPane(t));
     pb.scrollTop = top;
   } else if (p.kind === 'job' && !p.built) { buildJobPane(p); }
+  else if (p.kind === 'ask' && !p.built) { buildAskPane(p); }
   else if (p.kind === 'log' && !p.built) { buildLogPane(p); }
   else aside.classList.add('open');
 }
@@ -1595,7 +1658,7 @@ function backTo(p) {
 function renderTaskPane(t) {
   const parts = [], closable = t.kind !== 'general' && !t.archived;
   const it = inboxItem(t.id), decide = needsDecision(t, new Set(inboxAll().map(i => i.task_id)), S.data.runs), words = statusWords(t, it, decide);
-  const threadLink = t.thread ? el('a', { class: 'small', href: '#thread/' + encodeURIComponent(t.thread), onclick: e => { e.preventDefault(); focusKey('threads', 't:' + t.thread, 'thread/' + encodeURIComponent(t.thread)); } }, 'thread') : null;
+  const threadLink = t.thread ? el('a', { class: 'small', href: '#thread/' + encodeURIComponent(t.thread), onclick: e => { e.preventDefault(); focusKey('history', 't:' + t.thread, 'thread/' + encodeURIComponent(t.thread)); } }, 'thread') : null;
   if (!S.dev) {
     parts.push(el('div', { class: 'pane-name' }, tick(t), ' ', shortName(t.id)));
     parts.push(el('div', { class: `status-words ${words.tone}` }, isDeciding(t.id) ? [el('span', { class: 'spin' }), 'Deciding…'] : words.text));
@@ -1804,10 +1867,10 @@ async function openFile(t, name) {
   } catch (e) { body.replaceWith(el('div', { class: 'err' }, e.message)); }
 }
 /* a job (a run started from this page) in the pane: live terminal output, prompt answers */
-function openJob(jobId, quiet) {
+function openJob(jobId, quiet, mode) {
   if (S.pane && S.pane.kind === 'job' && S.pane.id === jobId) { if (!quiet) render(); return; }
   stopPane();
-  S.pane = { kind: 'job', id: jobId, built: false };
+  S.pane = { kind: 'job', id: jobId, built: false, mode: mode || null };
   setHash('job/' + encodeURIComponent(jobId));
   if (!quiet) render();
 }
@@ -1818,17 +1881,17 @@ function buildJobPane(d) {
   d.pre = el('pre', {}, d.doneNode, d.tailNode);
   d.pill = el('span', {}, el('span', { class: 'pill grey' }, 'connecting'));
   d.foot = el('div', { class: 'line', style: 'margin:0;width:100%' });
-  if (j && j.mode === 'ask') {
-    d.ask = true; d.ask_id = j.ask_id || null; d.chatItems = []; d.chatOffset = 0;
+  if ((j && j.mode === 'ask') || d.mode === 'ask') {
+    d.ask = true; d.ask_id = (j && j.ask_id) || d.ask_id || null; d.chatItems = []; d.chatOffset = 0;
     d.chat = el('div', { class: 'chat' });
     d.body = el('div', {}, d.chat, el('div', { class: 'asklog' }, d.pre));
     d.seg = el('span', { class: 'seg small' }, [['chat', 'Chat'], ['log', 'Log'], ['both', 'Both']].map(([v, l]) => el('button', { type: 'button', 'data-v': v, onclick: () => askView(d, v) }, l)));
     const sendFollow = async t => { const text = t.value.trim(); if (!text || !d.ask_id) return;
-      try { const r = await post('/api/ask', { request: text, resume: d.ask_id }); t.value = ''; saved('follow.' + d.ask_id, ''); refresh(); openJob(r.job_id); } catch (err) { toast(`ask failed: ${err.message}`); } };
-    const followText = writeBox('follow.' + (j.ask_id || d.id), { name: 'q', placeholder: 'follow up in this conversation (Enter sends, Shift+Enter for a new line)' }, sendFollow);
+      try { const r = await post('/api/ask', { request: text, resume: d.ask_id }); t.value = ''; saved('follow.' + d.ask_id, ''); refresh(); openJob(r.job_id, false, 'ask'); } catch (err) { toast(`ask failed: ${err.message}`); } };
+    const followText = writeBox('follow.' + ((j && j.ask_id) || d.id), { name: 'q', placeholder: 'follow up in this conversation (Enter sends, Shift+Enter for a new line)' }, sendFollow);
     const follow = el('form', { class: 'follow', onsubmit: e => { e.preventDefault(); sendFollow(followText); } }, followText, btn('Send', null, 'sm', { type: 'submit' }));
     d.foot = el('div', { style: 'margin:0;width:100%;display:flex;flex-direction:column;gap:6px' }, d.foot, follow);
-    paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title: (j.args || '') }, truncate(j.args || '', 80)), ' ', d.pill, el('span', { class: 'grow' }), d.seg], d.body, 'ask', d.foot);
+    paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title: ((j && j.args) || '') }, truncate((j && j.args) || '', 80)), ' ', d.pill, el('span', { class: 'grow' }), d.seg], d.body, 'ask', d.foot);
     askView(d, S.askView || 'chat');
   } else {
     paneShell([el('span', { class: 'muted small' }, 'job '), j ? [taskLink(j.task_id || '?'), ' ', modeTag(j.mode), ' ', argsTag(j.args), ' '] : [el('span', { class: 'id' }, d.id), ' '], d.pill],
@@ -1856,6 +1919,7 @@ async function pollJob(d) {
   try {
     const r = await api(`/api/job?id=${encodeURIComponent(d.id)}&offset=${d.offset}`);
     if (S.pane !== d) return;
+    if (r.mode === 'ask' && !d.ask) { d.mode = 'ask'; d.built = false; renderPane(); return; }
     const box = $('#pb');
     const atBottom = d.first || box.scrollTop + box.clientHeight >= box.scrollHeight - 12;
     if (r.text) feedJob(d, r.text);
@@ -1886,8 +1950,21 @@ async function pollJob(d) {
 const SQUIRE = ['......RRR.......', '.....RRRR.......', '....hHHHHHHh....', '...hHHHHHHHHh...', '...hHhhhhhhHh...', '...hHSSSSSSHh...', '...hSSSSSSSSh...', '...hSESSSSESh...', '...hSSSSSSSSh...', '...hSSSsSSSSh...', '...hSSSSSSSSh...', '....SSsssSSS....', '....SSSSSSSS....', '.....BSSSSB.....', '......BBBB......', '................'];
 const SQUIRE_OPEN = { 11: '....SSMMMMSS....', 12: '....SSSMMSSS....' };
 const SQUIRE_COLORS = { R: '#c0392b', H: '#a7b0bc', h: '#5f6b7a', S: '#f2c290', s: '#c98a55', E: '#1b1b1b', B: '#7b4a26', M: '#6d2416' };
-const MODEL_NAMES = { 'claude-sonnet-5-5': 'Sonnet 5.5', 'claude-opus-5-5': 'Opus 5.5', 'claude-fable-5-2': 'Fable 5.2' };
-function modelName(m) { return String(m).replace(/claude-[a-z0-9-]+/g, x => MODEL_NAMES[x] || x); }
+/* agents, their tiers and how they bill come from the home's retinue: opsquire itself knows no provider */
+const retinue = () => (S.data && S.data.retinue) || [];
+function agentOf(name) { return retinue().find(a => a.name === name) || retinue().find(a => a.default) || retinue()[0] || { name: '', tiers: {}, billing: {} }; }
+function modelName(m) {
+  const names = {};
+  for (const a of retinue()) for (const t of Object.values(a.tiers || {})) if (t.id) names[t.id] = t.label || t.id;
+  return String(m).replace(/[A-Za-z0-9][A-Za-z0-9._-]+/g, x => names[x] || x);
+}
+function spentText(it) {
+  const b = agentOf(it.agent).billing || {};
+  if (!it.cost_usd) return '';
+  if (it.billing === 'api-key') return `${money(it.cost_usd)} billed to ${b.key || 'an API key'}`;
+  if (it.billing === 'plan') return `≈ ${money(it.cost_usd)} at API prices, counted against ${b.plan || 'your plan'}`;
+  return `≈ ${money(it.cost_usd)} reported by the agent`;
+}
 /* drafts survive redraws, reloads and console restarts: kept in this browser only */
 function saved(key, value) {
   try { if (value === undefined) return localStorage.getItem('opsquire.' + key) || ''; if (value) localStorage.setItem('opsquire.' + key, value); else localStorage.removeItem('opsquire.' + key); } catch (e) { /* storage blocked */ }
@@ -1929,14 +2006,26 @@ function chatItem(d, it) {
     const m = /opsquire run (\S+)(.*)/.exec(a.text || ''), id = m ? m[1] : '';
     return el('a', { class: `runcard k-${/--apply/.test(a.text) ? 'apply' : /--verify/.test(a.text) ? 'verify' : 'dry'}`, href: '#inbox', onclick: e => { e.preventDefault(); if (id && task(id)) selectTask(id); else switchView('inbox'); } }, `▶ ${a.text}`);
   })));
-  if (it.cost_usd || it.model) body.push(el('div', { class: 'faint small', title: 'API list price of the tokens this ask used. On a Claude plan it counts against the plan\'s usage limits; with ANTHROPIC_API_KEY set it is billed to that key.' },
-    [it.model ? `${modelName(it.model)} · ` : '', it.cost_usd ? (it.billing === 'api-key' ? `${money(it.cost_usd)} billed to your API key` : `≈ ${money(it.cost_usd)} at API prices, counted against your plan`) : ''].join('')));
+  if (it.cost_usd || it.model) body.push(el('div', { class: 'faint small', title: 'What the agent reported for the tokens this ask used, at API list prices. Whether that is money depends on how the agent is billed, which its retinue entry says.' },
+    [it.agent && retinue().length > 1 ? `${it.agent} · ` : '', it.model ? `${modelName(it.model)} · ` : '', spentText(it)].join('').replace(/ · $/, '')));
   return el('div', { class: 'msg agent' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' }, body));
 }
 function renderChat(d) {
   const focused = document.activeElement && document.activeElement.id === 'askreply' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const talking = d.status && d.status !== 'done' && d.status !== 'waiting';
-  const kids = d.chatItems.map(it => chatItem(d, it));
+  const kids = [];
+  let steps = [];
+  const flush = () => {
+    if (!steps.length) return;
+    const run = steps; steps = [];
+    const key = run[0].at, open = (d.openSteps || new Set()).has(key);
+    kids.push(el('div', { class: 'msg steps' },
+      el('button', { type: 'button', class: 'stepfold', 'aria-expanded': String(open), onclick: () => { d.openSteps = d.openSteps || new Set(); if (open) d.openSteps.delete(key); else d.openSteps.add(key); renderChat(d); } },
+        `${open ? '▾' : '▸'} ${plural(run.length, 'step')}`, open ? null : el('span', { class: 'faint' }, ` · ${truncate(run[run.length - 1].text, 70)}`)),
+      open ? el('div', { class: 'steplist' }, run.map(it => el('div', {}, `${it.piece ? it.piece + ' · ' : ''}${it.text}`))) : null));
+  };
+  for (const it of d.chatItems) { if (it.kind === 'step') { steps.push(it); continue; } flush(); kids.push(chatItem(d, it)); }
+  flush();
   const agents = [...kids].filter(n => n.classList.contains('agent'));
   agents.forEach((n, i) => n.querySelector('.avatar').replaceChildren(squire(talking && i === agents.length - 1)));
   if (talking && (!agents.length || d.chatItems[d.chatItems.length - 1].kind !== 'agent')) kids.push(el('div', { class: 'msg agent typing' }, el('div', { class: 'avatar' }, squire(true)), el('div', { class: 'bubble faint' }, 'thinking…')));
@@ -1957,6 +2046,30 @@ function askView(d, view) {
   S.askView = view;
   d.body.className = `askbody show-${view}`;
   d.seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === view)));
+}
+function openAsk(askId) {
+  stopPane();
+  S.pane = { kind: 'ask', id: askId, built: false };
+  setHash('ask/' + encodeURIComponent(askId));
+  render();
+}
+async function buildAskPane(d) {
+  d.built = true; d.ask = true; d.ask_id = d.id; d.chatItems = []; d.chatOffset = 0; d.status = 'done'; d.prompt = '';
+  d.chat = el('div', { class: 'chat' });
+  const rec = (S.data.asks || []).find(a => a.ask_id === d.id) || {};
+  const sendFollow = async t => { const text = t.value.trim(); if (!text) return;
+    try { const r = await post('/api/ask', { request: text, resume: d.id }); t.value = ''; saved('follow.' + d.id, ''); refresh(); openJob(r.job_id, false, 'ask'); } catch (err) { toast(`ask failed: ${err.message}`); } };
+  const followText = writeBox('follow.' + d.id, { name: 'q', placeholder: 'follow up in this conversation (Enter sends, Shift+Enter for a new line)' }, sendFollow);
+  const foot = el('form', { class: 'follow', onsubmit: e => { e.preventDefault(); sendFollow(followText); } }, followText, btn('Send', null, 'sm', { type: 'submit' }));
+  paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title: rec.prompt || '' }, truncate(rec.prompt || d.id, 80)), ' ', when(rec.started)], el('div', { class: 'askbody show-chat' }, d.chat), 'ask', el('div', { style: 'width:100%' }, foot));
+  const poll = async () => {
+    if (S.pane !== d) return;
+    try { if (await pollAskChat(d)) renderChat(d); } catch (e) { fill(d.chat, el('div', { class: 'muted' }, `cannot read this conversation: ${e.message}`)); return; }
+    const last = d.chatItems[d.chatItems.length - 1];
+    if (!d.chatItems.length) fill(d.chat, el('div', { class: 'muted' }, 'This ask kept no conversation (it ran before chats were recorded).'));
+    if (!last || last.kind !== 'end') d.timer = setTimeout(poll, 2000);
+  };
+  poll();
 }
 /* ---- data flow ---- */
 let refreshTimer = null, loading = false, loadAgain = false, retry = 2000;
@@ -2004,6 +2117,7 @@ function connect() {
 }
 function boot() {
   S.dev = readDev();
+  S.hist.sort = saved('histSort') || 'recent';
   document.documentElement.classList.toggle('dev', S.dev);
   const devBtn = $('#devtoggle');
   devBtn.setAttribute('aria-pressed', String(S.dev));
@@ -2018,7 +2132,7 @@ function boot() {
   });
   window.addEventListener('hashchange', () => { if (S.data) applyHash(); });
   let rTimer = null;
-  window.addEventListener('resize', () => { if (S.view === 'map' && S.data) { clearTimeout(rTimer); rTimer = setTimeout(render, 150); } });
+  window.addEventListener('resize', () => { if (S.view === 'history' && S.hist.mode === 'timeline' && S.data) { clearTimeout(rTimer); rTimer = setTimeout(render, 150); } });
   setInterval(() => { if (S.data && !document.hidden) render(); }, 60000);
   setInterval(() => { if (!document.hidden) refresh(); }, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });

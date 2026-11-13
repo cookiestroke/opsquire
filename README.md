@@ -11,21 +11,22 @@ Every run leaves a structured, agent-readable record that agents cannot forge.
 
 ## Install
 
-From the latest release (a wheel attached to the GitHub release; the repo is private, so `gh` fetches it):
+From the latest release (a wheel attached to the GitHub release; the repo is private, so `gh` fetches it). Opsquire
+needs Python 3.13 or newer; `uv` brings its own, so this works on any Linux (or WSL), whatever Python it ships:
 
 ```
-sudo apt update && sudo apt install -y pipx gh git shellcheck   # Debian, Ubuntu; needs Python 3.10+
+curl -LsSf https://astral.sh/uv/install.sh | sh             # uv, if you do not have it; then open a new terminal
+sudo apt install -y gh git shellcheck                        # Debian, Ubuntu
 gh auth login
 gh release download --repo cookiestroke/opsquire --pattern '*.whl' --dir /tmp/opsquire
-pipx install /tmp/opsquire/*.whl
-pipx inject opsquire ruff mypy
-pipx ensurepath                          # then open a new terminal, so `opsquire` is on PATH
+uv tool install --python 3.13 --with ruff --with mypy /tmp/opsquire/*.whl
 opsquire init ~/ops-home --budget 15     # one command: home, local rules, config, credentials, skill, first task
 opsquire run <the first task it printed>
 ```
 
-pipx because a fresh Ubuntu has neither pip nor a working `python3 -m venv`, and its Python refuses system-wide
-installs. With uv instead: `uv tool install --with ruff --with mypy /tmp/opsquire/*.whl`.
+With pipx instead, on a system whose Python is already 3.13 or newer:
+`pipx install --python python3.13 /tmp/opsquire/*.whl && pipx inject opsquire ruff mypy`. Upgrading later is the same
+`uv tool install` with `--force`.
 
 `ruff` and `mypy` are the lint gate every Python task must pass before it runs (`shellcheck` for shell tasks), so a
 home without them can run nothing. `opsquire init` is safe to run again: it never overwrites what exists, and it
@@ -38,7 +39,7 @@ every record. Agents never read the file.
 From a checkout, for development:
 
 ```
-pip install -e .            # needs ruff, mypy, shellcheck on PATH for the lint gate
+uv tool install --python 3.13 --editable . --with ruff --with mypy
 ```
 
 ## Daily use
@@ -68,9 +69,9 @@ opsquire ui --open                 the console: the inbox of runs waiting on you
 opsquire integrate                 install the opsquire skill for Claude agents; make the home a local git repo
 opsquire ask --no-split "<...>"    one agent only (asks split into parallel pieces by default)
 opsquire ask --max-agents 2 ...    at most 2 agents at once; --budget 20 [--strict-budget] for the spend
-opsquire ask --model quick ...      quick (Sonnet 5.5), default (Opus 5.5) or deep (Fable 5.2); split pieces run
-                                   on quick. Spend is the API list price of the tokens: on a Claude plan it counts
-                                   against the plan's usage, with ANTHROPIC_API_KEY set it is billed to that key
+opsquire ask --model quick ...      a tier the agent's retinue entry defines (quick, default, deep) or a model id;
+                                   --agent picks another agent from retinue.json. Spend is what the agent reports
+                                   at API list prices; its retinue entry says whether that is a plan or an API key
 opsquire repo checkout|pr ...      (for agents) change a registered repo through a GitHub-signed PR
 ```
 
@@ -93,7 +94,7 @@ shellcheck -x -P src/opsquire/data/helpers src/opsquire/data/helpers/opsquire.sh
 python scripts/full_power.py   # every feature end to end, through the real CLI, in a scratch home
 ```
 
-Standard library only, Python 3.10+. [CI](.github/workflows/ci.yml) runs the same checks on every push and
+Standard library only, Python 3.13+. [CI](.github/workflows/ci.yml) runs the same checks on every push and
 pull request, plus the test suite on the oldest and newest supported Python, and builds the wheel, installs it
 into an empty venv and checks that every data file ships.
 

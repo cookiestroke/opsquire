@@ -132,7 +132,8 @@ def _lint_task(task: Task) -> LintResult:
     if py:
         ruff, mypy = find_tool("ruff"), find_tool("mypy")
         if not ruff or not mypy:
-            return LintResult(False, content_hash, "ruff and mypy must be installed (pipx inject opsquire ruff mypy)")
+            missing = "ruff and mypy must be installed next to opsquire (uv tool install --with ruff --with mypy ...)"
+            return LintResult(False, content_hash, missing)
         uses = [str(home_dir() / "general" / u) for u in task.meta.uses]
         by_folder: dict[str, list[str]] = {}
         for f in py:

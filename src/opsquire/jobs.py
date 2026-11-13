@@ -30,6 +30,7 @@ PROMPT_QUIET_S = 0.3
 HELPER_PROMPT_RE = re.compile(rb"\n>>> ((?:(?!\n>>> ).)*?) \[y/N\] ", re.DOTALL)
 HELPER_PROMPT_SCAN_BYTES = 256 * 1024
 MAX_JOBS = 50
+AGENT_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
 ASK_ID_RE = re.compile(rb"opsquire: ask (\S+)")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -95,7 +96,7 @@ class Jobs:
         self.problems.pop(job.task_id, None)
         return job
 
-    def start_ask(self, request: str, resume: str = "", model: str = "") -> Job:
+    def start_ask(self, request: str, resume: str = "", model: str = "", agent: str = "") -> Job:
         """An `opsquire ask` from the page: a new request, or a follow-up in an earlier ask's conversation."""
         request = request.strip()
         if not request and not resume:

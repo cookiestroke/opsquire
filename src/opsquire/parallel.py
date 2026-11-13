@@ -17,7 +17,6 @@ from typing import Any
 from . import handover, homegit, repos
 from .ask import (
     PIECE,
-    PIECE_MODEL,
     RESOLVE,
     Agents,
     Answerer,
@@ -30,8 +29,8 @@ from .ask import (
     billing,
     converse,
     mentioned_tasks,
-    model_for,
     pick_agent,
+    piece_model,
     save_record,
     say,
     system_prompt,
@@ -141,7 +140,7 @@ class Fanout:
             {**self.env(), "OPSQUIRE_HOME": wt, "OPSQUIRE_ASK_ID": f"{self.ask_id}-{piece.n}"},
             session=piece.session,
             label=piece.label,
-            model=model_for(PIECE_MODEL, self.agent),
+            model=piece_model(self.agent),
         )
         return conv
 
@@ -406,8 +405,12 @@ def finish(fan: Fanout, res: AskResult, pieces: list[Piece], started: dt.datetim
     status = "interrupted" if not ok else "waiting" if res.waiting else "ok" if res.exit_code == 0 else "failed"
     if status == "ok":
         handover.record_run_lines(res.actions, fan.whole, f"ask {res.ask_id}")
-    piece_model = model_for(PIECE_MODEL, fan.agent)
-    spent = {"cost_usd": res.cost_usd, "billing": billing(), "model": f"pieces on {piece_model}" if piece_model else ""}
+    pieces_on = piece_model(fan.agent)
+    spent = {
+        "cost_usd": res.cost_usd,
+        "billing": billing(fan.agent),
+        "model": f"pieces on {pieces_on}" if pieces_on else "",
+    }
     Chat.add("agent", res.text.strip(), actions=[{"kind": k, "text": t} for k, t in res.actions], **spent)
     Chat.add("end", status, waiting=res.waiting or "")
     save_record(

@@ -7,7 +7,7 @@ name = "opsquire"
 version = "0.3.1"
 description = "Agents prepare the scripts, you run them, and every run is recorded for the next agent."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 license = { text = "Apache-2.0" }
 dependencies = []
 classifiers = [
@@ -17,6 +17,8 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: System :: Systems Administration",
 ]
 
