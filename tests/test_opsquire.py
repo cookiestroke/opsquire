@@ -4,6 +4,7 @@ import contextlib
 import datetime as dt
 import fcntl
 import gzip
+import http.client
 import io
 import json
 import os
@@ -137,6 +138,19 @@ class OpsTest(unittest.TestCase):
         if answers is None:
             return subprocess.run([*CLI, *args], env=self.env, capture_output=True, text=True, timeout=120)
         return run_in_pty([*CLI, *args], self.env, answers)
+
+    def ui_process(self, port: int) -> subprocess.Popen[str]:
+        """`opsquire ui` on this home; the test stops it, and its stdout pipe is closed once the test ends."""
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        if proc.stdout:
+            self.addCleanup(proc.stdout.close)
+        return proc
+
+    def http(self, port: int, timeout: float) -> http.client.HTTPConnection:
+        """A connection to the console on `port`, closed once the test ends."""
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        self.addCleanup(conn.close)
+        return conn
 
     def new(self, name: str, body: str, *extra: str, lang: str = "py", area: str = "web1") -> Path:
         r = self.cli("new", area, name, "--purpose", f"test {name}", "--lang", lang, *extra)
@@ -432,16 +446,14 @@ class OpsTest(unittest.TestCase):
         self.assertEqual([t for k, t in kinds if k == "you"][1:], ["allow", "deny"])
 
     def test_console_settings_change_the_homes_tool_rules(self) -> None:
-        import http.client
-
         self.tool_rules()
         (self.home / "var").mkdir(exist_ok=True)
         (self.home / "var/tools-seen.json").write_text(json.dumps({"mcp__chat__send_message": "x", "WebFetch": "x"}))
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def call(method: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
                 conn.request(
@@ -1287,16 +1299,14 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(state["runs"][state["tasks"][tid]["runs"][0]]["targets"], {"web1": "ok"})
 
     def test_ui_serves_state_stream_log_file_and_close(self) -> None:
-        import http.client
-
         tid = self.new("served", "import opsquire_helpers as sq\n\nsq.result('served fine')\n").name
         self.assertEqual(self.cli("run", tid).returncode, 0)
         (self.home / f"tasks/{tid[:4]}-{tid[4:6]}/{tid}/design.md").write_text("# d\n")
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn(f"http://127.0.0.1:{port}/", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def get(path: str) -> tuple[int, Any]:
                 conn.request("GET", path)
@@ -1342,7 +1352,7 @@ class OpsTest(unittest.TestCase):
             self.assertEqual(resp.status, 400)
             resp.read()
             self.assertEqual(json.loads(self.cli("show", tid, "--json").stdout)["status"], "partial")
-            stream = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            stream = self.http(port, 10)
             stream.request("GET", "/api/stream")
             sresp = stream.getresponse()
             self.assertIn(b"event: hello", sresp.readline() + sresp.readline())
@@ -1359,26 +1369,23 @@ class OpsTest(unittest.TestCase):
             self.assertEqual(proc.wait(timeout=10), 0)
 
     def test_ui_streams_every_change_that_moves_the_inbox_to_every_page(self) -> None:
-        import http.client
-
         folder = self.new("handed", "print('v1')\n")
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn(f"http://127.0.0.1:{port}/", proc.stdout.readline() if proc.stdout else "")
             streams = []
             for _ in range(2):
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                conn = self.http(port, 10)
                 conn.request("GET", "/api/stream")
                 resp = conn.getresponse()
                 self.assertIn(b"event: hello", resp.readline() + resp.readline())
                 streams.append((conn, resp))
 
             def inbox() -> list[dict[str, Any]]:
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-                conn.request("GET", "/api/state")
-                items: list[dict[str, Any]] = json.loads(conn.getresponse().read())["inbox"]
-                conn.close()
+                with contextlib.closing(http.client.HTTPConnection("127.0.0.1", port, timeout=10)) as conn:
+                    conn.request("GET", "/api/state")
+                    items: list[dict[str, Any]] = json.loads(conn.getresponse().read())["inbox"]
                 return items
 
             def every_page_hears_a_change() -> None:
@@ -1441,8 +1448,6 @@ class OpsTest(unittest.TestCase):
         self.assertTrue(design.rstrip().endswith("kept"))
 
     def test_ui_inbox_and_jobs_run_tasks_with_prompts(self) -> None:
-        import http.client
-
         body = (
             "import opsquire_helpers as sq\n\nif sq.APPLY:\n    sq.confirm('Really change web1?')\n"
             "sq.target('web1', 'ok')\nsq.result('changed' if sq.APPLY else 'would change')\n"
@@ -1450,10 +1455,10 @@ class OpsTest(unittest.TestCase):
         tid = self.new("job", body, "--changes-prod", "--rollback", "none").name
         self.assertEqual(self.cli("lint", tid).returncode, 0)
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
                 conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
@@ -1513,8 +1518,6 @@ class OpsTest(unittest.TestCase):
             self.assertEqual(proc.wait(timeout=15), 0)
 
     def test_ui_job_runs_the_handed_over_args_the_inbox_shows(self) -> None:
-        import http.client
-
         show = "import sys\n\nimport opsquire_helpers as sq\n\nsq.result(repr(sys.argv[1:]))\n"
         read = self.new("reused", show).name
         change = self.new(
@@ -1532,10 +1535,10 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("run", change, "--", "web1").returncode, 0)
         self.assertEqual(self.cli("handover", change, "--apply", "--", "web1").returncode, 0)
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def call(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
                 conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
@@ -1592,8 +1595,6 @@ class OpsTest(unittest.TestCase):
             self.assertEqual(proc.wait(timeout=15), 0)
 
     def test_ui_says_when_its_code_is_older_than_what_is_on_disk(self) -> None:
-        import http.client
-
         code = self.tmp / "code"
         shutil.copytree(ROOT / "src/opsquire", code / "opsquire", ignore=shutil.ignore_patterns("__pycache__"))
         self.env["PYTHONPATH"] = str(code)
@@ -1602,16 +1603,14 @@ class OpsTest(unittest.TestCase):
         port = free_port()
 
         def start() -> subprocess.Popen[str]:
-            ui = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+            ui = self.ui_process(port)
             self.assertIn("opsquire ui", ui.stdout.readline() if ui.stdout else "")
             return ui
 
         def status() -> Any:
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-            conn.request("GET", "/api/state")
-            code_status = json.loads(conn.getresponse().read())["code"]
-            conn.close()
-            return code_status
+            with contextlib.closing(http.client.HTTPConnection("127.0.0.1", port, timeout=10)) as conn:
+                conn.request("GET", "/api/state")
+                return json.loads(conn.getresponse().read())["code"]
 
         proc = start()
         try:
@@ -1623,7 +1622,7 @@ class OpsTest(unittest.TestCase):
             (code / "opsquire/data/helpers/opsquire_helpers.py").write_text("# read fresh by every run\n")
             self.assertFalse(status()["stale"], "same modules, and files the console does not keep")
 
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+            conn = self.http(port, 15)
             conn.request("GET", "/api/stream")
             stream = conn.getresponse()
             self.assertEqual(stream.readline(), b"event: hello\n")
@@ -1683,8 +1682,6 @@ class OpsTest(unittest.TestCase):
         self.assertIn("opsquire ui --port ${location.port}", page)
 
     def test_run_records_whether_the_console_or_a_terminal_started_it(self) -> None:
-        import http.client
-
         tid = self.new("origin", "import opsquire_helpers as sq\n\nsq.result('ran')\n").name
         self.assertEqual(self.cli("lint", tid).returncode, 0)
         plan = self.cli("new", "web1", "both", "--plan", "--purpose", "p", "--step", tid)
@@ -1703,10 +1700,10 @@ class OpsTest(unittest.TestCase):
 
         self.assertEqual(self.env["OPSQUIRE_AUTHOR"], "test", "the author says nothing about the console here")
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def call(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
                 conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
@@ -1816,8 +1813,6 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.cli("judge", "nothing-like-this").returncode, 2)
 
     def test_ui_judge_job_ticks_a_task_off(self) -> None:
-        import http.client
-
         self.agents_file()
         tid = self.new(
             "tick",
@@ -1828,10 +1823,10 @@ class OpsTest(unittest.TestCase):
         ).name
         self.assertEqual(self.cli("run", tid, "--apply", *self.NO_DRY, answers=[("", "y")]).returncode, 1)
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
                 conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
@@ -2750,18 +2745,14 @@ class OpsTest(unittest.TestCase):
 
     def console(self) -> tuple[subprocess.Popen[str], Any]:
         """A real `opsquire ui` on this home and a function that calls its API."""
-        import http.client
-
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
 
         def call(path: str, body: dict[str, Any] | None = None) -> Any:
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
-            conn.request("POST" if body else "GET", path, json.dumps(body) if body else None)
-            data = json.loads(conn.getresponse().read())
-            conn.close()
-            return data
+            with contextlib.closing(http.client.HTTPConnection("127.0.0.1", port, timeout=20)) as conn:
+                conn.request("POST" if body else "GET", path, json.dumps(body) if body else None)
+                return json.loads(conn.getresponse().read())
 
         return proc, call
 
@@ -4067,16 +4058,14 @@ class OpsTest(unittest.TestCase):
             ui.wait(20)
 
     def test_a_console_run_that_does_not_start_leaves_its_reason_on_the_task(self) -> None:
-        import http.client
-
         folder = self.new("broken", "print(1)\n", "--changes-prod", "--rollback", "none", "--no-verify")
         self.assertEqual(self.cli("lint", "broken").returncode, 0)
         (folder / "main.py").write_text("def f(x):\n    return x\n")
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
                 conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
@@ -4109,15 +4098,13 @@ class OpsTest(unittest.TestCase):
             proc.wait(20)
 
     def test_an_ask_from_the_console_is_a_chat_with_its_interview_and_its_runs(self) -> None:
-        import http.client
-
         self.agents_file()
         self.env |= {"FAKE_GRILL": "1", "FAKE_STATE": str(self.tmp / "fake-state.json")}
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
                 conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
@@ -4167,18 +4154,16 @@ class OpsTest(unittest.TestCase):
             proc.wait(20)
 
     def test_the_console_resumes_a_chat_once_the_run_it_handed_over_finishes(self) -> None:
-        import http.client
-
         self.agents_file()
         body = "import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'looked')\n"
         folder = self.new("restart-bots", body, *self.CHANGING)
         self.assertEqual(self.cli("lint", "restart-bots").returncode, 0)
         self.env["FAKE_TASK"] = folder.name
         port = free_port()
-        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        proc = self.ui_process(port)
         try:
             self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn = self.http(port, 10)
 
             def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
                 conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
