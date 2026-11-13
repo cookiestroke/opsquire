@@ -16,6 +16,7 @@ from . import handover, locks, repos
 from .docs import final_mode, run_stats
 from .lint import asks_first, last_lint
 from .model import (
+    Meta,
     Task,
     all_task_folders,
     author_key,
@@ -293,16 +294,27 @@ def argv_of(run: dict[str, Any]) -> list[str]:
     return [str(x) for x in run.get("argv") or []]
 
 
+def walked_every_stage(meta: Meta, run: dict[str, Any]) -> bool:
+    return run.get("mode") == "apply" and run.get("status") == "ok" and is_last_stage(meta, argv_of(run))
+
+
 def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None:
     """The run the operator owes a task: its first read or dry run when it is ready and never ran, a read again when
     the last one did not end ok and its scripts changed since, the apply after a dry run of its current scripts that
     ended ok, the verify check after an apply that did not close the task (or when the judge asked for it), else a
-    fresh dry run. None when nothing waits: a read that ended ok or was not fixed since, closed tasks, and a task
-    whose verify check failed (that one needs a decision)."""
+    fresh dry run. A staged task owes its check only after an ok apply of its last stage: before that it owes the
+    stage walk, and a verify run early changes nothing. None when nothing waits: a read that ended ok or was not fixed
+    since, closed tasks, and a task whose verify check failed (that one needs a decision)."""
     m = task.meta
     if m is None or task.kind == "general" or status in CLOSED or status == "draft":
         return None
     runs = [r for r in runs if r.get("status") != "blocked"]
+    if m.stages:
+        kept = len(runs)
+        while kept and runs[kept - 1].get("mode") == "verify":
+            kept -= 1
+        if not (kept and walked_every_stage(m, runs[kept - 1])):
+            runs = runs[:kept]
     if not runs:
         return "dry" if m.changes_prod else "read"
     last = runs[-1]
@@ -319,7 +331,8 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
     if last.get("mode") == "apply" and last.get("status") == "ok" and not is_last_stage(m, argv_of(last)):
         return "dry"
     if last.get("mode") == "apply" and last.get("status") != "aborted" and m.verify:
-        return "verify"
+        if not m.stages or walked_every_stage(m, last):
+            return "verify"
     if last.get("status") in ("failed", "partial") and same_scripts:
         return None
     return "dry"

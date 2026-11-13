@@ -3677,6 +3677,38 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(json.loads((folder / "meta.json").read_text())["outcome"]["state"], "done")
         self.assertIsNone(self.inbox_item(folder.name))
 
+    def test_a_staged_task_with_stages_left_keeps_its_walk_in_the_inbox_after_a_verify(self) -> None:
+        from opsquire.model import load_task
+        from opsquire.state import next_mode
+
+        body = "import sys\n\nimport opsquire_helpers as sq\n\nsq.target('web1', 'ok', sys.argv[1])\n"
+        stages = ("--stage", "install", "--stage", "reader", "--stage", "bot")
+        folder = self.new("walk", body, "--changes-prod", "--rollback", "none", *stages)
+        (folder / "verify.py").write_text("import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'live')\n")
+        self.assertEqual(self.cli("lint", folder.name).returncode, 0)
+        self.enterContext(mock.patch.dict(os.environ, {"OPSQUIRE_HOME": str(self.home)}))
+        task = load_task(folder)
+        files = task.file_hashes()
+
+        def run(mode: str, status: str, *argv: str, changed: bool = False) -> dict[str, Any]:
+            return {"mode": mode, "status": status, "argv": list(argv), "files": {} if changed else files}
+
+        installed = [run("dry", "ok", "install"), run("apply", "ok", "install"), run("dry", "ok", "reader")]
+        interrupted = [*installed, run("apply", "interrupted", "reader")]
+        self.assertEqual(next_mode(task, interrupted, "ready"), "dry", "an interrupted stage walks again")
+        early = [*interrupted, run("verify", "failed")]
+        self.assertEqual(next_mode(task, early, "ready"), "dry", "a verify with stages left hides nothing")
+        self.assertEqual(next_mode(task, [*early, run("verify", "failed")], "ready"), "dry")
+        failed = [*installed, run("apply", "failed", "reader")]
+        self.assertIsNone(next_mode(task, failed, "ready"), "a failed stage waits for its scripts to change")
+        self.assertIsNone(next_mode(task, [*failed, run("verify", "failed")], "ready"))
+        self.assertEqual(next_mode(task, [*installed, run("apply", "failed", "reader", changed=True)], "ready"), "dry")
+        walked = [*installed, run("apply", "ok", "reader"), run("dry", "ok", "bot"), run("apply", "ok", "bot")]
+        self.assertEqual(next_mode(task, walked, "ready"), "verify", "the check runs after the last stage")
+        self.assertIsNone(next_mode(task, [*walked, run("verify", "failed")], "ready"), "a failed check needs a call")
+        last_failed = [*walked[:-1], run("apply", "failed", "bot", changed=True)]
+        self.assertEqual(next_mode(task, last_failed, "ready"), "dry", "a failed last stage is no finished walk")
+
     def console_apply(self, task_id: str) -> tuple[list[str], int]:
         code = (
             "import json, sys\nfrom opsquire.jobs import Jobs\n"
