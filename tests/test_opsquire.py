@@ -4026,8 +4026,14 @@ class Bundle(unittest.TestCase):
                 "import sys\n\nimport shared_lib\n\nprint(shared_lib.twice(int(sys.argv[1])), __name__)\n"
                 "raise ValueError('boom')\n"
             )
-            r = subprocess.run([sys.executable, "-I", "-u", "-", "21"], input=sq.bundle(payload, lib),
-                               capture_output=True, text=True, cwd=d, check=False)
+            r = subprocess.run(
+                [sys.executable, "-I", "-u", "-", "21"],
+                input=sq.bundle(payload, lib),
+                capture_output=True,
+                text=True,
+                cwd=d,
+                check=False,
+            )
         self.assertEqual(r.stdout, "42 __main__\n")
         self.assertIn('File "payload.py", line 6, in <module>', r.stderr)
         self.assertIn("raise ValueError('boom')", r.stderr)
