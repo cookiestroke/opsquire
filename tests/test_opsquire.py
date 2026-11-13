@@ -3960,6 +3960,15 @@ class OpsTest(unittest.TestCase):
             self.assertEqual([a["kind"] for a in reply["actions"]], ["RUN", "RUN"])
             self.assertEqual(kinds[-1], "end")
             self.assertEqual(chat[-1]["text"], "ok")
+            status, again = call("POST", "/api/ask", {"request": "and the web2 bots?", "resume": waiting["ask_id"]})
+            self.assertEqual(status, 200, again)
+            job_until(again["job_id"], lambda j: j["status"] in ("waiting", "done"))
+            follow = next(a for a in call("GET", "/api/state")[1]["asks"] if a["prompt"] == "and the web2 bots?")
+            self.assertNotEqual(follow["ask_id"], waiting["ask_id"])
+            self.assertEqual(follow["conversation"], waiting["ask_id"])
+            whole = call("GET", f"/api/askchat?id={follow['ask_id']}&offset=0")[1]["items"]
+            self.assertEqual(whole[0]["text"], "restart web1 bots")
+            self.assertIn("and the web2 bots?", [c["text"] for c in whole if c["kind"] == "you"])
             self.assertEqual(call("GET", "/api/askchat?id=../x&offset=0")[0], 400)
         finally:
             proc.send_signal(signal.SIGINT)
@@ -3999,6 +4008,29 @@ class OpsTest(unittest.TestCase):
         self.assertNotIn("--model", argv)
         rec = json.loads(next((self.home / "var/asks").glob("*_fake.json")).read_text())
         self.assertEqual((rec["model"], rec["billing"], rec["agent"]), ("", "", "fake"))
+
+
+class Bundle(unittest.TestCase):
+    def test_payload_imports_its_modules_through_stdin(self) -> None:
+        from opsquire.model import HELPERS_DIR
+
+        sys.path.insert(0, str(HELPERS_DIR))
+        try:
+            import opsquire_helpers as sq
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory() as d:
+            lib, payload = Path(d) / "shared_lib.py", Path(d) / "payload.py"
+            lib.write_text("from __future__ import annotations\n\n\ndef twice(x: int) -> int:\n    return 2 * x\n")
+            payload.write_text(
+                "import sys\n\nimport shared_lib\n\nprint(shared_lib.twice(int(sys.argv[1])), __name__)\n"
+                "raise ValueError('boom')\n"
+            )
+            r = subprocess.run([sys.executable, "-I", "-u", "-", "21"], input=sq.bundle(payload, lib),
+                               capture_output=True, text=True, cwd=d, check=False)
+        self.assertEqual(r.stdout, "42 __main__\n")
+        self.assertIn('File "payload.py", line 6, in <module>', r.stderr)
+        self.assertIn("raise ValueError('boom')", r.stderr)
 
 
 class ReleaseScripts(unittest.TestCase):

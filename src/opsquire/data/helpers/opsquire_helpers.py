@@ -11,6 +11,7 @@ import sys
 import time
 import traceback
 from collections.abc import Callable
+from pathlib import Path
 from types import FrameType
 from typing import Any
 
@@ -46,6 +47,33 @@ def error(msg: str, **data: Any) -> None:
 
 def data(msg: str, **values: Any) -> None:
     emit("data", msg, **values)
+
+
+_LOADER = """import linecache as _lc, sys as _sys, types as _types
+def _opsquire_load(name, path, source, main=False):
+    _lc.cache[path] = (len(source), None, source.splitlines(True), path)
+    code = compile(source, path, "exec", dont_inherit=True)
+    if main:
+        exec(code, {"__name__": "__main__", "__file__": path, "__builtins__": __builtins__})
+        return
+    module = _types.ModuleType(name)
+    module.__file__ = path
+    _sys.modules[name] = module
+    exec(code, module.__dict__)
+"""
+
+
+def bundle(payload: str | Path, *modules: str | Path) -> str:
+    """The text to pipe to a remote `python -u -` so the payload can `import <module>` there as it does locally.
+    Each module file (for example a general script's library: `$OPSQUIRE_GENERAL/<id>/<name>.py`) is registered
+    under its file name before the payload runs as __main__; tracebacks keep each file's own name and line numbers.
+    Nothing is written on the host."""
+    parts = [_LOADER]
+    for m in map(Path, modules):
+        parts.append(f"_opsquire_load({m.stem!r}, {m.name!r}, {m.read_text()!r})\n")
+    path = Path(payload)
+    parts.append(f"_opsquire_load('__main__', {path.name!r}, {path.read_text()!r}, main=True)\n")
+    return "".join(parts)
 
 
 def _announce_prompt(question: str) -> None:

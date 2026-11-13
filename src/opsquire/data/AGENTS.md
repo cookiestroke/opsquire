@@ -258,6 +258,12 @@ sq.run(main, cleanup=undo_scratch)  # bash: redefine sq_cleanup() after sourcing
 
 Remote payload (no helpers): `print("@@OPSQUIRE " + json.dumps({"event": "target", "target": "db2", "status": "ok", "msg": "..."}), flush=True)`.
 
+A payload piped to a remote `python -u -` can still import shared code: pipe `sq.bundle(payload, *module_files)`
+instead of the payload's text. Each module file (typically a library in a general script the task `uses`, such as
+`Path(os.environ["OPSQUIRE_GENERAL"]) / "<id>" / "<name>.py"`) is importable as `<name>` on the host, exactly as in
+local tests; nothing is written on the host and tracebacks name the right file and line. Before writing the same
+helper into a second payload, put it in such a library.
+
 Anything that can take more than a few seconds (downloads, waits, loops over many hosts or files) reports
 `progress`: the operator sees one updating bar with speed and time left instead of a silent terminal (a silent
 download got interrupted twice before this existed). Unit `"B"` means bytes; other units are shown as counts.

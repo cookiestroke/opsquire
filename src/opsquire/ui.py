@@ -120,10 +120,16 @@ def code_status(loaded: dict[str, str]) -> dict[str, Any]:
 
 
 def ask_chat(ask_id: str, offset: int) -> dict[str, Any]:
-    """An ask's conversation from line `offset` on, for the console's chat."""
+    """The conversation an ask belongs to, from line `offset` on, for the console's chat. A follow-up writes into
+    its conversation's chat (the first ask's), so any ask of it reads the whole conversation."""
     if not re.fullmatch(r"[0-9A-Za-z_.-]+", ask_id):
         raise OpsquireError("bad ask id")
-    path = var_dir() / "asks" / f"{ask_id}.chat.jsonl"
+    folder = var_dir() / "asks"
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        conv = str(json.loads((folder / f"{ask_id}.json").read_text()).get("copies") or ask_id)
+        if re.fullmatch(r"[0-9A-Za-z_.-]+", conv):
+            ask_id = conv
+    path = folder / f"{ask_id}.chat.jsonl"
     try:
         lines = path.read_text().splitlines()
     except OSError:

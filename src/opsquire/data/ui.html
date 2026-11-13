@@ -337,13 +337,13 @@ html.dev .tile .num { font-size: 1.5rem; }
 @keyframes talk { 0% { opacity: 1; } 50% { opacity: 0; } }
 #pane .pb.ask { background: var(--bg); padding: 0; }
 .askbody { display: flex; flex-direction: column; height: 100%; }
-.askbody .chat { flex: 1 1 auto; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.askbody .chat { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .askbody .asklog { flex: 1 1 auto; overflow: auto; padding: 10px 14px; background: var(--code-bg); border-top: 1px solid var(--line); }
 .askbody.show-chat .asklog { display: none; }
 .askbody.show-log .chat { display: none; }
 .askbody.show-both .chat, .askbody.show-both .asklog { flex: 1 1 50%; }
 .msg { display: flex; gap: 8px; align-items: flex-start; max-width: 100%; }
-.msg .bubble { padding: 8px 12px; border-radius: 14px; max-width: min(78%, 640px); overflow-wrap: anywhere; }
+.msg .bubble { padding: 8px 12px; border-radius: 14px; max-width: min(78%, 640px); min-width: 0; overflow-wrap: anywhere; }
 .msg.you { justify-content: flex-end; }
 .msg.you .bubble { align-self: flex-end; background: var(--accent); color: var(--panel); border-bottom-right-radius: 4px; white-space: pre-wrap; }
 .msg.agent .bubble { background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
@@ -356,8 +356,9 @@ html.dev .tile .num { font-size: 1.5rem; }
 .msg.end.good { color: var(--good); }
 .msg.end.warn { color: var(--warn); }
 .msg .quick { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.msg .quick button { white-space: normal; text-align: left; max-width: 100%; overflow-wrap: anywhere; }
 .runs-cards { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
-.runcard { display: block; padding: 4px 10px; border-radius: var(--r-btn); border-left: 4px solid var(--k); background: var(--kb); color: var(--k); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+.runcard { display: block; padding: 4px 10px; border-radius: var(--r-btn); border-left: 4px solid var(--k); background: var(--kb); color: var(--k); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; overflow-wrap: anywhere; }
 .msg.answerbox form, .follow { display: flex; gap: 6px; width: 100%; }
 .msg.answerbox input, .follow input { flex: 1 1 auto; min-width: 0; }
 .msg.answerbox { padding-left: 48px; }
@@ -1133,15 +1134,17 @@ function renderInbox() {
       el('span', { class: 'grow' }),
       agentPick, tierSeg,
       el('button', { type: 'submit', class: 'askgo', title: 'send to your squire' }, 'Ask ', el('span', { 'aria-hidden': 'true' }, '↑')))));
-  const recentAsks = [...(d.asks || [])].sort((a, b) => String(b.started || '').localeCompare(String(a.started || ''))).slice(0, S.allAsks ? 30 : 4);
+  const convs = conversations(d.asks || []);
+  const recentAsks = convs.slice(0, S.allAsks ? 30 : 4);
   if (recentAsks.length) {
-    parts.push(sec('Recent asks', null, (d.asks || []).length > 4 ? btn(S.allAsks ? 'fewer' : `all ${d.asks.length}`, () => { S.allAsks = !S.allAsks; render(); }, 'sm') : null));
-    parts.push(el('div', { class: 'block' }, recentAsks.map(a => {
-      const live = jobs().find(j => j.mode === 'ask' && j.ask_id === a.ask_id && j.status !== 'done');
+    parts.push(sec('Recent asks', null, convs.length > 4 ? btn(S.allAsks ? 'fewer' : `all ${convs.length}`, () => { S.allAsks = !S.allAsks; render(); }, 'sm') : null));
+    parts.push(el('div', { class: 'block' }, recentAsks.map(c => {
+      const a = c.last, live = liveAskJob(c.id);
       const state = live ? (live.status === 'waiting' ? ['warn', 'waiting for you'] : ['live', 'working']) : a.status === 'ok' ? ['good', 'answered'] : a.status === 'waiting' ? ['warn', 'waiting for you'] : ['bad', a.status || '?'];
-      return el('div', { class: 'lrow', role: 'button', tabindex: '0', title: a.prompt || '', onclick: () => live ? openJob(live.job_id, false, 'ask') : openAsk(a.ask_id), onkeydown: e => { if (e.key === 'Enter') e.currentTarget.click(); } },
+      return el('div', { class: 'lrow', role: 'button', tabindex: '0', title: c.first.prompt || '', onclick: () => live ? openJob(live.job_id, false, 'ask') : openAsk(c.id), onkeydown: e => { if (e.key === 'Enter') e.currentTarget.click(); } },
         el('span', { class: 'askhead' }, squire(!!live && live.status !== 'waiting')),
-        el('div', { class: 'lmain' }, el('div', { class: 'lline', style: 'color:var(--fg)' }, a.prompt || '(follow-up)')),
+        el('div', { class: 'lmain' }, el('div', { class: 'lline', style: 'color:var(--fg)' }, c.first.prompt || '(follow-up)'),
+          c.asks.length > 1 ? el('div', { class: 'lline faint small' }, `${c.asks.length} turns · last: ${truncate(a.prompt || '', 60)}`) : null),
         el('div', { class: 'lright' }, el('span', { class: `pill ${state[0]}` }, state[1]), a.model ? el('span', { class: 'chip' }, (a.agent && retinue().length > 1 ? a.agent + ' · ' : '') + modelName(a.model)) : null, when(a.ended || a.started)));
     })));
   }
@@ -2010,6 +2013,18 @@ function chatItem(d, it) {
     [it.agent && retinue().length > 1 ? `${it.agent} · ` : '', it.model ? `${modelName(it.model)} · ` : '', spentText(it)].join('').replace(/ · $/, '')));
   return el('div', { class: 'msg agent' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' }, body));
 }
+/* An ask and its follow-ups are one conversation (the first ask's id); newest conversation first. */
+function conversations(asks) {
+  const by = new Map();
+  for (const a of [...asks].sort((x, y) => String(x.started || '').localeCompare(String(y.started || '')))) {
+    const id = a.conversation || a.ask_id;
+    if (!by.has(id)) by.set(id, { id, first: a, asks: [] });
+    const c = by.get(id); c.asks.push(a); c.last = a;
+  }
+  return [...by.values()].sort((x, y) => String(y.last.started || '').localeCompare(String(x.last.started || '')));
+}
+const conversationOf = askId => ((S.data.asks || []).find(a => a.ask_id === askId) || {}).conversation || askId;
+const liveAskJob = convId => jobs().find(j => j.mode === 'ask' && j.status !== 'done' && j.ask_id && conversationOf(j.ask_id) === convId) || null;
 function renderChat(d) {
   const focused = document.activeElement && document.activeElement.id === 'askreply' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const talking = d.status && d.status !== 'done' && d.status !== 'waiting';
@@ -2027,8 +2042,9 @@ function renderChat(d) {
   for (const it of d.chatItems) { if (it.kind === 'step') { steps.push(it); continue; } flush(); kids.push(chatItem(d, it)); }
   flush();
   const agents = [...kids].filter(n => n.classList.contains('agent'));
-  agents.forEach((n, i) => n.querySelector('.avatar').replaceChildren(squire(talking && i === agents.length - 1)));
-  if (talking && (!agents.length || d.chatItems[d.chatItems.length - 1].kind !== 'agent')) kids.push(el('div', { class: 'msg agent typing' }, el('div', { class: 'avatar' }, squire(true)), el('div', { class: 'bubble faint' }, 'thinking…')));
+  const typing = talking && (!agents.length || d.chatItems[d.chatItems.length - 1].kind !== 'agent');
+  agents.forEach((n, i) => n.querySelector('.avatar').replaceChildren(squire(talking && !typing && i === agents.length - 1)));
+  if (typing) kids.push(el('div', { class: 'msg agent typing' }, el('div', { class: 'avatar' }, squire(true)), el('div', { class: 'bubble faint' }, 'thinking…')));
   if (d.status === 'waiting' && d.prompt) kids.push(el('div', { class: 'msg answerbox' }, el('form', { onsubmit: e => { e.preventDefault(); replyAsk(d, e.target.reply.value); } },
     writeBox('reply.' + d.id, { name: 'reply', id: 'askreply', placeholder: 'your answer (empty = the recommended one)' }, t => replyAsk(d, t.value)), btn('Send', null, 'sm primary', { type: 'submit' }))));
   fill(d.chat, kids);

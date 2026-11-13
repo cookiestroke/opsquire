@@ -441,6 +441,7 @@ def run_view(r: dict[str, Any]) -> dict[str, Any]:
 def ask_view(a: dict[str, Any]) -> dict[str, Any]:
     return {
         "ask_id": a.get("ask_id"),
+        "conversation": a.get("copies") or a.get("ask_id"),
         "status": a.get("status"),
         "started": a.get("started"),
         "ended": a.get("ended"),
