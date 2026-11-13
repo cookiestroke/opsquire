@@ -152,7 +152,9 @@ than the field have none, which means unknown.
    `handover` and `new` are refused while a run you handed over has finished unread (`opsquire unread` lists them).
    With the Stop hook `opsquire integrate` installs, a Claude session cannot end its turn on such a run either.
 7. Closing. An apply run that ends ok closes the task by itself: `outcome` done, a note built from the run record,
-   and a `## Result` section in design.md (amend either when the generated text is not the truth). A task with a
+   and a `## Result` section in design.md (amend either when the generated text is not the truth). A task closed
+   before (reused or handed over again) is closed again by its next ok run, which keeps the earlier close as
+   `previous` and adds a line to the Result section. A task with a
    verify check closes only on it: right after an ok apply, `opsquire run` runs the verify check, and the task closes
    when every target is ok; otherwise it stays open. A task that runs in stages declares them (`stages` in
    meta.json): the check runs, and the task closes, only after the last stage's apply, and no handover is needed

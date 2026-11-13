@@ -116,6 +116,19 @@ def has_result(task: Task) -> bool:
     return design.is_file() and any(line.startswith("## Result") for line in design.read_text().splitlines())
 
 
+def add_to_result(task: Task, line: str, results: list[str]) -> None:
+    """Append a later close to the end of design.md's Result section, before whatever section follows it."""
+    design = task.folder / "design.md"
+    lines = design.read_text().rstrip().splitlines()
+    start = next(i for i, x in enumerate(lines) if x.startswith("## Result"))
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    while end > start + 1 and not lines[end - 1].strip():
+        end -= 1
+    added = ["", line, "", *([f"- {r}" for r in results] or ["- (the run reported no results)"])]
+    rest = ["", *lines[end:]] if end < len(lines) else []
+    design.write_text("\n".join([*lines[:end], *added, *rest]) + "\n")
+
+
 def unwritten(run: dict[str, Any]) -> bool:
     """A verify run that finished ok with every target `skipped`: the scaffolded check nobody wrote, which says
     nothing. A blocked or failed verify run is not this, even though its targets read skipped."""
@@ -133,9 +146,14 @@ def auto_close(task_id: str, since: str) -> str | None:
     ends itself; `opsquire close` stays for the runs that lie (a failed run whose host ended up fine). A task with a
     verify check closes only on that check: `opsquire run --apply` runs it after an ok apply, and an apply whose
     check reports a target not ok (a build stage before the deploy) leaves the task open. A check that is still the
-    unwritten scaffold (every target skipped) says nothing, so the apply closes the task as before."""
+    unwritten scaffold (every target skipped) says nothing, so the apply closes the task as before. A task closed
+    before this run (reused, or handed over again) is closed again from this run, keeping the earlier close as
+    `previous`; a close made since the run started stands."""
     task = resolve_task(task_id)
-    if task.meta is None or task.kind == "general" or task.meta.archived or task.meta.outcome:
+    if task.meta is None or task.kind == "general" or task.meta.archived:
+        return None
+    earlier = task.meta.outcome
+    if earlier and str(earlier.get("closed") or "") >= since:
         return None
     runs = [r for r in runs_for(task.id) if str(r.get("started", "")) >= since]
     last = runs[-1] if runs else None
@@ -167,10 +185,14 @@ def auto_close(task_id: str, since: str) -> str | None:
         "closed": iso(now()),
         "run": last.get("run_id"),
     }
+    if earlier:
+        record["previous"] = {k: v for k, v in earlier.items() if k != "previous"}
     raw = dict(task.raw)
     raw["outcome"] = record
     write_json(task.folder / "meta.json", raw)
-    if not has_result(task):
+    if earlier and has_result(task):
+        add_to_result(task, f"Closed again automatically: {note.split('. Results:')[0]} ({record['closed']}).", results)
+    elif not has_result(task):
         design = task.folder / "design.md"
         head = design.read_text().rstrip() + "\n\n" if design.is_file() else f"# {task.id}\n\n"
         lines = [f"- {r}" for r in results] or ["- (the run reported no results)"]

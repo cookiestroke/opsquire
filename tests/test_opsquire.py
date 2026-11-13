@@ -1428,6 +1428,17 @@ class OpsTest(unittest.TestCase):
             self.cli("close", tid, "--outcome", "partial", "--note", "web1 rolled back later").returncode, 0
         )
         self.assertEqual(json.loads(meta_path.read_text())["outcome"]["state"], "partial")
+        (meta_path.parent / "design.md").write_text(design + "\n## Later\n\nkept\n")
+        self.assertEqual(self.cli("run", tid).returncode, 0)
+        r = self.cli("run", tid, "--apply", answers=[("", "y")])
+        self.assertIn("closed done", r.stdout, r.stdout + r.stderr)
+        again = json.loads(meta_path.read_text())["outcome"]
+        self.assertEqual((again["state"], again["previous"]["state"]), ("done", "partial"))
+        self.assertNotIn("previous", again["previous"])
+        self.assertGreater(again["closed"], outcome["closed"])
+        design = (meta_path.parent / "design.md").read_text()
+        self.assertLess(design.index("Closed again automatically"), design.index("## Later"))
+        self.assertTrue(design.rstrip().endswith("kept"))
 
     def test_ui_inbox_and_jobs_run_tasks_with_prompts(self) -> None:
         import http.client
