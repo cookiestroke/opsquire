@@ -15,7 +15,7 @@
   --code-bg: #eef1f4; --shadow: 0 8px 24px rgba(20, 30, 40, .18);
   --top: 44px;
   --k-read: #1d5fd6; --k-read-bg: #dbe8fd; --k-dry: #8a6a00; --k-dry-bg: #fdf3c4; --k-dry-edge: #e0b400;
-  --k-apply: #c2410c; --k-apply-bg: #ffe8d6; --k-verify: #15803d; --k-verify-bg: #dcf5e4; --k-fail: #c81e1e; --k-fail-bg: #fde2e2;
+  --k-apply: #c2410c; --k-apply-bg: #ffe8d6; --k-ask: #6d3fd8; --k-ask-bg: #ede4ff; --k-verify: #15803d; --k-verify-bg: #dcf5e4; --k-fail: #c81e1e; --k-fail-bg: #fde2e2;
   --r-card: 8px; --r-btn: 6px;
 }
 @media (prefers-color-scheme: dark) {
@@ -28,7 +28,7 @@
     --warn: #f0c060; --warn-bg: #3d2f12; --grey: #aab3bf; --grey-bg: #2b3139;
     --code-bg: #12151a; --shadow: 0 8px 28px rgba(0, 0, 0, .55);
     --k-read: #7fb0ff; --k-read-bg: #17284a; --k-dry: #f5d04a; --k-dry-bg: #3a3110; --k-dry-edge: #d9b52c;
-    --k-apply: #ff9a5c; --k-apply-bg: #45230f; --k-verify: #5fd48a; --k-verify-bg: #12301f; --k-fail: #ff7b7b; --k-fail-bg: #48191a;
+    --k-apply: #ff9a5c; --k-apply-bg: #45230f; --k-ask: #b9a2ff; --k-ask-bg: #2c2148; --k-verify: #5fd48a; --k-verify-bg: #12301f; --k-fail: #ff7b7b; --k-fail-bg: #48191a;
   }
 }
 * { box-sizing: border-box; }
@@ -290,7 +290,8 @@ html.dev .tile .num { font-size: 1.5rem; }
 .card:hover { background: var(--panel2); }
 .card-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .card-title { font-weight: 600; display: flex; gap: 8px; align-items: center; min-width: 0; }
-.card-title > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-title { align-items: flex-start; }
+.card-title > span:last-child { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: .88em; color: var(--muted); }
 .card-meta a { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
 .card-notes { display: flex; flex-wrap: wrap; gap: 4px 6px; }
@@ -309,6 +310,47 @@ html.dev .tile .num { font-size: 1.5rem; }
 .job.live[class*="k-"]:hover, .tr.live[class*="k-"]:hover { background: var(--kb); }
 .job.live[class*="k-"] .muted, .tr.live[class*="k-"] .muted, .job.live[class*="k-"] a, .tr.live[class*="k-"] a { color: inherit; }
 .job.live[class*="k-"] .muted, .tr.live[class*="k-"] .muted { opacity: .8; }
+.k-ask { --k: var(--k-ask); --kb: var(--k-ask-bg); }
+.askbox { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 16px; padding: 10px 12px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.askbox:focus-within { border-color: var(--k-ask); box-shadow: 0 0 0 3px color-mix(in srgb, var(--k-ask) 22%, transparent); }
+.askbox textarea#askq { border: 0; background: transparent; padding: 4px 2px; outline: none; font-size: 1.02rem; }
+.asktools { display: flex; align-items: center; gap: 10px; }
+.asktools .askhead .squire { width: 28px; height: 28px; }
+.tiers { display: inline-flex; padding: 2px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line2); }
+.tiers button { border: 0; background: transparent; border-radius: 999px; padding: 3px 12px; font-size: .88em; color: var(--muted); }
+.tiers button.on { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.18); font-weight: 600; }
+.askgo { border: 0; border-radius: 999px; padding: 5px 16px; background: var(--k-ask); color: #fff; font-weight: 600; }
+.askgo:hover { filter: brightness(1.08); }
+.askbox textarea, .follow textarea, .msg.answerbox textarea { flex: 1 1 auto; min-width: 0; padding: 7px 10px; resize: none; line-height: 1.4; font: inherit; overflow-y: auto; }
+.askhead { flex: none; display: inline-flex; }
+.squire { image-rendering: pixelated; flex: none; }
+.squire .open { display: none; }
+.squire.talking .open { display: inline; animation: talk .36s steps(1) infinite; }
+.squire.talking .shut { animation: talk .36s steps(1) infinite reverse; }
+@keyframes talk { 0% { opacity: 1; } 50% { opacity: 0; } }
+#pane .pb.ask { background: var(--bg); padding: 0; }
+.askbody { display: flex; flex-direction: column; height: 100%; }
+.askbody .chat { flex: 1 1 auto; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.askbody .asklog { flex: 1 1 auto; overflow: auto; padding: 10px 14px; background: var(--code-bg); border-top: 1px solid var(--line); }
+.askbody.show-chat .asklog { display: none; }
+.askbody.show-log .chat { display: none; }
+.askbody.show-both .chat, .askbody.show-both .asklog { flex: 1 1 50%; }
+.msg { display: flex; gap: 8px; align-items: flex-end; max-width: 100%; }
+.msg .bubble { padding: 8px 12px; border-radius: 14px; max-width: min(78%, 640px); overflow-wrap: anywhere; }
+.msg.you { justify-content: flex-end; }
+.msg.you .bubble { background: var(--accent); color: var(--panel); border-bottom-right-radius: 4px; white-space: pre-wrap; }
+.msg.agent .bubble { background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg.agent .avatar { flex: none; width: 40px; height: 40px; }
+.msg.step { color: var(--faint); font-size: .82em; padding-left: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg.end { align-self: center; font-size: .82em; color: var(--muted); padding: 0 10px; border-radius: 999px; border: 1px solid var(--line2); }
+.msg.end.good { color: var(--good); }
+.msg.end.warn { color: var(--warn); }
+.msg .quick { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.runs-cards { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.runcard { display: block; padding: 4px 10px; border-radius: var(--r-btn); border-left: 4px solid var(--k); background: var(--kb); color: var(--k); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+.msg.answerbox form, .follow { display: flex; gap: 6px; width: 100%; }
+.msg.answerbox input, .follow input { flex: 1 1 auto; min-width: 0; }
+.msg.answerbox { padding-left: 48px; }
 .lrow { display: flex; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--line2); cursor: pointer; }
 .lrow:first-child { border-top: 0; }
 .lrow:hover { background: var(--panel2); }
@@ -318,7 +360,7 @@ html.dev .tile .num { font-size: 1.5rem; }
 .lmain { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ltitle { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .ltitle .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lline { color: var(--muted); font-size: .9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lline { color: var(--muted); font-size: .9em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .lline.good { color: var(--good); }
 .lline.warn { color: var(--warn); }
 .lright { flex: none; display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: .9em; }
@@ -640,8 +682,9 @@ function todayStats(data, today) {
     out.runs++; out.operator_s += Number(r.duration_s) || 0;
     if (r.status === 'ok') out.ok++; else if (r.status !== 'running') out.failed++;
   }
-  for (const a of data.asks || []) if (dayKey(a.started) === today) out.spend += Number(a.cost_usd) || 0;
-  out.spend = Math.round(out.spend * 100) / 100;
+  out.billed = 0;
+  for (const a of data.asks || []) if (dayKey(a.started) === today) { const c = Number(a.cost_usd) || 0; out.spend += c; if (a.billing === 'api-key') out.billed += c; }
+  out.spend = Math.round(out.spend * 100) / 100; out.billed = Math.round(out.billed * 100) / 100;
   return out;
 }
 /* minimal markdown: headings, paragraphs, lists, fenced code, rules, inline code, links, bold. Only text nodes, never HTML. */
@@ -720,7 +763,7 @@ const STATUS_MARK = { ok: '\u2713', done: '\u2713', merged: '\u2713', failed: '\
 function pill(status) { const m = STATUS_MARK[status]; return el('span', { class: `pill ${tone(status)}` }, m ? `${m} ${status}` : status || '?'); }
 function when(iso) { return el('span', { class: 'muted', title: utc(iso) }, relTime(iso)); }
 function tag(text, cls) { return el('span', { class: `tag ${cls || ''}` }, text); }
-const KIND_WORD = { read: 'read', dry: 'dry run', apply: 'apply', verify: 'verify', judge: 'judge' };
+const KIND_WORD = { read: 'read', dry: 'dry run', apply: 'apply', verify: 'verify', judge: 'judge', ask: 'ask' };
 function modeTag(mode) { return el('span', { class: `kind k-${mode || 'none'}`, title: KIND_WORD[mode] || mode || '' }, KIND_WORD[mode] || mode || '?'); }
 function linkTag(url) {
   const href = safeHref(url);
@@ -1052,10 +1095,29 @@ function renderInbox() {
     tile('sec:done', doneToday.length, 'Done today', 'good')));
   const st = todayStats(d, today);
   parts.push(el('div', { class: 'statsline' }, el('span', {}, 'Today: '),
-    el('span', {}, 'agents spent ', el('b', {}, money(st.spend) || '$0.00')),
+    el('span', { title: 'What the agents\' tokens would cost at API list prices. On a Claude plan this counts against the plan\'s usage limits, not money; an ask run with ANTHROPIC_API_KEY set is billed to that key.' },
+      'agent usage ', el('b', {}, `≈ ${money(st.spend) || '$0.00'}`), ' at API prices', st.billed ? [', ', el('b', {}, money(st.billed)), ' billed to an API key'] : null),
     el('span', {}, 'your runs ', el('b', {}, st.runs ? duration(st.operator_s) : 'none')),
     st.runs ? el('span', {}, 'runs ', el('b', {}, `${st.ok} ok`), st.failed ? [' / ', el('b', { class: 'err' }, `${st.failed} failed`)] : null) : null));
   if (asking) parts.push(el('div', { class: 'asking', role: 'status' }, el('b', {}, asking === 1 ? 'A run is waiting for your answer.' : `${asking} runs are waiting for your answer.`), ' It does nothing until you answer it under Running now.', btn('Show', () => scrollToKey('sec:running'), 'sm')));
+  const sendAsk = async t => {
+    const q = t.value.trim(); if (!q) return;
+    const model = saved('askModel') || 'default';
+    try { const r = await post('/api/ask', { request: q, model }); t.value = ''; saved('askDraft', ''); grow(t); refresh(); openJob(r.job_id); } catch (err) { toast(`ask failed: ${err.message}`); }
+  };
+  const askText = writeBox('askDraft', { id: 'askq', name: 'q', placeholder: 'Ask your squire: "restart the bots on bvka", "why did bvht stop quoting"…' }, sendAsk);
+  const tiers = [['quick', 'Quick', 'Sonnet 5.5: lookups and small changes'], ['default', 'Default', 'Opus 5.5: building and fixing production tasks'], ['deep', 'Deep', 'Fable 5.2: the hardest problems; uses the most of your plan']];
+  const pick = saved('askModel') || 'default';
+  const tierSeg = el('span', { class: 'tiers', role: 'radiogroup', 'aria-label': 'model' }, tiers.map(([v, l, why]) =>
+    el('button', { type: 'button', role: 'radio', 'aria-checked': String(v === pick), class: v === pick ? 'on' : '', title: why, onclick: () => { saved('askModel', v); render(); } }, l)));
+  parts.push(el('form', { class: 'askbox', onsubmit: e => { e.preventDefault(); sendAsk(askText); } },
+    askText,
+    el('div', { class: 'asktools' },
+      el('span', { class: 'askhead' }, squire(false)),
+      el('span', { class: 'faint small' }, 'Enter to send · Shift+Enter for a new line'),
+      el('span', { class: 'grow' }),
+      tierSeg,
+      el('button', { type: 'submit', class: 'askgo', title: 'send to your squire' }, 'Ask ', el('span', { 'aria-hidden': 'true' }, '↑')))));
   parts.push(sec('Waiting on you', items.length ? plural(items.length, 'item') : null));
   parts[parts.length - 1].dataset.key = 'sec:inbox';
   parts.push(el('div', { class: 'block' }, items.length ? items.map(it => renderInboxItem(it)) : el('div', { class: 'quiet' }, inbox().length ? `Nothing matches "${S.q}".` : 'Nothing waiting on you.')));
@@ -1153,13 +1215,14 @@ function renderDecideRow(t) {
 }
 function renderDoneRow(t) {
   const line = t.outcome ? { text: `${t.outcome.state || 'done'}: ${t.outcome.note || ''}` } : { text: t.purpose || '' };
-  return listRow(t, 'done:' + t.id, line, [chipsRow(agentChips(t.agents)), t.outcome ? when(t.outcome.closed) : null]);
+  const last = lastRunOf(t, S.data.runs);
+  return listRow(t, 'done:' + t.id, line, [chipsRow(agentChips(t.agents)), t.outcome ? when(t.outcome.closed) : last ? when(last.ended || last.started) : null]);
 }
 function renderJob(j) {
   const open = () => openJob(j.job_id);
   return el('div', { class: `job ${j.status !== 'done' ? `live k-${j.mode}` : ''}`, role: 'button', tabindex: '0', 'data-key': 'j:' + j.job_id,
     onclick: e => { if (e.target.closest('a, button, input')) return; open(); }, onkeydown: e => { if (e.key === 'Enter' && e.target.tagName !== 'INPUT') open(); } },
-    el('span', { class: `pill ${jobTone(j)}` }, jobLabel(j)), taskLink(j.task_id || '?'), modeTag(j.mode), argsTag(j.args),
+    el('span', { class: `pill ${jobTone(j)}` }, jobLabel(j)), j.mode === 'ask' ? [modeTag('ask'), el('span', { class: 'purpose', title: j.args || '' }, j.args || '(follow-up)')] : [taskLink(j.task_id || '?'), modeTag(j.mode), argsTag(j.args)],
     el('span', { class: 'muted' }, 'started ', when(j.started)), j.ended ? el('span', { class: 'muted' }, 'ended ', when(j.ended)) : null,
     el('span', { class: 'grow' }), j.run_id ? btn('run log', () => openLog(j.run_id, null), 'sm') : null,
     j.status === 'waiting' ? el('span', { class: 'prompt' }, String(j.prompt || '').trim()) : null,
@@ -1695,6 +1758,11 @@ async function pollLog(d) {
     d.offset = Math.max(d.offset, r.offset || 0);
     if (!d.pre.textContent) d.pre.replaceChildren(el('span', { class: 'muted' }, r.status === 'running' ? '(no output yet)' : '(no output)'));
     d.status.replaceChildren(pill(r.status || 'no record'));
+    if (d.ask) {
+      d.ask_id = d.ask_id || r.ask_id || null;
+      const moved = await pollAskChat(d).catch(() => false);
+      if (moved || changed || d.first) renderChat(d);
+    }
     if (atBottom) box.scrollTop = box.scrollHeight;
     d.first = false;
     if (r.status === 'running') d.timer = setTimeout(() => pollLog(d), 1500);
@@ -1748,8 +1816,22 @@ function buildJobPane(d) {
   d.pre = el('pre', {}, d.doneNode, d.tailNode);
   d.pill = el('span', {}, el('span', { class: 'pill grey' }, 'connecting'));
   d.foot = el('div', { class: 'line', style: 'margin:0;width:100%' });
-  paneShell([el('span', { class: 'muted small' }, 'job '), j ? [taskLink(j.task_id || '?'), ' ', modeTag(j.mode), ' ', argsTag(j.args), ' '] : [el('span', { class: 'id' }, d.id), ' '], d.pill],
-    d.pre, 'log', d.foot);
+  if (j && j.mode === 'ask') {
+    d.ask = true; d.ask_id = j.ask_id || null; d.chatItems = []; d.chatOffset = 0;
+    d.chat = el('div', { class: 'chat' });
+    d.body = el('div', {}, d.chat, el('div', { class: 'asklog' }, d.pre));
+    d.seg = el('span', { class: 'seg small' }, [['chat', 'Chat'], ['log', 'Log'], ['both', 'Both']].map(([v, l]) => el('button', { type: 'button', 'data-v': v, onclick: () => askView(d, v) }, l)));
+    const sendFollow = async t => { const text = t.value.trim(); if (!text || !d.ask_id) return;
+      try { const r = await post('/api/ask', { request: text, resume: d.ask_id }); t.value = ''; saved('follow.' + d.ask_id, ''); refresh(); openJob(r.job_id); } catch (err) { toast(`ask failed: ${err.message}`); } };
+    const followText = writeBox('follow.' + (j.ask_id || d.id), { name: 'q', placeholder: 'follow up in this conversation (Enter sends, Shift+Enter for a new line)' }, sendFollow);
+    const follow = el('form', { class: 'follow', onsubmit: e => { e.preventDefault(); sendFollow(followText); } }, followText, btn('Send', null, 'sm', { type: 'submit' }));
+    d.foot = el('div', { style: 'margin:0;width:100%;display:flex;flex-direction:column;gap:6px' }, d.foot, follow);
+    paneShell([el('span', { class: 'kind k-ask' }, 'ask'), ' ', el('span', { class: 'title', title: (j.args || '') }, truncate(j.args || '', 80)), ' ', d.pill, el('span', { class: 'grow' }), d.seg], d.body, 'ask', d.foot);
+    askView(d, S.askView || 'chat');
+  } else {
+    paneShell([el('span', { class: 'muted small' }, 'job '), j ? [taskLink(j.task_id || '?'), ' ', modeTag(j.mode), ' ', argsTag(j.args), ' '] : [el('span', { class: 'id' }, d.id), ' '], d.pill],
+      d.pre, 'log', d.foot);
+  }
   pollJob(d);
 }
 function feedJob(d, chunk) {
@@ -1783,6 +1865,11 @@ async function pollJob(d) {
       jobFoot(d);
     }
     if (!d.doneNode.data && !d.tailNode.data && d.status === 'done') d.tailNode.data = '(no output)';
+    if (d.ask) {
+      d.ask_id = d.ask_id || r.ask_id || null;
+      const moved = await pollAskChat(d).catch(() => false);
+      if (moved || changed || d.first) renderChat(d);
+    }
     if (atBottom) box.scrollTop = box.scrollHeight;
     d.first = false;
     if (d.status !== 'done') d.timer = setTimeout(() => pollJob(d), 1000);
@@ -1791,6 +1878,83 @@ async function pollJob(d) {
     d.pill.replaceChildren(el('span', { class: 'err small' }, e.message));
     d.timer = setTimeout(() => pollJob(d), 3000);
   }
+}
+
+/* ---- the squire: a 16x16 head in the old adventure-game style, mouth moving while the agent works ---- */
+const SQUIRE = ['......RRR.......', '.....RRRR.......', '....hHHHHHHh....', '...hHHHHHHHHh...', '...hHhhhhhhHh...', '...hHSSSSSSHh...', '...hSSSSSSSSh...', '...hSESSSSESh...', '...hSSSSSSSSh...', '...hSSSsSSSSh...', '...hSSSSSSSSh...', '....SSsssSSS....', '....SSSSSSSS....', '.....BSSSSB.....', '......BBBB......', '................'];
+const SQUIRE_OPEN = { 11: '....SSMMMMSS....', 12: '....SSSMMSSS....' };
+const SQUIRE_COLORS = { R: '#c0392b', H: '#a7b0bc', h: '#5f6b7a', S: '#f2c290', s: '#c98a55', E: '#1b1b1b', B: '#7b4a26', M: '#6d2416' };
+const MODEL_NAMES = { 'claude-sonnet-5-5': 'Sonnet 5.5', 'claude-opus-5-5': 'Opus 5.5', 'claude-fable-5-2': 'Fable 5.2' };
+function modelName(m) { return String(m).replace(/claude-[a-z0-9-]+/g, x => MODEL_NAMES[x] || x); }
+/* drafts survive redraws, reloads and console restarts: kept in this browser only */
+function saved(key, value) {
+  try { if (value === undefined) return localStorage.getItem('opsquire.' + key) || ''; if (value) localStorage.setItem('opsquire.' + key, value); else localStorage.removeItem('opsquire.' + key); } catch (e) { /* storage blocked */ }
+  return value || '';
+}
+const BOX_HEIGHT = new Map();
+function grow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, Math.round(window.innerHeight * 0.45)) + 'px'; if (t.dataset.key) BOX_HEIGHT.set(t.dataset.key, t.style.height); }
+/* a text box that grows with its text; Enter sends, Shift+Enter is a new line; its draft is kept under `key` */
+function writeBox(key, attrs, send) {
+  const t = el('textarea', Object.assign({ rows: 1, autocomplete: 'off', spellcheck: 'true' }, attrs));
+  t.value = saved(key); t.dataset.key = key;
+  if (BOX_HEIGHT.has(key)) t.style.height = BOX_HEIGHT.get(key);
+  t.addEventListener('input', () => { saved(key, t.value); grow(t); });
+  t.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(t); } });
+  requestAnimationFrame(() => grow(t));
+  return t;
+}
+function squireRects(rows) {
+  const out = [];
+  rows.forEach((row, y) => [...row].forEach((c, x) => { if (c !== '.') out.push(svg('rect', { x, y, width: 1, height: 1, fill: SQUIRE_COLORS[c] })); }));
+  return out;
+}
+function squire(talking) {
+  const open = SQUIRE.map((r, y) => SQUIRE_OPEN[y] || r);
+  return svg('svg', { class: `squire ${talking ? 'talking' : ''}`, viewBox: '0 0 16 16', width: 40, height: 40, 'shape-rendering': 'crispEdges', 'aria-hidden': 'true' },
+    svg('g', { class: 'shut' }, squireRects(SQUIRE)), svg('g', { class: 'open' }, squireRects(open)));
+}
+/* ---- an ask as a chat: you on the right, the squire on the left, its work as small lines between ---- */
+function chatItem(d, it) {
+  if (it.kind === 'you') return el('div', { class: 'msg you' }, el('div', { class: 'bubble' }, it.text));
+  if (it.kind === 'step') return el('div', { class: 'msg step' }, `${it.piece ? it.piece + ' · ' : ''}${it.text}`);
+  if (it.kind === 'end') return el('div', { class: `msg end ${it.text === 'ok' ? 'good' : 'warn'}` }, it.text === 'ok' ? 'done' : it.waiting ? `waiting: ${it.waiting}` : it.text);
+  const body = [el('div', { class: 'md' }, markdown(it.text || ''))];
+  if (it.kind === 'question') {
+    body.push(el('div', { class: 'quick' }, btn(`✓ ${it.recommend || 'recommended'}`, () => replyAsk(d, ''), 'sm primary', { title: 'accept the recommended answer' })));
+  }
+  const runs = (it.actions || []).filter(a => a.kind === 'RUN');
+  if (runs.length) body.push(el('div', { class: 'runs-cards' }, runs.map(a => {
+    const m = /opsquire run (\S+)(.*)/.exec(a.text || ''), id = m ? m[1] : '';
+    return el('a', { class: `runcard k-${/--apply/.test(a.text) ? 'apply' : /--verify/.test(a.text) ? 'verify' : 'dry'}`, href: '#inbox', onclick: e => { e.preventDefault(); if (id && task(id)) selectTask(id); else switchView('inbox'); } }, `▶ ${a.text}`);
+  })));
+  if (it.cost_usd || it.model) body.push(el('div', { class: 'faint small', title: 'API list price of the tokens this ask used. On a Claude plan it counts against the plan\'s usage limits; with ANTHROPIC_API_KEY set it is billed to that key.' },
+    [it.model ? `${modelName(it.model)} · ` : '', it.cost_usd ? (it.billing === 'api-key' ? `${money(it.cost_usd)} billed to your API key` : `≈ ${money(it.cost_usd)} at API prices, counted against your plan`) : ''].join('')));
+  return el('div', { class: 'msg agent' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' }, body));
+}
+function renderChat(d) {
+  const focused = document.activeElement && document.activeElement.id === 'askreply' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+  const talking = d.status && d.status !== 'done' && d.status !== 'waiting';
+  const kids = d.chatItems.map(it => chatItem(d, it));
+  const agents = [...kids].filter(n => n.classList.contains('agent'));
+  agents.forEach((n, i) => n.querySelector('.avatar').replaceChildren(squire(talking && i === agents.length - 1)));
+  if (talking && (!agents.length || d.chatItems[d.chatItems.length - 1].kind !== 'agent')) kids.push(el('div', { class: 'msg agent typing' }, el('div', { class: 'avatar' }, squire(true)), el('div', { class: 'bubble faint' }, 'thinking…')));
+  if (d.status === 'waiting' && d.prompt) kids.push(el('div', { class: 'msg answerbox' }, el('form', { onsubmit: e => { e.preventDefault(); replyAsk(d, e.target.reply.value); } },
+    writeBox('reply.' + d.id, { name: 'reply', id: 'askreply', placeholder: 'your answer (empty = the recommended one)' }, t => replyAsk(d, t.value)), btn('Send', null, 'sm primary', { type: 'submit' }))));
+  fill(d.chat, kids);
+  const reply = focused && document.getElementById('askreply');
+  if (reply) { reply.focus({ preventScroll: true }); reply.setSelectionRange(focused[0], focused[1]); }
+}
+function replyAsk(d, text) { saved('reply.' + d.id, ''); answer(d.id, text); }
+async function pollAskChat(d) {
+  if (!d.ask_id) return;
+  const r = await api(`/api/askchat?id=${encodeURIComponent(d.ask_id)}&offset=${d.chatOffset}`);
+  if ((r.items || []).length) { d.chatItems.push(...r.items); d.chatOffset = r.offset; return true; }
+  return false;
+}
+function askView(d, view) {
+  S.askView = view;
+  d.body.className = `askbody show-${view}`;
+  d.seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === view)));
 }
 /* ---- data flow ---- */
 let refreshTimer = null, loading = false, loadAgain = false, retry = 2000;

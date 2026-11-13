@@ -25,11 +25,12 @@ from .query import runs_for
 
 MODES = ("read", "dry", "apply", "verify")
 FLAGS = {"apply": ["--apply"], "verify": ["--verify"]}
-PROMPT_RE = re.compile(r"(\[y/N\] ?|Type BREAK to take the lock anyway: ?)$")
+PROMPT_RE = re.compile(r"(\[y/N\] ?|Type BREAK to take the lock anyway: ?|\[Enter = [^\]]*\] > ?)$")
 PROMPT_QUIET_S = 0.3
 HELPER_PROMPT_RE = re.compile(rb"\n>>> ((?:(?!\n>>> ).)*?) \[y/N\] ", re.DOTALL)
 HELPER_PROMPT_SCAN_BYTES = 256 * 1024
 MAX_JOBS = 50
+ASK_ID_RE = re.compile(rb"opsquire: ask (\S+)")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
@@ -43,6 +44,7 @@ class Job:
     status: str = "running"
     exit_code: int | None = None
     run_id: str | None = None
+    ask_id: str | None = None
     prompt: str | None = None
     args: list[str] = field(default_factory=list)
     output: bytearray = field(default_factory=bytearray)
@@ -64,6 +66,7 @@ class Job:
             "status": self.status,
             "exit_code": self.exit_code,
             "run_id": self.run_id,
+            "ask_id": self.ask_id,
             "prompt": self.prompt,
         }
 
@@ -90,6 +93,29 @@ class Jobs:
             self.problem(task_query, mode, str(e).splitlines()[0] if str(e) else type(e).__name__)
             raise
         self.problems.pop(job.task_id, None)
+        return job
+
+    def start_ask(self, request: str, resume: str = "", model: str = "") -> Job:
+        """An `opsquire ask` from the page: a new request, or a follow-up in an earlier ask's conversation."""
+        request = request.strip()
+        if not request and not resume:
+            raise OpsquireError("say what you want")
+        argv = [
+            sys.executable,
+            "-m",
+            "opsquire",
+            "ask",
+            *(["--resume", resume] if resume else []),
+            *([request] if request else []),
+        ]
+        with self.lock:
+            if len([j for j in self.jobs.values() if j.status != "done"]) >= MAX_JOBS:
+                raise OpsquireError("too many jobs running")
+            job = Job(
+                f"{now():%Y%m%dT%H%M%S%f}"[:-3] + "Z", "", "ask", iso(now()), args=[request], ask_id=resume or None
+            )
+            self.jobs[job.job_id] = job
+        self.spawn(job, argv)
         return job
 
     def problem(self, task: str, mode: str, why: str) -> None:
@@ -127,6 +153,10 @@ class Jobs:
         else:
             argv = [sys.executable, "-m", "opsquire", "run", task.id, *FLAGS.get(mode, [])]
             argv += ["--", *args] if args else []
+        self.spawn(job, argv)
+        return job
+
+    def spawn(self, job: Job, argv: list[str]) -> None:
         master, slave = pty.openpty()
         env = {
             **os.environ,
@@ -151,7 +181,6 @@ class Jobs:
         fcntl.fcntl(master, fcntl.F_SETFL, flags | os.O_NONBLOCK)
         threading.Thread(target=self.pump, args=(job,), daemon=True).start()
         self.changed.set()
-        return job
 
     def pump(self, job: Job) -> None:
         try:
@@ -172,6 +201,11 @@ class Jobs:
             if chunk:
                 with job.lock:
                     job.output += chunk
+                    if job.mode == "ask" and not job.ask_id:
+                        found = ASK_ID_RE.search(job.output)
+                        if found:
+                            job.ask_id = found.group(1).decode()
+                            self.changed.set()
                     job.last_read = time.monotonic()
                     if job.prompt and job.prompt_end < 0:
                         job.prompt, job.status = None, "running"
@@ -229,9 +263,9 @@ class Jobs:
                 os.close(job.fd)
             except OSError:
                 pass
-        runs = [r for r in runs_for(job.task_id) if str(r.get("started", "")) >= job.started]
+        runs = [r for r in runs_for(job.task_id) if str(r.get("started", "")) >= job.started] if job.task_id else []
         job.run_id = str(runs[-1]["run_id"]) if runs and job.mode != "judge" else None
-        if code and job.mode != "judge":
+        if code and job.mode not in ("judge", "ask"):
             refused = runs[-1] if runs and runs[-1].get("status") == "blocked" else None
             if refused or not runs:
                 why = str(refused.get("last_error")) if refused else last_line(job.output)

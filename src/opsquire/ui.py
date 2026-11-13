@@ -12,6 +12,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -118,6 +119,22 @@ def code_status(loaded: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def ask_chat(ask_id: str, offset: int) -> dict[str, Any]:
+    """An ask's conversation from line `offset` on, for the console's chat."""
+    if not re.fullmatch(r"[0-9A-Za-z_.-]+", ask_id):
+        raise OpsquireError("bad ask id")
+    path = var_dir() / "asks" / f"{ask_id}.chat.jsonl"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        lines = []
+    items = []
+    for line in lines[offset:]:
+        with contextlib.suppress(ValueError):
+            items.append(json.loads(line))
+    return {"items": items, "offset": len(lines)}
+
+
 def log_tail(run_id: str, offset: int | None, until: int | None = None) -> dict[str, Any]:
     """A slice of a run's output.log: the last MAX_LOG_BYTES when `offset` is None (first open), the bytes from
     `offset` on (tailing a running run), or the bytes in [offset, until) (loading earlier output). `start` says where
@@ -203,6 +220,8 @@ class Handler(BaseHTTPRequestHandler):
                     "code": code_status(server.code),
                 }
                 self.send_json({**answer, **extra})
+            elif url.path == "/api/askchat":
+                self.send_json(ask_chat(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/job":
                 self.send_json(self.jobs.read(q.get("id", ""), int(q.get("offset") or 0)))
             elif url.path == "/api/log":
@@ -242,6 +261,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"job_id": job.job_id, "joined": job.job_id in before})
             elif url.path == "/api/judge":
                 job = self.jobs.start(str(body.get("task", "")), "judge")
+                self.send_json({"job_id": job.job_id})
+            elif url.path == "/api/ask":
+                job = self.jobs.start_ask(
+                    str(body.get("request", "")), str(body.get("resume", "")), str(body.get("model", ""))
+                )
                 self.send_json({"job_id": job.job_id})
             elif url.path == "/api/answer":
                 self.jobs.answer(str(body.get("job", "")), str(body.get("text", "")))

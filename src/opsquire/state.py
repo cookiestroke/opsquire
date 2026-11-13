@@ -447,6 +447,8 @@ def ask_view(a: dict[str, Any]) -> dict[str, Any]:
         "prompt": a.get("prompt"),
         "task_ids": a.get("task_ids") or [],
         "cost_usd": a.get("cost_usd"),
+        "billing": a.get("billing"),
+        "model": a.get("model"),
         "pieces": [{"name": p.get("name"), "status": p.get("status")} for p in a.get("pieces") or []],
         "rounds": a.get("rounds") or [],
         "waiting_on": a.get("waiting_on"),

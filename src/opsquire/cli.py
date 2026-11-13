@@ -654,6 +654,7 @@ def cmd_ask(a: argparse.Namespace) -> int:
         max_agents=a.max_agents,
         budget=Budget(a.budget if a.budget is not None else configured_budget(), a.strict_budget),
         reply_given=bool(a.request),
+        model=a.model or "",
     )
     if res.pieces:
         print(res.text.strip())
@@ -1129,6 +1130,11 @@ def parser() -> argparse.ArgumentParser:
         type=float,
         metavar="USD",
         help="spending reminder for the whole ask, all agents together (default: from `opsquire init --budget`)",
+    )
+    ak.add_argument(
+        "--model",
+        metavar="TIER|ID",
+        help="quick (Sonnet 5.5), default (Opus 5.5) or deep (Fable 5.2), or a model id; split pieces run on quick",
     )
     ak.add_argument("--strict-budget", action="store_true", help="make --budget a hard cap instead of a reminder")
     ak.set_defaults(fn=cmd_ask)

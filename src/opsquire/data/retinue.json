@@ -13,6 +13,7 @@
       ],
       "resume_argv": ["--resume", "{session}"],
       "budget_argv": ["--max-budget-usd", "{budget}"],
+      "model_argv": ["--model", "{model}"],
       "output": "claude-stream-json",
       "allowed_tools": [
         "Read", "Glob", "Grep",

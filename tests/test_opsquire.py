@@ -3909,6 +3909,79 @@ class OpsTest(unittest.TestCase):
             proc.send_signal(signal.SIGINT)
             proc.wait(20)
 
+    def test_an_ask_from_the_console_is_a_chat_with_its_interview_and_its_runs(self) -> None:
+        import http.client
+
+        self.agents_file()
+        self.env |= {"FAKE_GRILL": "1", "FAKE_STATE": str(self.tmp / "fake-state.json")}
+        port = free_port()
+        proc = subprocess.Popen([*CLI, "ui", "--port", str(port)], env=self.env, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("opsquire ui", proc.stdout.readline() if proc.stdout else "")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+
+            def call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
+                conn.request(method, path, json.dumps(body) if body else None, {"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                return resp.status, json.loads(resp.read())
+
+            def job_until(job: str, done: Any) -> dict[str, Any]:
+                deadline = time.time() + 60
+                while time.time() < deadline:
+                    j: dict[str, Any] = call("GET", f"/api/job?id={job}&offset=0")[1]
+                    if done(j):
+                        return j
+                    time.sleep(0.25)
+                self.fail(f"job {job}: {j}")
+
+            self.assertEqual(call("POST", "/api/ask", {"request": " "})[0], 400)
+            status, started = call("POST", "/api/ask", {"request": "restart web1 bots"})
+            self.assertEqual(status, 200, started)
+            waiting = job_until(started["job_id"], lambda j: j["status"] == "waiting")
+            self.assertTrue(waiting["ask_id"])
+            self.assertEqual(call("POST", "/api/answer", {"job": started["job_id"], "text": ""})[0], 200)
+            done = job_until(started["job_id"], lambda j: j["status"] == "done")
+            self.assertEqual(done["exit_code"], 0, done["text"])
+            chat = call("GET", f"/api/askchat?id={waiting['ask_id']}&offset=0")[1]["items"]
+            kinds = [c["kind"] for c in chat]
+            self.assertEqual(kinds[0], "you")
+            self.assertEqual(chat[0]["text"], "restart web1 bots")
+            question = next(c for c in chat if c["kind"] == "question")
+            self.assertEqual((question["text"], question["recommend"]), ("question 1?", "rec 1"))
+            self.assertIn({"kind": "you", "text": "rec 1"}, [{"kind": c["kind"], "text": c["text"]} for c in chat])
+            reply = next(c for c in chat if c["kind"] == "agent")
+            self.assertEqual([a["kind"] for a in reply["actions"]], ["RUN", "RUN"])
+            self.assertEqual(kinds[-1], "end")
+            self.assertEqual(chat[-1]["text"], "ok")
+            self.assertEqual(call("GET", "/api/askchat?id=../x&offset=0")[0], 400)
+        finally:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(20)
+
+    def test_an_ask_runs_on_the_chosen_model_and_says_how_it_was_billed(self) -> None:
+        self.agents_file(model_argv=["--model", "{model}"])
+        log = self.tmp / "fake.log"
+        self.env["FAKE_LOG"] = str(log)
+        self.env.pop("ANTHROPIC_API_KEY", None)
+        self.assertEqual(self.cli("ask", "--model", "quick", "restart", "web1").returncode, 0)
+        self.assertEqual(self.cli("ask", "restart", "web1", "again").returncode, 0)
+        self.env["ANTHROPIC_API_KEY"] = "test-key-not-real"
+        self.assertEqual(self.cli("ask", "--model", "claude-haiku-5-5", "one", "more").returncode, 0)
+        argvs = [json.loads(line)["argv"] for line in log.read_text().splitlines()]
+        models = [a[a.index("--model") + 1] for a in argvs]
+        self.assertEqual(models, ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"])
+        recs = sorted(
+            (json.loads(p.read_text()) for p in (self.home / "var/asks").glob("*_fake.json")),
+            key=lambda r: r["started"],
+        )
+        self.assertEqual(
+            [(r["model"], r["billing"]) for r in recs],
+            [("claude-sonnet-5-5", "plan"), ("claude-opus-5-5", "plan"), ("claude-haiku-5-5", "api-key")],
+        )
+        chat = (self.home / "var/asks" / f"{recs[0]['ask_id']}.chat.jsonl").read_text().splitlines()
+        reply = next(json.loads(c) for c in chat if json.loads(c)["kind"] == "agent")
+        self.assertEqual((reply["model"], reply["billing"]), ("claude-sonnet-5-5", "plan"))
+
 
 class ReleaseScripts(unittest.TestCase):
     """scripts/release.py and scripts/signed_commit.py: what the release workflow and every push to main rely on."""

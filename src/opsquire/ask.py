@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -155,7 +156,25 @@ def pick_agent(name: str | None) -> tuple[str, dict[str, Any]]:
     return name, agent
 
 
-def build_argv(agent: dict[str, Any], values: dict[str, str], session: str | None, cap: float | None) -> list[str]:
+MODELS = {"quick": "claude-sonnet-5-5", "default": "claude-opus-5-5", "deep": "claude-fable-5-2"}
+PIECE_MODEL = "quick"
+
+
+def model_for(choice: str, agent: dict[str, Any]) -> str:
+    """The model an ask runs on: a tier (quick, default, deep) or a model id; "" for an agent that cannot be told."""
+    if not agent.get("model_argv"):
+        return ""
+    return MODELS.get(choice or "default", choice)
+
+
+def billing() -> str:
+    """How Claude Code bills this ask: an API key in the environment wins over the operator's plan."""
+    return "api-key" if os.environ.get("ANTHROPIC_API_KEY") else "plan"
+
+
+def build_argv(
+    agent: dict[str, Any], values: dict[str, str], session: str | None, cap: float | None, model: str = ""
+) -> list[str]:
     def fill(s: str) -> str:
         for k, v in values.items():
             s = s.replace("{" + k + "}", v)
@@ -175,6 +194,8 @@ def build_argv(agent: dict[str, Any], values: dict[str, str], session: str | Non
         if not agent.get("budget_argv"):
             raise OpsquireError("this agent cannot enforce a budget; drop --strict-budget")
         argv += [fill(i).replace("{budget}", f"{cap:.2f}") for i in agent["budget_argv"]]
+    if model and agent.get("model_argv"):
+        argv += [fill(i).replace("{model}", model) for i in agent["model_argv"]]
     return argv
 
 
@@ -213,6 +234,29 @@ PARSERS: dict[str, Callable[[IO[str], Callable[[str], None], AskResult], None]] 
     "claude-stream-json": parse_claude_stream,
     "text": parse_text,
 }
+
+
+class Chat:
+    """The ask as a conversation, line by line as it happens, for the console's chat: `var/asks/<ask-id>.chat.jsonl`.
+    Kinds: you (the operator's words), step (the agent's progress), question (with its recommended answer), agent (its
+    reply, with its RUN lines and the spend), and end (the ask's status). Never the reason an ask fails."""
+
+    path: Path | None = None
+
+    @classmethod
+    def open(cls, ask_id: str) -> None:
+        cls.path = asks_dir() / f"{ask_id}.chat.jsonl"
+        say(f"opsquire: ask {ask_id}")
+
+    @classmethod
+    def add(cls, kind: str, text: str, **extra: Any) -> None:
+        if cls.path is None:
+            return
+        line = json.dumps({"at": iso(now()), "kind": kind, "text": text, **extra})
+        with contextlib.suppress(OSError):
+            cls.path.parent.mkdir(parents=True, exist_ok=True)
+            with cls.path.open("a") as f:
+                f.write(line + "\n")
 
 
 def say(msg: str) -> None:
@@ -280,16 +324,18 @@ class Conversation:
     session: str | None = None
     label: str = ""
     cost: float = 0.0
+    model: str = ""
 
     def progress(self, msg: str) -> None:
         say(f"  · {self.label + ' ' if self.label else ''}{msg}")
+        Chat.add("step", msg, piece=self.label)
 
     def turn(self, message: str, budget: Budget) -> AskResult:
         parser = PARSERS.get(str(self.agent.get("output")))
         if parser is None:
             raise OpsquireError(f"agent {self.name!r} has unknown output format {self.agent.get('output')!r}")
         values = {"prompt": message, "system": self.system, "home": self.home, "main_home": str(main_home())}
-        argv = build_argv(self.agent, values, self.session, budget.cap())
+        argv = build_argv(self.agent, values, self.session, budget.cap(), self.model)
         resuming = f" (resuming {self.session})" if self.session else ""
         say(f"opsquire ask via {self.name}{' ' + self.label if self.label else ''}{resuming} ...")
         res = AskResult()
@@ -430,6 +476,7 @@ def stop(proc: subprocess.Popen[str]) -> None:
 
 def tty_answer(question: str, recommend: str) -> str | None:
     """Ask the operator on the terminal (pinned below the progress when it can be); None without a terminal."""
+    Chat.add("question", question, recommend=recommend)
     try:
         line = pinned.ask(question, recommend)
     except OSError:
@@ -438,6 +485,7 @@ def tty_answer(question: str, recommend: str) -> str | None:
         return None
     answer = line.strip() or recommend
     say(f"? {question}\n  -> {answer}")
+    Chat.add("you", answer, answered=question)
     return answer
 
 
@@ -456,6 +504,7 @@ def ask(
     max_agents: int | None = None,
     budget: Budget | None = None,
     reply_given: bool = False,
+    model: str = "",
 ) -> AskResult:
     budget = budget or Budget(configured_budget(), strict=False)
     session = None
@@ -473,6 +522,8 @@ def ask(
     name, agent = pick_agent(agent_name)
     started = now()
     res = AskResult(ask_id=f"{compact(started)}_{name}")
+    Chat.open(copies or res.ask_id)
+    Chat.add("you", prompt if not resume_ask or reply_given else "(continue)")
     home = home_dir()
     if task_id and not new_session and not session:
         session = session_for_task(task_id)
@@ -484,6 +535,7 @@ def ask(
         repos.fetch(repo, repo.base)
     env = agent_env(name, res.ask_id, {"OPSQUIRE_ASK_ID": copies})
     conv = Conversation(name, agent, str(home), system_prompt(str(home), grill, can_split), env)
+    conv.model = model_for(model, agent)
     conv.session = session
     try:
         turn = converse(conv, prompt, grill, tty_answer, budget, res.rounds, allow_split=can_split)
@@ -509,8 +561,12 @@ def ask(
     if status == "ok":
         repos.drop(copies)
         handover.record_run_lines(res.actions, prompt, f"ask {res.ask_id}")
+    spent = {"cost_usd": res.cost_usd, "billing": billing(), "model": conv.model}
+    Chat.add("agent", res.text.strip(), actions=[{"kind": k, "text": t} for k, t in res.actions], **spent)
+    Chat.add("end", status, waiting=res.waiting or "")
     save_record(
         {
+            **spent,
             "ask_id": res.ask_id,
             "agent": name,
             "status": status,

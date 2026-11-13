@@ -1,11 +1,13 @@
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+signal.signal(signal.SIGINT, lambda _sig, _frame: sys.exit(130))
 argv = sys.argv[1:]
 prompt = argv[0] if argv else ""
 system = argv[argv.index("--sys") + 1] if "--sys" in argv else ""
