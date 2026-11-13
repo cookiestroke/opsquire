@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import functools
 import json
 import os
@@ -12,6 +13,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import approve, handover, homegit, pinned, repos
 from .model import (
@@ -134,6 +136,44 @@ class AskResult:
     split: list[str] = field(default_factory=list)
     pieces: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
+    limited: bool = False
+    resets_at: str | None = None
+
+
+def reset_time(clock: str, zone: str, at: dt.datetime) -> dt.datetime | None:
+    """The next moment a wall clock in `zone` reads `clock` ("2pm", "2:30 pm", "14:00") after `at`; None when either
+    cannot be read."""
+    m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)?", clock.strip().lower())
+    try:
+        tz = ZoneInfo(zone.strip()) if zone.strip() else dt.UTC
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+    if not m:
+        return None
+    hour, minute = int(m.group(1)), int(m.group(2) or 0)
+    if m.group(3):
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if m.group(3) == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return None
+    local = at.astimezone(tz)
+    when = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if when <= local:
+        when = (local + dt.timedelta(days=1)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return when.astimezone(dt.UTC)
+
+
+def usage_limit(agent: dict[str, Any], text: str, at: dt.datetime) -> tuple[bool, str | None]:
+    """Whether a failed agent says its usage limit was reached, by the `limit_re` of its retinue entry, and when the
+    limit resets (its `at` group, a wall clock, in its `tz` group's zone); opsquire itself knows no provider's words."""
+    pattern = str(agent.get("limit_re") or "")
+    m = re.search(pattern, text, re.I) if pattern else None
+    if not m:
+        return False, None
+    found = m.groupdict()
+    when = reset_time(found["at"], found.get("tz") or "", at) if found.get("at") else None
+    return True, iso(when) if when else None
 
 
 def layered(base: Any, over: Any) -> Any:
@@ -634,6 +674,8 @@ def ask(
         turn = AskResult(waiting=f"{e}; continue with --resume and a new --budget")
     res.text, res.exit_code, res.actions = turn.text, turn.exit_code, turn.actions
     res.waiting, res.interrupted, res.split = turn.waiting, turn.interrupted, turn.split
+    if res.exit_code and not res.interrupted:
+        res.limited, res.resets_at = usage_limit(agent, res.text, now())
     res.session, res.cost_usd, res.usage = conv.session, conv.cost, dict(conv.usage)
     if res.split:
         from .parallel import fan_out
@@ -645,7 +687,15 @@ def ask(
         if note:
             say(f"  {note}")
     status = (
-        "interrupted" if res.interrupted else "waiting" if res.waiting else "ok" if res.exit_code == 0 else "failed"
+        "interrupted"
+        if res.interrupted
+        else "limited"
+        if res.limited
+        else "waiting"
+        if res.waiting
+        else "ok"
+        if res.exit_code == 0
+        else "failed"
     )
     if status == "ok":
         repos.drop(copies)
@@ -653,7 +703,7 @@ def ask(
     spent = {"cost_usd": res.cost_usd, "billing": billing(agent), "model": conv.model, "agent": name}
     spent |= {"usage": res.usage} if res.usage else {}
     Chat.add("agent", res.text.strip(), actions=[{"kind": k, "text": t} for k, t in res.actions], **spent)
-    Chat.add("end", status, waiting=res.waiting or "")
+    Chat.add("end", status, waiting=res.waiting or "", **({"resets_at": res.resets_at} if res.limited else {}))
     save_record(
         {
             **spent,
@@ -669,6 +719,7 @@ def ask(
             "grill": grill,
             "rounds": res.rounds,
             "waiting_on": res.waiting,
+            **({"resets_at": res.resets_at} if res.limited else {}),
             "exit_code": res.exit_code,
             "cost_usd": res.cost_usd,
             "task_ids": res.task_ids,

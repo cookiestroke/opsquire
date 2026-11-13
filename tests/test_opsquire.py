@@ -2841,6 +2841,44 @@ class OpsTest(unittest.TestCase):
         ]
         self.assertEqual(next(c for c in chat if c["kind"] == "agent")["usage"], want)
 
+    def test_a_usage_limit_reads_its_reset_as_the_next_such_wall_clock(self) -> None:
+        from opsquire.ask import reset_time, usage_limit
+        from opsquire.model import DATA_DIR
+
+        at = dt.datetime(2026, 11, 13, 18, 47, tzinfo=dt.UTC)
+        ny = "America/New_York"
+        self.assertEqual(reset_time("2pm", ny, at), dt.datetime(2026, 11, 13, 19, 0, tzinfo=dt.UTC))
+        self.assertEqual(reset_time("2:30 pm", ny, at), dt.datetime(2026, 11, 13, 19, 30, tzinfo=dt.UTC))
+        self.assertEqual(reset_time("1pm", ny, at), dt.datetime(2026, 11, 14, 18, 0, tzinfo=dt.UTC), "passed: tomorrow")
+        self.assertEqual(reset_time("14:00", "", at), dt.datetime(2026, 11, 14, 14, 0, tzinfo=dt.UTC))
+        self.assertIsNone(reset_time("13pm", ny, at))
+        self.assertIsNone(reset_time("2pm", "Mars/Olympus", at))
+        claude = json.loads((DATA_DIR / "retinue.json").read_text())["agents"]["claude"]
+        said = "You've hit your 5-hour limit · resets 2pm (America/New_York)"
+        self.assertEqual(usage_limit(claude, said, at), (True, "2026-11-13T19:00:00.000Z"))
+        self.assertEqual(usage_limit(claude, "You've hit your weekly limit", at), (True, None))
+        self.assertEqual(usage_limit(claude, "API Error: 401 OAuth access token has expired", at), (False, None))
+        self.assertEqual(usage_limit({}, said, at), (False, None), "an agent without limit_re never reports one")
+
+    def test_an_ask_that_reaches_the_usage_limit_ends_limited(self) -> None:
+        from opsquire.model import DATA_DIR
+
+        self.agents_file(limit_re=json.loads((DATA_DIR / "retinue.json").read_text())["agents"]["claude"]["limit_re"])
+        self.env["FAKE_ERROR"] = "You've hit your 5-hour limit · resets 2pm (America/New_York)"
+        r = self.cli("ask", "--no-grill", "--no-split", "hello")
+        self.assertEqual(r.returncode, 1)
+        rec = json.loads(next((self.home / "var/asks").glob("*.json")).read_text())
+        self.assertEqual(rec["status"], "limited")
+        self.assertRegex(rec["resets_at"], r"T\d\d:00:00\.000Z$")
+        self.assertIn(f"usage limit is reached; it resets at {rec['resets_at']}", r.stderr)
+        self.assertIn(f"opsquire ask --resume {rec['ask_id']}", r.stderr)
+        chat = [
+            json.loads(line) for line in next((self.home / "var/asks").glob("*.chat.jsonl")).read_text().splitlines()
+        ]
+        self.assertEqual(
+            (chat[-1]["kind"], chat[-1]["text"], chat[-1]["resets_at"]), ("end", "limited", rec["resets_at"])
+        )
+
     def test_threads_writing_one_file_never_share_a_temporary_file(self) -> None:
         from opsquire.model import write_json
 

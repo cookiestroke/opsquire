@@ -716,6 +716,14 @@ def cmd_ask(a: argparse.Namespace) -> int:
         )
         return 1
     print(res.text.strip(), flush=True)
+    if res.limited:
+        when = f"it resets at {res.resets_at}" if res.resets_at else "its reset time could not be read"
+        print(
+            f"\nopsquire: the agent's usage limit is reached; {when}. Continue then with: opsquire ask --resume "
+            f"{res.ask_id} (the console continues it by itself at the reset)",
+            file=sys.stderr,
+        )
+        return 1
     if res.exit_code:
         again = f"opsquire ask --resume {res.ask_id}" if res.session else "the same ask again"
         print(

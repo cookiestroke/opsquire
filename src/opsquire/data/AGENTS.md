@@ -428,8 +428,10 @@ Agents are configured in `retinue.json`, not code. An entry has `enabled`, `argv
 `{prompt}`, `{system}`, `{home}`, `{session}`, and `{allowed_tools*}` which expands the
 `allowed_tools` list), optional `resume_argv`, optional `budget_argv` (placeholder `{budget}`, used by
 `--strict-budget`), and `output`: `claude-stream-json` (live tool
-progress, session id, cost) or `text` (whole stdout is the answer). New output formats are one parser
-function in `opsquire/ask.py`. Only enable an agent whose own sandbox keeps it away from what the
+progress, session id, cost, tokens) or `text` (whole stdout is the answer). New output formats are one parser
+function in `opsquire/ask.py`. Optional `limit_re` recognises the agent's own words for a reached usage limit in a
+failed turn, with an `at` group for the wall-clock reset time and a `tz` group for its zone: the ask ends `limited`
+with `resets_at`, and the console holds and later continues it instead of counting it failed. Only enable an agent whose own sandbox keeps it away from what the
 local rules protect; otherwise set `"enabled": false` with a `reason`.
 
 ## Statuses
