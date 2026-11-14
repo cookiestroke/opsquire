@@ -39,8 +39,12 @@ AGENTS.md                                     this contract, written by opsquire
 retinue.json                                  optional: this home's agents (overrides the packaged one)
 ```
 
-`<area>` is the host, service or system. Areas and names are lowercase kebab-case. All timestamps
-are UTC ISO-8601 with milliseconds: `2026-10-30T17:20:01.123Z`.
+`<area>` is the host, service or system. Areas and names are lowercase kebab-case. All recorded
+timestamps (records, `--json`, `output.log`) are UTC ISO-8601 with milliseconds: `2026-10-30T17:20:01.123Z`.
+People read times in the operator's display zone (`time_zone` in the config file: `UTC`, `local` or a zone
+name; `opsquire init --time-zone` or the console's Settings): the console and the CLI's tables and text show
+times there with the zone named, and read a typed `HH:MM` or bare date there (`HH:MMZ` is UTC). Take times
+from `--json` or the records, never from a table.
 
 ## Docs: read these before code
 
@@ -63,7 +67,7 @@ opsquire inbox [--json]              what waits on the operator, as the console'
                                      run with its command (a plan's steps under it), and chats with an unopened reply
 opsquire offboard <task...> | --due [--days N] [--dry]    move settled tasks out of tasks/ (see Offboarding)
 opsquire restore <task...>           bring offboarded tasks back, with the general scripts and steps they need
-opsquire runs [<task>] [--status failed] [--area x] [--since 2026-10-30]
+opsquire runs [<task>] [--status failed] [--area x] [--since 2h|HH:MM|date]
 opsquire last                        most recent run
 opsquire log <run|task> [--events]   output.log (or events.jsonl) of a run, latest run for a task
 opsquire wait <task> [--timeout s]   block until the operator's next run of <task> finishes, then print it;

@@ -34,6 +34,7 @@ from .model import (
     IGNORED_PARTS,
     PACKAGE_DIR,
     OpsquireError,
+    configured_time_zone,
     home_dir,
     iso,
     now,
@@ -141,13 +142,18 @@ def tools_view(refresh: bool) -> dict[str, Any]:
 def settings_view() -> dict[str, Any]:
     from .ask import configured_fresh_after
 
-    return {"follow_up_fresh_after_usd": configured_fresh_after()}
+    return {"follow_up_fresh_after_usd": configured_fresh_after(), "time_zone": configured_time_zone()}
 
 
 def change_settings(body: dict[str, Any]) -> dict[str, Any]:
     """Settings the page changes in the config file: the cost of a chat's last turn after which a follow-up starts a
-    fresh, briefed agent session (null turns it off)."""
-    from .model import update_config
+    fresh, briefed agent session (null turns it off), and the zone times are shown in."""
+    from .model import update_config, valid_time_zone
+
+    if "time_zone" in body:
+        if not valid_time_zone(body["time_zone"]):
+            raise OpsquireError("time_zone must be UTC, local, or a zone name such as America/New_York")
+        update_config(time_zone=body["time_zone"])
 
     if "follow_up_fresh_after_usd" in body:
         value = body["follow_up_fresh_after_usd"]

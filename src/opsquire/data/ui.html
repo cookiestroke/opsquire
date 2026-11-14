@@ -512,10 +512,25 @@ const TASK_ID_RE = /\b\d{8}-\d{4}_[a-z0-9-]+_[a-z0-9-]+\b/g;
 function tone(status) { return TONE[status] || 'neutral'; }
 function parseTime(iso) { const t = iso ? Date.parse(iso) : NaN; return Number.isNaN(t) ? null : t; }
 function pad(n) { return String(n).padStart(2, '0'); }
-function utc(iso) {
+/* times: records are UTC; people read them in the zone the settings name (UTC until they load) */
+function zoneSetting() { return (S.settings && S.settings.time_zone) || 'UTC'; }
+const ZONE_FORMATS = new Map();
+function zoneParts(ms) {
+  const z = zoneSetting();
+  let f = ZONE_FORMATS.get(z);
+  if (!f) {
+    try { f = new Intl.DateTimeFormat('en-US', { timeZone: z === 'local' ? undefined : z, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short', hourCycle: 'h23', timeZoneName: 'short' }); }
+    catch (e) { f = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short', hourCycle: 'h23', timeZoneName: 'short' }); }
+    ZONE_FORMATS.set(z, f);
+  }
+  const p = {};
+  for (const x of f.formatToParts(new Date(ms))) p[x.type] = x.value;
+  return { y: p.year, mo: p.month, d: p.day, h: p.hour, mi: p.minute, s: p.second, weekend: p.weekday === 'Sat' || p.weekday === 'Sun', zone: p.timeZoneName === 'GMT' ? 'UTC' : p.timeZoneName };
+}
+function stamp(iso, seconds = true) {
   const t = parseTime(iso); if (t === null) return iso ? String(iso) : '';
-  const d = new Date(t);
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`;
+  const p = zoneParts(t);
+  return `${p.y}-${p.mo}-${p.d} ${p.h}:${p.mi}${seconds ? `:${p.s}` : ''} ${p.zone}`;
 }
 function relTime(iso, nowMs) {
   const t = parseTime(iso); if (t === null) return iso ? String(iso) : '-';
@@ -657,8 +672,8 @@ function flowLayout(ids, edges, g) {
   }
   return { w: g.pad * 2 + ids.length * pitch - g.gap, h: g.top + g.bh + g.dots, boxes, arcs, pitch };
 }
-/* map: day columns (UTC) and task buckets per area lane */
-function dayKey(iso) { const t = parseTime(iso); if (t === null) return null; const d = new Date(t); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; }
+/* map: day columns (display zone) and task buckets per area lane */
+function dayKey(iso) { const t = parseTime(iso); if (t === null) return null; const p = zoneParts(t); return `${p.y}-${p.mo}-${p.d}`; }
 const LEGEND = { good: 'done', neutral: 'ready', grey: 'draft / retired', bad: 'failed', warn: 'partial' };
 function nextMode(t) { return t.changes_prod ? 'dry' : 'read'; }
 function runCommand(id, mode) { return `opsquire run ${id}${mode === 'apply' ? ' --apply' : mode === 'verify' ? ' --verify' : ''}`; }
@@ -875,7 +890,7 @@ function fill(n, ...children) { n.replaceChildren(); append(n, children); return
 const $ = sel => document.querySelector(sel);
 const STATUS_MARK = { ok: '\u2713', done: '\u2713', merged: '\u2713', failed: '\u2715', blocked: '\u2298', partial: '\u25D0', waiting: '\u23F8', running: '\u25CF', aborted: '\u21A9', interrupted: '\u23F9' };
 function pill(status) { const m = STATUS_MARK[status]; return el('span', { class: `pill ${tone(status)}` }, m ? `${m} ${status}` : status || '?'); }
-function when(iso) { return el('span', { class: 'muted', title: utc(iso) }, relTime(iso)); }
+function when(iso) { return el('span', { class: 'muted', title: stamp(iso) }, relTime(iso)); }
 function tag(text, cls) { return el('span', { class: `tag ${cls || ''}` }, text); }
 const KIND_WORD = { read: 'read', dry: 'dry run', apply: 'apply', verify: 'verify', judge: 'judge', ask: 'ask' };
 function modeTag(mode) { return el('span', { class: `kind k-${mode || 'none'}`, title: KIND_WORD[mode] || mode || '' }, KIND_WORD[mode] || mode || '?'); }
@@ -1553,7 +1568,7 @@ function taskSpan(t) {
     const r = run(id); if (!r) continue;
     const a = parseTime(r.started), b = parseTime(r.ended) || a;
     if (a === null) continue;
-    runs.push({ at: a, tone: tone(r.status), mode: r.mode, failed: ['failed', 'blocked', 'partial'].includes(r.status), title: `${KIND_WORD[r.mode] || r.mode} ${r.status || '?'} ${utc(r.started)}` });
+    runs.push({ at: a, tone: tone(r.status), mode: r.mode, failed: ['failed', 'blocked', 'partial'].includes(r.status), title: `${KIND_WORD[r.mode] || r.mode} ${r.status || '?'} ${stamp(r.started)}` });
     if (b > t1) t1 = b;
   }
   if (t.outcome && parseTime(t.outcome.closed) > t1) t1 = parseTime(t.outcome.closed);
@@ -1580,10 +1595,15 @@ function packRows(items) {
 function mapTicks(start, end, plotW) {
   const span = end - start, hourly = span <= 48 * 3600e3, step = hourly ? (span <= 6 * 3600e3 ? 1 : span <= 24 * 3600e3 ? 2 : 6) * 3600e3 : 86400e3;
   const ticks = [];
-  for (let t = Math.ceil(start / step) * step; t <= end; t += step) {
-    const d = new Date(t), dayStart = d.getUTCHours() === 0 && d.getUTCMinutes() === 0;
-    const label = hourly ? (dayStart ? `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` : `${pad(d.getUTCHours())}:00`) : `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-    ticks.push({ t, label, strong: dayStart || !hourly, weekend: !hourly && (d.getUTCDay() === 0 || d.getUTCDay() === 6) });
+  const p0 = zoneParts(start), off = Date.UTC(+p0.y, +p0.mo - 1, +p0.d, +p0.h, +p0.mi, +p0.s) - Math.floor(start / 1000) * 1000;
+  const frac = ((off % 3600e3) + 3600e3) % 3600e3;
+  for (let t = Math.ceil((start - frac) / 3600e3) * 3600e3 + frac; t <= end; t += 3600e3) {
+    const p = zoneParts(t);
+    if (p.mi !== '00') continue;
+    const dayStart = p.h === '00';
+    if (hourly ? Number(p.h) % (step / 3600e3) !== 0 : !dayStart) continue;
+    const label = hourly && !dayStart ? `${p.h}:00` : `${p.mo}-${p.d}`;
+    ticks.push({ t, label, strong: dayStart || !hourly, weekend: !hourly && p.weekend });
   }
   return { ticks, step };
 }
@@ -1604,7 +1624,7 @@ function renderMap() {
     btn('◀', () => setWin(W.hours, end - W.hours * 3600e3), 'sm', { title: 'earlier: slide the window back' }),
     btn('▶', () => setWin(W.hours, Math.min(now, end + W.hours * 3600e3)), 'sm', { title: 'later: slide the window forward', disabled: !W.end }),
     W.end ? btn('now', () => setWin(W.hours, null), 'sm', { title: 'back to the window ending now' }) : null,
-    el('span', { class: 'muted small' }, `${utc(new Date(start).toISOString()).slice(5, 16)} to ${W.end ? utc(new Date(end).toISOString()).slice(5, 16) : 'now'} UTC`),
+    el('span', { class: 'muted small' }, `${stamp(new Date(start).toISOString(), false).slice(5)} to ${W.end ? stamp(new Date(end).toISOString(), false).slice(5) : 'now'}`),
     outside ? btn(`${plural(outside, 'task')} earlier`, () => setWin(W.hours, end - W.hours * 3600e3), 'sm link', { title: 'slide back to see them' }) : null,
     el('span', { class: 'grow' }),
     el('span', { class: 'legend' }, ['read', 'dry', 'apply', 'verify'].map(k => el('span', {}, el('i', { class: `dot k-${k}` }), KIND_WORD[k])),
@@ -1720,9 +1740,25 @@ function renderFollowUps() {
       on ? el('label', { class: 'small' }, 'once a turn cost $ ', el('input', { id: 'freshafter', type: 'number', min: '0', step: '0.5', value: String(v), style: 'width:5em', onchange: setAmount })) : null),
     el('div', { class: 'faint small' }, "When a run a chat handed over finishes, the console wakes the chat's agent. Once the chat's last turn cost this much, it starts a new agent session briefed from the records instead of resuming the whole chat, which spares the plan's usage limit. Off: it always resumes the whole chat."))];
 }
+function renderTimes() {
+  const z = zoneSetting(), named = z !== 'UTC' && z !== 'local', naming = named || S.zoneNaming;
+  let here = '';
+  try { here = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { /* no Intl zone */ }
+  const pick = v => { S.zoneNaming = v === 'zone'; if (v === 'zone') render(); else saveSettings({ time_zone: v }); };
+  const name = e => { const v = e.target.value.trim(); if (v) saveSettings({ time_zone: v }); };
+  return [sec('Times'), el('div', { class: 'block pad' },
+    el('div', { class: 'rule' },
+      el('label', { class: 'switch' }, el('strong', {}, 'Show times in'),
+        el('select', { id: 'timezone', 'aria-label': 'time zone', disabled: !S.settings, onchange: e => pick(e.target.value) },
+          el('option', { value: 'UTC', selected: z === 'UTC' && !naming }, 'UTC'),
+          el('option', { value: 'local', selected: z === 'local' && !naming }, here ? `this machine (${here})` : 'this machine'),
+          el('option', { value: 'zone', selected: naming }, 'a zone by name'))),
+      naming ? el('input', { id: 'zonename', 'aria-label': 'zone name', placeholder: 'America/New_York', value: named ? z : '', style: 'width:14em', onchange: name }) : null),
+    el('div', { class: 'faint small' }, `Now: ${stamp(new Date().toISOString())}. The console and the command line show times in this zone, and read typed times such as --since 9:30 in it (9:30Z is UTC). Run records and JSON stay in UTC.`))];
+}
 function renderSettings() {
   if (!S.tools && !S.toolsBusy && !S.toolsError) loadTools(false);
-  const t = S.tools, parts = [...renderFollowUps()];
+  const t = S.tools, parts = [...renderTimes(), ...renderFollowUps()];
   parts.push(sec('Tools for ask agents', null, el('span', {}, btn(S.toolsBusy === 'checking' ? 'checking…' : 'Check servers', () => loadTools(true), 'sm', { disabled: !!S.toolsBusy, title: "ask the agent's CLI which servers it has (takes a few seconds)" }))));
   if (S.toolsError) parts.push(el('div', { class: 'err' }, `Cannot read the tool settings: ${S.toolsError}`));
   if (!t) { parts.push(el('div', { class: 'quiet' }, S.toolsBusy ? 'Loading…' : '')); return el('div', { class: 'settings' }, parts); }
@@ -2331,7 +2367,7 @@ function chatItem(d, it) {
     [it.agent && retinue().length > 1 ? it.agent : '', it.model ? modelName(it.model) : '', spentText(it), usageText(it.usage)].filter(Boolean).join(' · ')));
   return el('div', { class: 'msg agent' }, el('div', { class: 'avatar' }), el('div', { class: 'bubble' }, body));
 }
-const clock = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const clock = t => { const p = parseTime(t) === null ? null : zoneParts(parseTime(t)); return p ? `${p.h}:${p.mi} ${p.zone}` : String(t || ''); };
 /* agents whose latest ask stopped at the usage limit and whose reset (with the console's two-minute margin) has not
    come, as followup.held_agents decides on the server */
 function heldAgents(asks) {
@@ -2608,6 +2644,7 @@ function boot() {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); if (S.data) markShownChatRead(); } });
   connect();
   load();
+  loadSettings();
 }
 boot();
 </script>

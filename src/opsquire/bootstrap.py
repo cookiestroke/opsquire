@@ -19,8 +19,10 @@ from .lint import find_tool, lint_task, save_lint
 from .model import (
     DATA_DIR,
     TASK_ID_RE,
+    OpsquireError,
     all_task_folders,
     config_path,
+    configured_time_zone,
     creds_path,
     home_dir,
     iso,
@@ -28,6 +30,7 @@ from .model import (
     now,
     read_json,
     update_config,
+    valid_time_zone,
     write_text,
 )
 from .offboard import CONFIG_KEY, days_text, keep_days
@@ -70,8 +73,11 @@ def init(
     dry: bool,
     offboard_days: float | None = None,
     fresh_after: float | None = None,
+    time_zone: str | None = None,
 ) -> list[str]:
     """`fresh_after`: a negative number turns fresh follow-up sessions off."""
+    if time_zone is not None and not valid_time_zone(time_zone):
+        raise OpsquireError(f"--time-zone {time_zone!r}: use UTC, local, or a zone name such as America/New_York")
     lines: list[str] = []
     would = "would be " if dry else ""
     if path:
@@ -103,6 +109,15 @@ def init(
     lines.append(
         f"follow-ups: {fresh or 'always resume the whole chat'}"
         + (" (`opsquire init --fresh-after N` changes it; -1 turns it off)" if fresh_after is None else "")
+    )
+    if time_zone is not None and not dry:
+        update_config(time_zone=time_zone)
+    zone = time_zone if time_zone is not None else configured_time_zone()
+    lines.append(
+        "times: shown in "
+        + ("this machine's zone" if zone == "local" else zone)
+        + "; records stay UTC"
+        + (" (`opsquire init --time-zone ZONE` changes it)" if time_zone is None else "")
     )
     current = configured_budget()
     chosen = budget if budget is not None else current

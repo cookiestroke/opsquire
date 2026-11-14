@@ -28,6 +28,9 @@ With pipx instead, on a system whose Python is already 3.13 or newer:
 `pipx install --python python3.13 /tmp/opsquire/*.whl && pipx inject opsquire ruff mypy`. Upgrading later is the same
 `uv tool install` with `--force`.
 
+Times show in UTC until you choose: `opsquire init --time-zone local` (or a zone name such as `America/New_York`,
+or the console's Settings) shows them in yours. Records and `--json` stay UTC.
+
 `ruff` and `mypy` are the lint gate every Python task must pass before it runs (`shellcheck` for shell tasks), so a
 home without them can run nothing. Scripts run on opsquire's own Python, so the libraries they import must be
 installed next to it: list them in the home's `requirements.txt` and add `--with-requirements <home>/requirements.txt`

@@ -35,8 +35,10 @@ from .model import (
     Meta,
     OpsquireError,
     Task,
+    attach_zone,
     code_version,
     config_path,
+    configured_time_zone,
     decision,
     decision_text,
     home_dir,
@@ -46,8 +48,10 @@ from .model import (
     next_stage,
     now,
     resolve_task,
+    shown,
     stage_of,
     update_config,
+    wall_clock,
     write_json,
     write_text,
 )
@@ -278,30 +282,36 @@ def cmd_hold(a: argparse.Namespace) -> int:
         return 0
     if not (a.why or "").strip():
         raise OpsquireError('say why it waits: opsquire hold <task> --why "..." [--until 15:00]')
-    until = parse_until(a.until) if a.until else None
+    until = parse_until(a.until, configured_time_zone()) if a.until else None
     entry = handover.hold(task, a.why, handover.author(), until)
     commit_quietly(home_dir(), [task.folder], f"hold: {task.id}")
-    lasts = f" until {entry['until']}" if until else " until it is handed over"
+    lasts = (
+        f" until {shown(entry['until'], configured_time_zone(), seconds=False)}"
+        if until
+        else " until it is handed over"
+    )
     print(f"{task.id}: held out of the inbox{lasts}; why: {entry['why']}")
     return 0
 
 
-def parse_until(text: str) -> dt.datetime:
-    """An HH:MM in the operator's local time (today, or tomorrow when it has passed) or an ISO time."""
-    local = dt.datetime.now().astimezone()
-    try:
-        hh, mm = (int(x) for x in text.split(":"))
-        when = local.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        if when <= local:
-            when += dt.timedelta(days=1)
+def parse_until(text: str, zone: str) -> dt.datetime:
+    """An HH:MM in the display zone (today, or tomorrow when it has passed; HH:MMZ is UTC) or an ISO time, read in
+    the display zone when it names none."""
+    at = now()
+    clock = re.match(r"^(\d{1,2}):(\d{2})(Z?)$", text)
+    if clock:
+        hh, mm = int(clock.group(1)), int(clock.group(2))
+        if hh > 23 or mm > 59:
+            raise OpsquireError(f"--until {text!r}: not a time of day")
+        when = wall_clock(at, hh, mm, "UTC" if clock.group(3) else zone)
+        if when <= at:
+            when = wall_clock(at + dt.timedelta(days=1), hh, mm, "UTC" if clock.group(3) else zone)
         return when.astimezone(dt.UTC)
-    except ValueError:
-        pass
     try:
         when = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-        return (when if when.tzinfo else when.astimezone()).astimezone(dt.UTC)
     except ValueError:
-        raise OpsquireError(f"--until {text!r}: use HH:MM (local time) or an ISO time") from None
+        raise OpsquireError(f"--until {text!r}: use HH:MM (display zone) or an ISO time") from None
+    return (attach_zone(when, zone) if when.tzinfo is None else when).astimezone(dt.UTC)
 
 
 def cmd_supersede(a: argparse.Namespace) -> int:
@@ -516,12 +526,13 @@ def cmd_show(a: argparse.Namespace) -> int:
 def run_table(recs: list[dict[str, Any]]) -> list[list[str]]:
     if not recs:
         return []
+    zone = configured_time_zone()
     return [["STATUS", "MODE", "ORIGIN", "STARTED", "SCRIPT", "TASK", "TARGETS", "LAST ERROR"]] + [
         [
             "waiting" if question(r) else str(r.get("status")),
             str(r.get("mode")),
             str(r.get("origin") or "-"),
-            str(r.get("started")),
+            shown(r.get("started"), zone),
             code_version(r.get("files") or {})[:7] or "-",
             str(r.get("task_id")),
             " ".join(f"{k}={v['status']}" for k, v in (r.get("targets") or {}).items()),
@@ -537,13 +548,14 @@ def question(rec: dict[str, Any]) -> str:
 
 
 def cmd_runs(a: argparse.Namespace) -> int:
+    since = since_arg(a.since, now(), configured_time_zone()) if a.since else ""
     recs = runs_for(resolve_task(a.task, offboarded=True).id) if a.task else all_runs()
     recs = [
         r
         for r in recs
         if (not a.status or r.get("status") == a.status)
         and (not a.area or r.get("area") == a.area)
-        and (not a.since or str(r.get("started")) >= a.since)
+        and (not since or str(r.get("started")) >= since)
     ][-a.limit :]
     emit(recs, a.json, run_table(recs))
     reads.mark_records(handover.author(), recs)
@@ -780,7 +792,7 @@ def cmd_wait(a: argparse.Namespace) -> int:
 def cmd_init(a: argparse.Namespace) -> int:
     if a.offboard_days is not None and a.offboard_days < 0:
         raise OpsquireError("--offboard-days must be 0 (never automatically) or more")
-    for line in init(a.path, a.budget, a.dry_run, a.offboard_days, a.fresh_after):
+    for line in init(a.path, a.budget, a.dry_run, a.offboard_days, a.fresh_after, a.time_zone):
         print(line)
     return 0
 
@@ -915,11 +927,12 @@ def cmd_milestones(a: argparse.Namespace) -> int:
     unknown = [k for k in kinds if k not in KINDS]
     if unknown:
         raise OpsquireError(f"--kind: unknown {', '.join(unknown)}; use {', '.join(KINDS)}")
-    items = milestones(since_arg(a.since, at), a.until, a.thread, kinds, at)
+    zone = configured_time_zone()
+    items = milestones(since_arg(a.since, at, zone), a.until, a.thread, kinds, at)
     if a.json:
         emit(items, True)
     else:
-        print(render(items, at))
+        print(render(items, at, zone))
     return 0
 
 
@@ -998,8 +1011,11 @@ def refresh_docs() -> None:
 
 def cmd_locks(a: argparse.Namespace) -> int:
     data = {t: [h.__dict__ | {"alive": h.alive()} for h in hs] for t, hs in locks.holders().items() if hs}
+    zone = configured_time_zone()
     table = [["TARGET", "MODE", "RUN", "TASK", "SINCE", "ALIVE"]] + [
-        [t, h["mode"], h["run_id"], h["task_id"], h["since"], str(h["alive"])] for t, hs in data.items() for h in hs
+        [t, h["mode"], h["run_id"], h["task_id"], shown(h["since"], zone), str(h["alive"])]
+        for t, hs in data.items()
+        for h in hs
     ]
     emit(data, a.json, table if data else [])
     return 0
@@ -1103,7 +1119,7 @@ def parser() -> argparse.ArgumentParser:
     hd = sub.add_parser("hold", help="keep a task (and a plan's steps) out of the inbox until handed over or --until")
     hd.add_argument("task")
     hd.add_argument("--why", help="what it waits for; shown with the task")
-    hd.add_argument("--until", help="HH:MM local time, or an ISO time, when it comes back by itself")
+    hd.add_argument("--until", help="HH:MM in the display zone (HH:MMZ for UTC), or an ISO time, when it comes back")
     hd.add_argument("--release", action="store_true", help="end the hold now")
     hd.set_defaults(fn=cmd_hold)
 
@@ -1143,7 +1159,7 @@ def parser() -> argparse.ArgumentParser:
     rs.add_argument("task", nargs="?")
     rs.add_argument("--status", choices=["running", "ok", "partial", "failed", "aborted", "interrupted", "blocked"])
     rs.add_argument("--area")
-    rs.add_argument("--since", help="UTC ISO prefix, e.g. 2026-10-30")
+    rs.add_argument("--since", help="date, ISO time, HH:MM (today, display zone) or 2h/30m/1d")
     rs.add_argument("--limit", type=int, default=50)
     rs.add_argument("--json", action="store_true")
     rs.set_defaults(fn=cmd_runs)
@@ -1240,6 +1256,12 @@ def parser() -> argparse.ArgumentParser:
         "(default 5; -1 turns it off)",
     )
     ini.add_argument(
+        "--time-zone",
+        metavar="ZONE",
+        help="where people read times: UTC (default), local, or a zone name such as America/New_York; "
+        "records and --json stay UTC",
+    )
+    ini.add_argument(
         "--offboard-days",
         type=float,
         metavar="N",
@@ -1287,7 +1309,9 @@ def parser() -> argparse.ArgumentParser:
         "milestones",
         help="what happened that others would want to know: changing tasks closed, applies that failed, thread results",
     )
-    ms.add_argument("--since", help="date, ISO time, HH:MM (UTC today) or 2h/30m/1d; default: midnight UTC today")
+    ms.add_argument(
+        "--since", help="date, ISO time, HH:MM (today, display zone) or 2h/30m/1d; default: midnight today there"
+    )
     ms.add_argument("--until", help="ISO prefix")
     ms.add_argument("--thread", help="one thread only")
     ms.add_argument("--kind", help="comma-separated: done, failed, result (default: all)")

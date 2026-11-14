@@ -120,6 +120,7 @@ class OpsTest(unittest.TestCase):
             "OPSQUIRE_AUTHOR": "test",
             "PATH": os.environ["PATH"] + ":" + str(Path.home() / ".local/bin"),
             "PYTHONPATH": str(ROOT / "src"),
+            "XDG_CONFIG_HOME": str(self.tmp / "cfg"),
         }
 
     def tearDown(self) -> None:
@@ -2044,14 +2045,61 @@ class OpsTest(unittest.TestCase):
         from opsquire.model import OpsquireError
 
         at = dt.datetime(2026, 11, 5, 18, 30, tzinfo=dt.UTC)
-        self.assertEqual(since_arg(None, at), "2026-11-05T00:00")
+        self.assertEqual(since_arg(None, at), "2026-11-05T00:00:00.000Z")
         self.assertEqual(since_arg("2h", at), "2026-11-05T16:30:00.000Z")
         self.assertEqual(since_arg("30m", at), "2026-11-05T18:00:00.000Z")
         self.assertEqual(since_arg("1d", at), "2026-11-04T18:30:00.000Z")
-        self.assertEqual(since_arg("9:05", at), "2026-11-05T09:05")
-        self.assertEqual(since_arg("2026-11-01", at), "2026-11-01")
+        self.assertEqual(since_arg("9:05", at), "2026-11-05T09:05:00.000Z")
+        self.assertEqual(since_arg("2026-11-01", at), "2026-11-01T00:00:00.000Z")
+        self.assertEqual(since_arg("2026-11-01T04:00", at), "2026-11-01T04:00")
         with self.assertRaises(OpsquireError):
             since_arg("yesterday", at)
+        ny = "America/New_York"
+        self.assertEqual(since_arg(None, at, ny), "2026-11-05T05:00:00.000Z", "midnight in New York")
+        self.assertEqual(since_arg("9:05", at, ny), "2026-11-05T14:05:00.000Z")
+        self.assertEqual(since_arg("9:05Z", at, ny), "2026-11-05T09:05:00.000Z", "a trailing Z is UTC")
+        self.assertEqual(since_arg("2026-07-01", at, ny), "2026-07-01T04:00:00.000Z", "summer time")
+        late = dt.datetime(2026, 11, 6, 2, 0, tzinfo=dt.UTC)
+        self.assertEqual(since_arg(None, late, ny), "2026-11-05T05:00:00.000Z", "still the 5th in New York")
+
+    def test_times_people_read_follow_the_display_zone(self) -> None:
+        sys.path.insert(0, str(ROOT / "src"))
+        import datetime as dt
+
+        from opsquire.milestones import render
+        from opsquire.model import configured_time_zone, shown, update_config, valid_time_zone
+
+        stamp = "2026-11-14T13:14:40.280Z"
+        self.assertEqual(shown(stamp, "UTC"), "2026-11-14 13:14:40 UTC")
+        self.assertEqual(shown(stamp, "America/New_York"), "2026-11-14 08:14:40 EST")
+        self.assertEqual(shown(stamp, "Asia/Kolkata", seconds=False), "2026-11-14 18:44 IST")
+        self.assertEqual(shown("not a time", "UTC"), "not a time")
+        self.assertEqual(shown(None, "UTC"), "")
+        for good in ("UTC", "local", "Europe/London"):
+            self.assertTrue(valid_time_zone(good), good)
+        for bad in ("", "Mars/Olympus", "../etc", 5, None):
+            self.assertFalse(valid_time_zone(bad), bad)
+        cfg = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cfg, True)
+        self.enterContext(mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(cfg)}))
+        self.assertEqual(configured_time_zone(), "UTC", "the default")
+        update_config(time_zone="America/New_York")
+        self.assertEqual(configured_time_zone(), "America/New_York")
+        update_config(time_zone="Mars/Olympus")
+        self.assertEqual(configured_time_zone(), "UTC", "an unknown zone falls back")
+        item = {
+            "at": stamp,
+            "kind": "done",
+            "task_id": "20261114-0447_umm_trades-repair",
+            "thread": "",
+            "thread_title": "",
+            "text": "ok",
+        }
+        at = dt.datetime(2026, 11, 14, 15, 0, tzinfo=dt.UTC)
+        self.assertIn("  08:14 EST  done", render([item], at, "America/New_York"))
+        self.assertIn("  13:14 UTC  done", render([item], at))
+        tomorrow = dt.datetime(2026, 11, 15, 15, 0, tzinfo=dt.UTC)
+        self.assertIn("  2026-11-14 08:14 EST  done", render([item], tomorrow, "America/New_York"))
 
     def test_handover_puts_a_reused_task_in_the_inbox_until_it_runs(self) -> None:
         folder = self.new("count", "print(1)\n")
@@ -3057,19 +3105,42 @@ class OpsTest(unittest.TestCase):
         config = self.tmp / "cfg/opsquire/config.json"
         proc, call = self.console()
         try:
-            self.assertEqual(call("/api/settings"), {"follow_up_fresh_after_usd": 5.0}, "on at $5 by default")
-            self.assertEqual(
-                call("/api/settings", {"follow_up_fresh_after_usd": 7.5}), {"follow_up_fresh_after_usd": 7.5}
-            )
-            self.assertEqual(json.loads(config.read_text())["follow_up_fresh_after_usd"], 7.5)
-            self.assertEqual(
-                call("/api/settings", {"follow_up_fresh_after_usd": None}), {"follow_up_fresh_after_usd": None}
-            )
-            self.assertIs(json.loads(config.read_text())["follow_up_fresh_after_usd"], False)
-            self.assertIn("0 or more", call("/api/settings", {"follow_up_fresh_after_usd": -1})["error"])
+            fresh = "follow_up_fresh_after_usd"
+            self.assertEqual(call("/api/settings"), {fresh: 5.0, "time_zone": "UTC"}, "on at $5, times in UTC")
+            self.assertEqual(call("/api/settings", {fresh: 7.5})[fresh], 7.5)
+            self.assertEqual(json.loads(config.read_text())[fresh], 7.5)
+            self.assertIsNone(call("/api/settings", {fresh: None})[fresh])
+            self.assertIs(json.loads(config.read_text())[fresh], False)
+            self.assertIn("0 or more", call("/api/settings", {fresh: -1})["error"])
+            self.assertEqual(call("/api/settings", {"time_zone": "America/New_York"})["time_zone"], "America/New_York")
+            self.assertEqual(json.loads(config.read_text())["time_zone"], "America/New_York")
+            self.assertIn("zone name", call("/api/settings", {"time_zone": "Mars/Olympus"})["error"])
+            self.assertEqual(call("/api/settings")["time_zone"], "America/New_York", "a bad name changes nothing")
         finally:
             proc.send_signal(signal.SIGINT)
             self.assertEqual(proc.wait(timeout=15), 0)
+
+    def test_the_command_line_shows_times_in_the_zone_init_sets(self) -> None:
+        self.env["XDG_CONFIG_HOME"] = str(self.tmp / "cfg")
+        self.new("count", "print(1)\n")
+        self.assertEqual(self.cli("lint", "count").returncode, 0)
+        self.assertEqual(self.cli("run", "count").returncode, 0)
+        started = json.loads(self.cli("runs", "count", "--json").stdout)[0]["started"]
+        self.assertRegex(self.cli("runs", "count").stdout, r"\d{2}:\d{2}:\d{2} UTC", "UTC by default")
+        bad = self.cli("init", "--time-zone", "Mars/Olympus")
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("zone name", bad.stderr)
+        self.assertIn("times: shown in Asia/Kolkata", self.cli("init", "--time-zone", "Asia/Kolkata").stdout)
+        table = self.cli("runs", "count").stdout
+        from opsquire.model import shown
+
+        self.assertIn(shown(started, "Asia/Kolkata"), table)
+        self.assertIn(" IST", table)
+        self.assertEqual(json.loads(self.cli("runs", "count", "--json").stdout)[0]["started"], started, "JSON is UTC")
+        self.assertEqual(len(json.loads(self.cli("runs", "--since", "1h", "--json").stdout)), 1)
+        held = self.cli("hold", "count", "--why", "later", "--until", "23:59")
+        self.assertEqual(held.returncode, 0, held.stderr)
+        self.assertIn("23:59 IST", held.stdout)
 
     def test_threads_writing_one_file_never_share_a_temporary_file(self) -> None:
         from opsquire.model import write_json
@@ -3384,7 +3455,9 @@ class OpsTest(unittest.TestCase):
         view = json.loads(self.cli("threads", "--json").stdout)["tasks"][folder.name]
         self.assertEqual(view["stats"]["versions"], 3)
         self.assertIn("4 runs over 3 script versions", " ".join(s["text"] for s in view["suggestions"]))
-        scripts = [line.split()[4] for line in self.cli("show", "replay").stdout.splitlines()[-4:]]
+        lines = self.cli("show", "replay").stdout.splitlines()
+        at = next(line for line in lines if line.startswith("STATUS")).index("SCRIPT")
+        scripts = [line[at:].split()[0] for line in lines[-4:]]
         self.assertEqual((len(set(scripts)), scripts[2] == scripts[3]), (3, True))
 
     def test_repo_warns_about_a_stale_copy_and_open_prs_on_the_same_files(self) -> None:

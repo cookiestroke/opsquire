@@ -11,20 +11,21 @@ import datetime as dt
 import re
 from typing import Any
 
-from .model import OpsquireError, home_dir, iso, now
+from .model import OpsquireError, home_dir, in_zone, iso, now, shown, wall_clock
 from .state import state
 
 KINDS = ("done", "failed", "result")
 NOT_A_CHANGE = {"ok", "blocked", "aborted"}
 DURATION_RE = re.compile(r"^(\d+)([mhd])$")
 CLOCK_RE = re.compile(r"^(\d{1,2}):(\d{2})Z?$")
+DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
 
-def since_arg(text: str | None, at: dt.datetime) -> str:
-    """`--since` as an ISO prefix: a date or ISO time as given, `HH:MM` today (UTC), `2h`/`30m`/`1d` ago,
-    or midnight UTC today when absent."""
+def since_arg(text: str | None, at: dt.datetime, zone: str = "UTC") -> str:
+    """`--since` as a UTC ISO bound: `2h`/`30m`/`1d` ago, `HH:MM` today and a bare date's midnight in `zone` (the
+    display zone; `HH:MMZ` is UTC), an ISO time as given, or midnight today in `zone` when absent."""
     if not text:
-        return f"{at:%Y-%m-%d}T00:00"
+        return iso(wall_clock(at, 0, 0, zone))
     m = DURATION_RE.match(text)
     if m:
         n, unit = int(m.group(1)), m.group(2)
@@ -32,10 +33,14 @@ def since_arg(text: str | None, at: dt.datetime) -> str:
         return iso(at - delta)
     m = CLOCK_RE.match(text)
     if m:
-        return f"{at:%Y-%m-%d}T{int(m.group(1)):02d}:{int(m.group(2)):02d}"
-    if re.match(r"^\d{4}-\d{2}-\d{2}", text):
+        return iso(wall_clock(at, int(m.group(1)), int(m.group(2)), "UTC" if text.endswith("Z") else zone))
+    day = DATE_RE.match(text)
+    if day:
+        y, mo, d = (int(x) for x in day.groups())
+        return iso(wall_clock(dt.datetime(y, mo, d, 12, tzinfo=dt.UTC), 0, 0, zone))
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", text):
         return text
-    raise OpsquireError(f"--since {text!r}: use a date, an ISO time, HH:MM (UTC today) or 2h/30m/1d")
+    raise OpsquireError(f"--since {text!r}: use a date, an ISO time, HH:MM (today, display zone) or 2h/30m/1d")
 
 
 RECORD_PREFIX_RE = re.compile(r"^(?:apply|verify) run \S+ finished ok: [^.]*\.\s*(?:Results: )?", re.I)
@@ -143,11 +148,12 @@ def milestones(
     return sorted(out, key=lambda m: (str(m["at"]), str(m["kind"])))
 
 
-def render(items: list[dict[str, Any]], at: dt.datetime) -> str:
-    """Grouped by thread, threads in the order of their latest milestone, items in time order within a thread."""
+def render(items: list[dict[str, Any]], at: dt.datetime, zone: str = "UTC") -> str:
+    """Grouped by thread, threads in the order of their latest milestone, items in time order within a thread; times
+    in `zone`, today's without their date."""
     if not items:
         return "no milestones in that window"
-    today = f"{at:%Y-%m-%d}"
+    today = f"{in_zone(at, zone):%Y-%m-%d}"
     groups: dict[str, list[dict[str, Any]]] = {}
     for m in items:
         groups.setdefault(str(m["thread_title"] or m["thread"] or m["task_id"] or "(no thread)"), []).append(m)
@@ -156,7 +162,8 @@ def render(items: list[dict[str, Any]], at: dt.datetime) -> str:
         lines.append(("" if not lines else "\n") + head)
         for m in members:
             stamp = str(m["at"])
-            when = stamp[11:16] + "Z" if stamp.startswith(today) else stamp[:16].replace("T", " ") + "Z"
+            full = shown(stamp, zone, seconds=False)
+            when = full[11:] if full.startswith(today) else full
             label = m["kind"] if m["kind"] != "failed" else f"{m.get('mode')} {m.get('state')}"
             subject = str(m["task_id"]).split("_", 2)[-1].replace("-", " ") if m["task_id"] else "thread result"
             where = ",".join(m.get("failed_targets") or m.get("targets") or [])

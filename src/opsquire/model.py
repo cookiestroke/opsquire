@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SCHEMA = 1
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -184,6 +185,71 @@ def compact(t: dt.datetime) -> str:
 
 def parse_iso(s: str) -> dt.datetime:
     return dt.datetime.strptime(s, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=dt.UTC)
+
+
+DEFAULT_TIME_ZONE = "UTC"
+
+
+def valid_time_zone(name: object) -> bool:
+    if name in ("UTC", "local"):
+        return True
+    if not isinstance(name, str) or not name:
+        return False
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
+
+
+def configured_time_zone() -> str:
+    """Where people read times: `time_zone` in the config file, `UTC`, `local` (this machine's zone) or a zone name
+    such as `America/New_York`. Records and JSON stay in UTC whatever it says."""
+    try:
+        value = read_json(config_path()).get("time_zone")
+    except (OSError, ValueError, AttributeError):
+        value = None
+    return str(value) if valid_time_zone(value) else DEFAULT_TIME_ZONE
+
+
+def in_zone(t: dt.datetime, zone: str) -> dt.datetime:
+    if zone == "UTC":
+        return t.astimezone(dt.UTC)
+    if zone == "local":
+        return t.astimezone()
+    return t.astimezone(ZoneInfo(zone))
+
+
+def zone_label(t: dt.datetime) -> str:
+    return "UTC" if t.utcoffset() == dt.timedelta(0) and t.tzname() in ("UTC", "GMT", None) else str(t.tzname())
+
+
+def shown(stamp: object, zone: str, seconds: bool = True) -> str:
+    """A recorded UTC time as people read it, in `zone`, with the zone named; anything unparsable as given."""
+    text = str(stamp or "")
+    try:
+        t = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=dt.UTC)
+    t = in_zone(t, zone)
+    return f"{t:%Y-%m-%d %H:%M}" + (f":{t:%S}" if seconds else "") + f" {zone_label(t)}"
+
+
+def wall_clock(day: dt.datetime, hour: int, minute: int, zone: str) -> dt.datetime:
+    """`hour:minute` on the date of `day` in `zone`, as an aware time."""
+    local = in_zone(day, zone)
+    return attach_zone(dt.datetime(local.year, local.month, local.day, hour, minute), zone)
+
+
+def attach_zone(naive: dt.datetime, zone: str) -> dt.datetime:
+    """A time typed without a zone, read in `zone`."""
+    if zone == "UTC":
+        return naive.replace(tzinfo=dt.UTC)
+    if zone == "local":
+        return naive.astimezone()
+    return naive.replace(tzinfo=ZoneInfo(zone))
 
 
 def read_json(path: Path) -> Any:
