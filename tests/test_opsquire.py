@@ -4046,6 +4046,28 @@ class OpsTest(unittest.TestCase):
         self.assertIsNone(next_mode(task, [*walked, run("verify", "failed")], "ready"), "a failed check needs a call")
         last_failed = [*walked[:-1], run("apply", "failed", "bot", changed=True)]
         self.assertEqual(next_mode(task, last_failed, "ready"), "dry", "a failed last stage is no finished walk")
+        self.assertIsNone(next_mode(task, [*installed, run("apply", "running", "reader")], "ready"))
+
+    def test_a_run_in_progress_owes_nothing(self) -> None:
+        from opsquire.model import load_task
+        from opsquire.state import next_mode
+
+        body = "import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'done')\n"
+        folder = self.new("busy", body, "--changes-prod", "--rollback", "none")
+        (folder / "verify.py").write_text("import opsquire_helpers as sq\n\nsq.target('web1', 'ok', 'live')\n")
+        self.assertEqual(self.cli("lint", folder.name).returncode, 0)
+        self.enterContext(mock.patch.dict(os.environ, {"OPSQUIRE_HOME": str(self.home)}))
+        task = load_task(folder)
+        files = task.file_hashes()
+
+        def run(mode: str, status: str) -> dict[str, Any]:
+            return {"mode": mode, "status": status, "argv": [], "files": files}
+
+        dried = [run("dry", "ok")]
+        self.assertIsNone(next_mode(task, [run("dry", "running")], "ready"), "a dry run in progress is not owed again")
+        self.assertIsNone(next_mode(task, [*dried, run("apply", "running")], "ready"), "the apply runs its own check")
+        self.assertEqual(next_mode(task, [*dried, run("apply", "interrupted")], "ready"), "verify")
+        self.assertEqual(next_mode(task, [*dried, run("apply", "failed")], "ready"), "verify")
 
     def console_apply(self, task_id: str) -> tuple[list[str], int]:
         code = (

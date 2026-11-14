@@ -303,8 +303,9 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
     the last one did not end ok and its scripts changed since, the apply after a dry run of its current scripts that
     ended ok, the verify check after an apply that did not close the task (or when the judge asked for it), else a
     fresh dry run. A staged task owes its check only after an ok apply of its last stage: before that it owes the
-    stage walk, and a verify run early changes nothing. None when nothing waits: a read that ended ok or was not fixed
-    since, closed tasks, and a task whose verify check failed (that one needs a decision)."""
+    stage walk, and a verify run early changes nothing. None when nothing waits: a run still in progress (an apply runs
+    its own verify check when it ends ok), a read that ended ok or was not fixed since, closed tasks, and a task whose
+    verify check failed (that one needs a decision)."""
     m = task.meta
     if m is None or task.kind == "general" or status in CLOSED or status == "draft":
         return None
@@ -318,6 +319,8 @@ def next_mode(task: Task, runs: list[dict[str, Any]], status: str) -> str | None
     if not runs:
         return "dry" if m.changes_prod else "read"
     last = runs[-1]
+    if last.get("status") == "running":
+        return None
     same_scripts = code_version(last.get("files") or {}) == code_version(task.file_hashes())
     if not m.changes_prod:
         return "read" if last.get("status") not in ("ok", "running") and not same_scripts else None
